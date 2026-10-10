@@ -114,6 +114,14 @@ def test_dutch_is_formal(path):
     assert {k: v for k, v in props(path).items() if INFORMAL.search(v)} == {}
 
 
+@pytest.mark.parametrize("theme", ["login", "account", "email"])
+def test_every_theme_has_english_dutch_and_french(theme):
+    """suveryn-tracker#9: the account theme had English only; each theme ships all three languages."""
+    assert {p.name for p in (SRC / theme / "messages").glob("messages_*.properties")} >= {
+        "messages_en.properties", "messages_nl.properties", "messages_fr.properties"}
+    assert "locales=en,nl,fr" in (SRC / theme / "theme.properties").read_text()
+
+
 US = re.compile(r"(organiz|authoriz|recogniz|customiz|initializ|realiz|synchroniz|categoriz|utiliz|"
                 r"\bcolor|\bcenter\b|\blicense\b|cancel(ed|ing)\b|favorite|behavior)", re.I)
 
@@ -241,3 +249,11 @@ def test_error_pages_name_the_back_link_as_the_link_reads(lang, link):
     msgs = props(SRC / "login" / "messages" / f"messages_{lang}.properties")
     assert msgs["backToApplication"] == f"« {link}"
     assert f"Klik op {link}" in msgs["cookieNotFoundMessage"] or f"Cliquez sur {link}" in msgs["cookieNotFoundMessage"]
+
+def test_language_menu_has_the_lucide_languages_icon_as_in_the_chat_ui():
+    """The chat UI shows Lucide "languages" before its language menu; the login page does too."""
+    template = (SRC / "login" / "template.ftl").read_text()
+    utilities = template[template.index("suv-language"):template.index('id="login-select-toggle"')]
+    svg = utilities[utilities.index("<svg"):utilities.index("</svg>")]
+    assert 'aria-hidden="true"' in svg and 'stroke="currentColor"' in svg and svg.count("<path") == 6
+    assert 'd="m22 22-5-10-5 10"' in svg  # the "A" of Lucide's languages glyph
