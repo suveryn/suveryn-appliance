@@ -114,6 +114,14 @@ def test_dutch_is_formal(path):
     assert {k: v for k, v in props(path).items() if INFORMAL.search(v)} == {}
 
 
+@pytest.mark.parametrize("theme", ["login", "account", "email"])
+def test_every_theme_has_english_dutch_and_french(theme):
+    """suveryn-tracker#9: the account theme had English only; each theme ships all three languages."""
+    assert {p.name for p in (SRC / theme / "messages").glob("messages_*.properties")} >= {
+        "messages_en.properties", "messages_nl.properties", "messages_fr.properties"}
+    assert "locales=en,nl,fr" in (SRC / theme / "theme.properties").read_text()
+
+
 US = re.compile(r"(organiz|authoriz|recogniz|customiz|initializ|realiz|synchroniz|categoriz|utiliz|"
                 r"\bcolor|\bcenter\b|\blicense\b|cancel(ed|ing)\b|favorite|behavior)", re.I)
 
