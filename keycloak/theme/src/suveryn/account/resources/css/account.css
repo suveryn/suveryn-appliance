@@ -1,0 +1,47 @@
+/*
+ * Sūveryn account console (light only), on top of Keycloak's keycloak.v3 account console
+ * (PatternFly 5). Only brand variables and a few components are changed. Text on the accent orange
+ * is always ink (#020205), never white. Fonts are bundled (fonts/), nothing is loaded from the internet.
+ */
+@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+
+:root {
+  color-scheme: light;
+  --pf-v5-global--FontFamily--text: "Inter", system-ui, sans-serif;
+  --pf-v5-global--FontFamily--heading: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --pf-v5-global--Color--100: #020205;
+  --pf-v5-global--Color--200: rgba(2, 2, 5, 0.62);
+  --pf-v5-global--BorderColor--100: rgba(2, 2, 5, 0.12);
+  --pf-v5-global--primary-color--100: #FA5B35;
+  --pf-v5-global--primary-color--200: #E14A2C;
+  --pf-v5-global--link--Color: #FA5B35;
+  --pf-v5-global--link--Color--hover: #E14A2C;
+  --pf-v5-global--BorderRadius--sm: 6px;
+  --pf-v5-c-button--m-primary--BackgroundColor: #FA5B35;
+  --pf-v5-c-button--m-primary--Color: #020205;
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: #E14A2C;
+  --pf-v5-c-button--m-primary--hover--Color: #020205;
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: #E14A2C;
+  --pf-v5-c-button--m-primary--focus--Color: #020205;
+  --pf-v5-c-button--m-primary--active--BackgroundColor: #E14A2C;
+  --pf-v5-c-button--m-primary--active--Color: #020205;
+  --pf-v5-c-button--BorderRadius: 6px;
+}
+body { font-family: "Inter", system-ui, sans-serif; color: #020205; background: #FFFFFF; }
+.pf-v5-c-button.pf-m-primary, .pf-v5-c-button.pf-m-primary:hover, .pf-v5-c-button.pf-m-primary:focus { color: #020205; }
+.pf-v5-c-masthead { --pf-v5-c-masthead--BackgroundColor: #FFFFFF; border-bottom: 1px solid rgba(2, 2, 5, 0.12); }
+.pf-v5-c-masthead .pf-v5-c-brand, .pf-v5-c-masthead__brand img { height: 32px; width: auto; }
+.pf-v5-c-masthead .pf-v5-c-button.pf-m-plain, .pf-v5-c-masthead .pf-v5-c-menu-toggle { color: #020205; }
+.pf-v5-c-page__sidebar { --pf-v5-c-page__sidebar--BackgroundColor: #FAFAFA; border-right: 1px solid rgba(2, 2, 5, 0.12); }
+.pf-v5-c-nav {
+  --pf-v5-c-nav__link--Color: #020205; --pf-v5-c-nav__link--hover--Color: #020205;
+  --pf-v5-c-nav__link--BackgroundColor: transparent; --pf-v5-c-nav__link--hover--BackgroundColor: #F1F1F3;
+  --pf-v5-c-nav__link--m-current--Color: #020205; --pf-v5-c-nav__link--m-current--BackgroundColor: #F1F1F3;
+  --pf-v5-c-nav__link--m-current--after--BorderColor: #FA5B35;
+}
+/* PatternFly's sidebar is dark by default: keep the selected and hovered item light, with ink text */
+.pf-v5-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current:hover { background-color: #F1F1F3; color: #020205; }
+.pf-v5-c-nav__link:hover { background-color: #F1F1F3; color: #020205; }
+.pf-v5-c-form-control:focus-within { --pf-v5-c-form-control--after--BorderBottomColor: #0F8A82; }
+.pf-v5-c-card { border-radius: 14px; }

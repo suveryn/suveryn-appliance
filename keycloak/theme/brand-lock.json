@@ -1,0 +1,15 @@
+{
+  "repo": "https://github.com/suveryn/suveryn-brand.git",
+  "commit": "360e7ae64985704d239512dec830dfe4e2fd829a",
+  "files": {
+    "logo/suveryn-logotype-light-bg.svg": "088eca18b7da262ac44bc8b2fb73f78fa22cd0502ce70e63aa7cd6a63d1ca18b",
+    "logo/favicon.svg": "8a3659ab5fc1559107a1849bb8ce792c1b64da8c04aed46823fd6d33cef2dd6c",
+    "fonts/Inter/Inter-Variable.woff2": "13b4cddc57045d40b411008e61588c8f81aa0bd72fe884624831a0ff9c4d159a",
+    "fonts/SpaceGrotesk/SpaceGrotesk-Variable.woff2": "8e085aa438094f11487a836652edd5c054fa6a96f63fc7c282105ee3a4b08c07",
+    "fonts/IBMPlexMono/IBMPlexMono-Medium.woff2": "0498bcb48294756b5ac9062290e1639e907b1ec69b5dc2e8cfdec3fab58e0bc8",
+    "fonts/IBMPlexMono/IBMPlexMono-Medium.ttf": "a9b4c49bb299e05b5f6c481e7fb5e78943d2793249a0c8874ab574a2d1ea6755",
+    "fonts/Inter/OFL.txt": "5b9321a4298cfeb6b34354164a1c3afc3db114569984c502b9b35d988fd58c57",
+    "fonts/SpaceGrotesk/OFL.txt": "564ce565c371c5e5bbf286006565a7c9aa55a9f56e7ca58d56e05d649dd61a72",
+    "fonts/IBMPlexMono/OFL.txt": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da"
+  }
+}
