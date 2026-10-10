@@ -233,3 +233,11 @@ def test_field_errors_use_the_brand_not_a_red():
     assert ".pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }" in css
     assert "pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }" in css
     assert props(SRC / "login" / "theme.properties")["kcInputErrorIconClass"] == "suv-icon suv-icon-alert-circle"
+
+
+@pytest.mark.parametrize("lang, link", [("nl", "Terug naar de applicatie"), ("fr", "Retour à l''application")])
+def test_error_pages_name_the_back_link_as_the_link_reads(lang, link):
+    """Keycloak's Dutch and French error texts named "Back to application" differently from the link itself."""
+    msgs = props(SRC / "login" / "messages" / f"messages_{lang}.properties")
+    assert msgs["backToApplication"] == f"« {link}"
+    assert f"Klik op {link}" in msgs["cookieNotFoundMessage"] or f"Cliquez sur {link}" in msgs["cookieNotFoundMessage"]
