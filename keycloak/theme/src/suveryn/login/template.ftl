@@ -180,13 +180,21 @@
               id="login-select-toggle"
               onchange="if (this.value) window.location.href=this.value"
             >
-              <#list locale.supported?sort_by("label") as l>
-                <option
-                  value="${l.url}"
-                  ${(l.languageTag == locale.currentLanguageTag)?then('selected','')}
-                >
-                  ${l.label}
-                </option>
+              <#-- Each language in its own name and in a fixed order, as in the chat UI's menu. Keycloak's
+                   labels are in the page's language with the native name added ("Néerlandais (Nederlands)"),
+                   so the menu changed width with the language and jumped under the title. -->
+              <#assign suvNames = {"en": "English", "nl": "Nederlands", "fr": "Français"}>
+              <#list ["en", "nl", "fr"] as tag>
+                <#list locale.supported as l>
+                  <#if l.languageTag == tag>
+                <option value="${l.url}" lang="${tag}" ${(l.languageTag == locale.currentLanguageTag)?then('selected','')}>${suvNames[tag]}</option>
+                  </#if>
+                </#list>
+              </#list>
+              <#list locale.supported as l>
+                <#if !suvNames[l.languageTag]??>
+                <option value="${l.url}" ${(l.languageTag == locale.currentLanguageTag)?then('selected','')}>${l.label}</option>
+                </#if>
               </#list>
             </select>
             <span class="${properties.kcFormControlUtilClass}">
