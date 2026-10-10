@@ -176,7 +176,7 @@ def notices(brand: Path) -> str:
              "https://github.com/suveryn/suveryn-brand/blob/main/TRADEMARK_POLICY.md\n"]
     for family, folder in (("Inter", "Inter"), ("Space Grotesk", "SpaceGrotesk"), ("IBM Plex Mono", "IBMPlexMono")):
         parts.append(f"{'=' * 72}\n{family} font (SIL Open Font Licence 1.1)\n{'=' * 72}\n{(brand / 'fonts' / folder / 'OFL.txt').read_text().strip()}\n")
-    parts.append(f"{'=' * 72}\nLucide icons: eye, eye-off, wifi-off (ISC; Feather-derived icons MIT)\n{'=' * 72}\n{(HERE / 'LUCIDE-LICENSE.txt').read_text().strip()}\n")
+    parts.append(f"{'=' * 72}\nLucide icons: eye, eye-off, wifi-off, languages (ISC; Feather-derived icons MIT)\n{'=' * 72}\n{(HERE / 'LUCIDE-LICENSE.txt').read_text().strip()}\n")
     return "\n".join(parts)
 
 
