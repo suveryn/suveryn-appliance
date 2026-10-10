@@ -241,3 +241,12 @@ def test_field_errors_use_the_brand_not_a_red():
     assert ".pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }" in css
     assert "pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }" in css
     assert props(SRC / "login" / "theme.properties")["kcInputErrorIconClass"] == "suv-icon suv-icon-alert-circle"
+
+
+def test_language_menu_has_the_lucide_languages_icon_as_in_the_chat_ui():
+    """The chat UI shows Lucide "languages" before its language menu; the login page does too."""
+    template = (SRC / "login" / "template.ftl").read_text()
+    utilities = template[template.index("suv-language"):template.index('id="login-select-toggle"')]
+    svg = utilities[utilities.index("<svg"):utilities.index("</svg>")]
+    assert 'aria-hidden="true"' in svg and 'stroke="currentColor"' in svg and svg.count("<path") == 6
+    assert 'd="m22 22-5-10-5 10"' in svg  # the "A" of Lucide's languages glyph
