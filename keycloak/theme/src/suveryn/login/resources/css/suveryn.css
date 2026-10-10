@@ -144,6 +144,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-button--after--BorderColor: var(--suv-line);
   color: var(--suv-text-dim); background: var(--suv-bg);
 }
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
+  display: inline-flex; align-items: center; justify-content: center;  /* icon centred, not on the text baseline */
+}
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control .suv-icon { display: block; }
+/* field and button are one box: no line between them, and the whole box turns teal on focus */
+.suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-m-fill .pf-v5-c-form-control::before { border-right-width: 0; }
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control::after { border-left-width: 0; }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within { border-radius: 6px; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-form-control::before,
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-v5-c-form-control:focus-within::before { box-shadow: none; }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control:hover { color: var(--suv-text); }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control:focus-visible { outline: 2px solid var(--suv-teal-focus); outline-offset: -2px; }
 .suv-card .pf-v5-c-input-group__item:has(.pf-m-control) + * ,
