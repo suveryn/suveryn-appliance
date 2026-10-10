@@ -8,7 +8,7 @@ It is a standard Keycloak theme (FreeMarker templates, CSS, message bundles) tha
 |---|---|---|
 | `login` | `keycloak.v2` | `template.ftl`: the page frame (logo, tagline, optional "Air-gapped" badge, centred card), copied from keycloak.v2's with only the frame replaced. `login.ftl`: one line under the password field. Styles, Lucide eye icons for show/hide password, messages. Every other page (TOTP, password update, errors, …) is Keycloak's, inside the Sūveryn frame |
 | `account` | `keycloak.v3` | Through its supported settings only: logo, favicon, title, stylesheet, messages |
-| `email` | `keycloak` | `html/template.ftl`: the HTML frame. Messages. Plain-text emails are Keycloak's |
+| `email` | `keycloak` | `html/template.ftl`: the HTML frame, headed by the lockup (the brand icon, inlined as SVG, next to the wordmark as text; clients that strip SVG, such as Gmail and Outlook for Windows, show the wordmark alone). Messages. Plain-text emails are Keycloak's |
 
 Because only the frame and one line are overridden, a Keycloak upgrade keeps working. After an upgrade, compare `src/suveryn/login/template.ftl` and `login.ftl` with the new `keycloak.v2` versions (the header comment in each says which version they come from).
 

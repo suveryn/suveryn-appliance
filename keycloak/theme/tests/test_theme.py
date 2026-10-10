@@ -140,6 +140,7 @@ def test_built_theme_if_present():
     assert "<text" in logo and "c2pa" not in logo
     outlined = (out / "account" / "resources" / "suveryn-logotype.svg").read_text()
     assert "<text" not in outlined and outlined.count("<path") >= 7 and 'height="48"' in outlined
+    assert outlined.count("<rect") == 3  # the icon is part of the account console logo (suveryn-tracker#1)
     for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2", "IBMPlexMono-Medium.woff2"):
         assert (out / "login" / "resources" / "fonts" / font).stat().st_size > 10_000
     notices = (out / "THIRD-PARTY-NOTICES.txt").read_text()
@@ -174,3 +175,26 @@ def test_no_text_in_the_plain_accent_or_tertiary_colour():
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
     assert "--pf-v5-global--link--Color: #CD3200" in account
     assert ".suv-body a { color: #CD3200" in (SRC / "email" / "html" / "template.ftl").read_text()
+
+
+MOJIBAKE = re.compile("Ã|Å|â€|Â")  # UTF-8 read as Latin-1/Windows-1252, e.g. "SÅ«veryn" for "Sūveryn"
+
+
+def test_sources_are_utf8_without_mojibake():
+    """suveryn-tracker#1: every theme file is valid UTF-8 and the macron is never double-encoded."""
+    for path in sorted(SRC.rglob("*")):
+        if path.is_file() and path.suffix in {".properties", ".ftl", ".css"}:
+            text = path.read_bytes().decode("utf-8")  # raises if not UTF-8
+            assert not MOJIBAKE.search(text), path
+    assert "Sūveryn" in (SRC / "email" / "messages" / "messages_nl.properties").read_text(encoding="utf-8")
+
+
+def test_email_header_is_the_lockup_icon_and_wordmark():
+    """suveryn-tracker#1: the email header shows the brand icon next to the wordmark."""
+    template = (SRC / "email" / "html" / "template.ftl").read_text()
+    assert '<#include "suveryn-icon.ftl">' in template and "s&#363;veryn" in template
+    assert '<meta charset="utf-8">' in template
+    built = THEME / "build" / "theme" / "suveryn" / "email" / "html" / "suveryn-icon.ftl"
+    if built.exists():
+        icon = built.read_text()
+        assert 'width="30" height="30"' in icon and icon.count("<rect") == 3 and "c2pa" not in icon
