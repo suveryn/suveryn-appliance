@@ -208,3 +208,19 @@ def test_product_name_is_lower_case_mid_sentence():
             for m in re.finditer("Sūveryn", value):
                 before = re.sub(r"<[^>]+>", "", value[:m.start()]).strip()
                 assert before == "" or before[-1] in ".!?:", (path.name, key, value)
+
+
+def test_notices_are_neutral_with_a_brand_signal():
+    """suveryn-tracker#2: no PatternFly amber/red/blue/green banners; warnings and errors use accent-ink."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    alert = re.search(r"\.suv-card \.pf-v5-c-alert \{(.*?)\}", css, re.S).group(1)
+    assert "var(--suv-surface-alt)" in alert and "color: var(--suv-text)" in alert
+    signal = re.search(r"\.pf-m-warning, \.suv-card \.pf-v5-c-alert\.pf-m-danger \{(.*?)\}", css, re.S).group(1)
+    assert "var(--suv-accent-ink)" in signal
+    props_ = props(SRC / "login" / "theme.properties")
+    for kind in ("Error", "Warning", "Success", "Info"):
+        assert props_[f"kcFeedback{kind}Icon"].startswith("suv-icon suv-icon-")  # Lucide, not Font Awesome
+    v = css_vars(SRC / "login" / "resources" / "css" / "suveryn.css")
+    assert ratio(v["--suv-text"], v["--suv-surface-alt"]) >= 4.5
+    assert ratio(v["--suv-accent-ink"], v["--suv-surface-alt"]) >= 4.5  # icon and bar
+    assert ratio(v["--suv-accent"], v["--suv-surface-alt"]) < 3  # why the plain accent isn't used here
