@@ -57,10 +57,14 @@
 html.login-pf, html.login-pf body { background: var(--suv-bg); }
 
 /* ---------------------------------------------------------------- page frame */
+/* Anchored to the top, not centred: a centred page moved as a whole when the card's height changed
+   with the language (a line wrapping in Dutch or French but not in English), so the logo, title and
+   language menu jumped on every switch. The top margin grows with the window, so on a usual screen
+   the block sits about where centring put it. */
 .suv-page {
   min-height: 100vh;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 24px; padding: 32px 16px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: 24px; padding: max(32px, calc(50vh - 260px)) 16px 32px;
 }
 .suv-brand { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .suv-logo { height: 48px; width: auto; display: block; }
@@ -97,6 +101,9 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 /* language switcher: quiet, stays out of the heading's way; the Lucide "languages" icon before it, as in the chat UI */
 .suv-card .suv-language { display: flex; align-items: center; gap: 6px; color: var(--suv-text-dim); }
 .suv-card .suv-language-icon { flex: 0 0 auto; }
+/* fixed width: the menu must not change size (and wrap under the title) when the language changes */
+.suv-card .suv-language { flex: 0 0 auto; }
+.suv-card .suv-language .pf-v5-c-form-control { width: 9.5rem; }
 .suv-card .pf-v5-c-login__main-header-utilities .pf-v5-c-form-control {
   --pf-v5-c-form-control--BorderRadius: 6px;
   font-size: 13px; color: var(--suv-text-dim); background: transparent; min-width: 0;

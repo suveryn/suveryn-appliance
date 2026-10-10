@@ -257,3 +257,18 @@ def test_language_menu_has_the_lucide_languages_icon_as_in_the_chat_ui():
     svg = utilities[utilities.index("<svg"):utilities.index("</svg>")]
     assert 'aria-hidden="true"' in svg and 'stroke="currentColor"' in svg and svg.count("<path") == 6
     assert 'd="m22 22-5-10-5 10"' in svg  # the "A" of Lucide's languages glyph
+
+
+def test_language_menu_names_each_language_in_itself_with_a_fixed_width():
+    """Switching nl/fr made the menu jump: Keycloak's labels change length with the page language."""
+    template = (SRC / "login" / "template.ftl").read_text()
+    assert '"en": "English", "nl": "Nederlands", "fr": "Français"' in template and '["en", "nl", "fr"]' in template
+    assert "${l.label}" not in template.split("suvNames[l.languageTag]??")[0].split("suvNames =")[1]  # en/nl/fr: own names only
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert ".suv-card .suv-language .pf-v5-c-form-control { width: 9.5rem; }" in css
+
+
+def test_login_page_is_anchored_to_the_top_so_nothing_moves_when_the_language_changes():
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    page = css[css.index(".suv-page {"):css.index("}", css.index(".suv-page {"))]
+    assert "justify-content: flex-start" in page and "justify-content: center" not in page
