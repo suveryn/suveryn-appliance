@@ -6,7 +6,7 @@ It is a standard Keycloak theme (FreeMarker templates, CSS, message bundles) tha
 
 | Part | Extends (Keycloak 26.8) | What differs |
 |---|---|---|
-| `login` | `keycloak.v2` | `template.ftl`: the page frame (logo, tagline, optional "Air-gapped" badge, centred card), copied from keycloak.v2's with only the frame replaced. `login.ftl`: one line under the password field. Styles, Lucide eye icons for show/hide password, messages. Every other page (TOTP, password update, errors, …) is Keycloak's, inside the sūveryn frame |
+| `login` | `keycloak.v2` | `template.ftl`: the page frame (logo, tagline, optional "Air-gapped" badge, centred card), copied from keycloak.v2's with only the frame replaced. `login.ftl`: one line under the password field. Styles, Lucide eye icons for show/hide password and the Lucide languages icon before the language menu (as in the chat UI), messages. Every other page (TOTP, password update, errors, …) is Keycloak's, inside the sūveryn frame |
 | `account` | `keycloak.v3` | Through its supported settings only: logo, favicon, title, stylesheet, messages |
 | `email` | `keycloak` | `html/template.ftl`: the HTML frame, headed by the lockup (the brand icon, inlined as SVG, next to the wordmark as text; clients that strip SVG, such as Gmail and Outlook for Windows, show the wordmark alone). Messages. Plain-text emails are Keycloak's |
 
@@ -57,8 +57,9 @@ It states a fact, so it is **off** unless the theme property `suverynShowAirGapp
 `en`, `nl` and `fr`, switched with Keycloak's own language menu.
 
 - **English** is UK English. Keycloak's own English strings that use US spelling ("Organization", "Canceling", "Unauthorized") are overridden.
-- **Dutch** is formal (*u/uw*), like Keycloak's own Dutch strings, which are used as they are. The theme adds only the sūveryn strings and corrects three spelling errors in Keycloak's Dutch. A test fails if an informal form (*je/jouw/jij*) slips in.
-- **French** has only the sūveryn strings; the rest is Keycloak's.
+- **Dutch** is formal (*u/uw*). Keycloak's own Dutch strings are mostly formal and used as they are. The login theme adds the sūveryn strings and corrects three spelling errors. The account theme rewrites Keycloak's five informal account-console strings (*je*) and adds the two that Keycloak 26.8 hasn't translated, which would otherwise show in English (suveryn-tracker#9). A test fails if an informal form (*je/jouw/jij*) slips in.
+- **French** has only the sūveryn strings; the rest is Keycloak's, which is complete and formal (*vous*).
+- Every theme (login, account, email) ships `messages_en`, `messages_nl` and `messages_fr`, which a test checks.
 - The tagline and the "Air-gapped" label stay in English in every language, as on the Dutch website.
 
 ## Tests

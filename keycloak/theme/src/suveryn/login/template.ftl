@@ -171,7 +171,9 @@
       <div class="${properties.kcLoginMainHeader!}">
         <h1 class="${properties.kcLoginMainTitle!}" id="kc-page-title"><#nested "header"></h1>
         <#if realm.internationalizationEnabled  && locale.supported?size gt 1>
-        <div class="${properties.kcLoginMainHeaderUtilities!}">
+        <div class="${properties.kcLoginMainHeaderUtilities!} suv-language">
+          <#-- Lucide "languages", as next to the chat UI's language menu -->
+          <svg class="suv-language-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
           <div class="${properties.kcInputClass!}">
             <select
               aria-label="${msg("languages")}"
