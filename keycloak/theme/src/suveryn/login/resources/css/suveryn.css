@@ -6,12 +6,11 @@
  * tokens (version 2): links use accent-ink, the accent's hue at a lower lightness.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
- * login page loads nothing from the internet and works air-gapped. IBM Plex Mono is used only by
- * the wordmark.
+ * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
+ * outlines from IBM Plex Mono (build_theme.py), so it needs no web font and never flashes.
  */
 @font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
-@font-face { font-family: "IBM Plex Mono"; src: url("../fonts/IBMPlexMono-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
 
 :root {
   --suv-bg: #FFFFFF;
@@ -31,7 +30,6 @@
   --suv-teal-glow: rgba(58, 212, 202, 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
-  --suv-font-wordmark: "IBM Plex Mono", ui-monospace, monospace;
   color-scheme: light;
 }
 
@@ -68,7 +66,6 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 }
 .suv-brand { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .suv-logo { height: 48px; width: auto; display: block; }
-.suv-logo text { font-family: var(--suv-font-wordmark); }
 .suv-tagline { margin: 0; color: var(--suv-text-dim); font-size: 15px; font-weight: 400; max-width: 34ch; }
 
 /* The website's hero "Air-gapped" badge (suveryn-website index.html), with the brand's teal-ink
@@ -86,16 +83,20 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   background: var(--suv-card); border: 1px solid var(--suv-line); border-radius: 14px;
   box-shadow: none; padding: 0;
 }
+/* The language menu sits in a fixed spot, the card's top right, whatever the title: next to the
+   title it wrapped under longer titles ("Connexion", error pages) or with a larger browser font size,
+   so it moved on a language switch (suveryn-tracker#13). The title keeps clear of it and wraps itself. */
 .suv-card .pf-v5-c-login__main-header {
   border-top: none; /* keycloak.v2 draws a 4px PatternFly-blue line here */
-  padding: 28px 28px 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  position: relative; display: block; padding: 28px calc(28px + 9.5rem + 32px) 8px 28px; min-height: 36px;
 }
+.suv-card .pf-v5-c-login__main-header .suv-language { position: absolute; top: 26px; right: 28px; }
 .suv-card .pf-v5-c-login__main-body { padding: 8px 28px 28px; }
 .suv-card .pf-v5-c-login__main-footer:empty { display: none; }
 #kc-page-title.pf-v5-c-title {
   font-family: var(--suv-font-display); font-weight: 600; font-size: 24px; line-height: 1.2;
   color: var(--suv-text); margin: 0;
-  flex: 1 0 auto; word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word; the menu wraps instead */
+  word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word */
 }
 
 /* language switcher: quiet, stays out of the heading's way; the Lucide "languages" icon before it, as in the chat UI */
@@ -228,6 +229,9 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 /* ---------------------------------------------------------------- small screens */
 @media (max-width: 480px) {
   .suv-page { justify-content: flex-start; padding-top: 24px; }
+  /* too narrow for menu and title side by side: the menu gets its own line under the title, right-aligned
+     (still a fixed spot, whatever the title) */
   .suv-card .pf-v5-c-login__main-header { padding: 22px 20px 6px; }
+  .suv-card .pf-v5-c-login__main-header .suv-language { position: static; justify-content: flex-end; margin-top: 12px; }
   .suv-card .pf-v5-c-login__main-body { padding: 6px 20px 22px; }
 }

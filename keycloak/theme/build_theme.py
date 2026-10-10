@@ -19,9 +19,10 @@ SHA-256 in brand-lock.json, so a build is reproducible and a changed asset is no
 The logotype (logo/suveryn-logotype-light-bg.svg) has blank canvas to the right of the wordmark.
 Its viewBox is cropped to the drawn content, computed from the shapes and from IBM Plex Mono's own
 glyph metrics; the shapes and text are not changed. Two forms are written:
-  - login: the SVG inlined in the page, so the wordmark <text> uses the bundled IBM Plex Mono;
-  - account console: the same SVG with the wordmark converted to outlines with that font, because
-    the account console shows its logo as an <img>, which can't load web fonts.
+  - login: the SVG inlined in the page, with the wordmark converted to outlines (paths) from IBM Plex
+    Mono, so it needs no web font: as live <text> it flashed in a fallback font on every page load,
+    e.g. each language switch (suveryn-tracker#13);
+  - account console: the same outlined SVG as a file, because it shows its logo as an <img>.
 The email header uses logo/suveryn-icon.svg (inlined, 30px) next to the wordmark set as text.
 The C2PA provenance metadata is dropped: it describes the original file, which cropping changes.
 
@@ -59,7 +60,7 @@ ASSETS = {
     "logo/favicon.svg": ["login/resources/img/favicon.svg", "account/resources/favicon.svg"],
     "fonts/Inter/Inter-Variable.woff2": ["login/resources/fonts/Inter-Variable.woff2", "account/resources/fonts/Inter-Variable.woff2"],
     "fonts/SpaceGrotesk/SpaceGrotesk-Variable.woff2": ["login/resources/fonts/SpaceGrotesk-Variable.woff2", "account/resources/fonts/SpaceGrotesk-Variable.woff2"],
-    "fonts/IBMPlexMono/IBMPlexMono-Medium.woff2": ["login/resources/fonts/IBMPlexMono-Medium.woff2"],
+    "fonts/IBMPlexMono/IBMPlexMono-Medium.woff2": None,  # not shipped: the wordmark is outlined
     "fonts/IBMPlexMono/IBMPlexMono-Medium.ttf": None,  # glyph metrics and outlines, not shipped
     "fonts/Inter/OFL.txt": None,
     "fonts/SpaceGrotesk/OFL.txt": None,
@@ -101,7 +102,7 @@ def text_layout(font: TTFont, text: str, x: float, y: float, size: float):
 
 
 def logotype(svg_path: Path, font: TTFont) -> tuple[str, str, tuple]:
-    """(inline SVG for the login page, outlined SVG file for the account console, viewBox)."""
+    """(inline SVG for the login page, SVG file for the account console, viewBox); both outlined."""
     root = ET.parse(svg_path).getroot()
     for meta in root.findall(f"{{{SVG_NS}}}metadata"):
         root.remove(meta)
@@ -131,12 +132,8 @@ def logotype(svg_path: Path, font: TTFont) -> tuple[str, str, tuple]:
     root.set("role", "img")
     root.set("aria-label", "Sūveryn")
 
-    inline = root.__copy__()
-    inline.set("class", "suv-logo")
-    inline_svg = ET.tostring(inline, encoding="unicode")
-
     glyphs = font.getGlyphSet()
-    for el, placed, scale in texts:  # outline the wordmark for the <img> version
+    for el, placed, scale in texts:  # outline the wordmark: no web font needed, so nothing can flash
         g = ET.Element(f"{{{SVG_NS}}}g", {"fill": el.get("fill", "#020205")})
         for name, pen_x in placed:
             pen = SVGPathPen(glyphs)
@@ -146,6 +143,9 @@ def logotype(svg_path: Path, font: TTFont) -> tuple[str, str, tuple]:
         index = list(root).index(el)
         root.remove(el)
         root.insert(index, g)
+    inline = root.__copy__()
+    inline.set("class", "suv-logo")
+    inline_svg = ET.tostring(inline, encoding="unicode")
     root.set("height", "48")
     root.set("width", f"{48 * view[2] / view[3]:.1f}")
     outlined_svg = '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode") + "\n"
