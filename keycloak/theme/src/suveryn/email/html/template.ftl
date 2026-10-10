@@ -1,8 +1,9 @@
 <#--
-  Sūveryn email frame: the wordmark, the message, the tagline. Light theme, inline styles, tables
-  only, so it survives Outlook and webmail. No images and no web fonts are loaded: email clients
-  block remote images and most can't show SVG, and an air-gapped office must not fetch anything.
-  The wordmark is text in IBM Plex Mono where the reader has it, monospace otherwise.
+  Sūveryn email frame: the lockup, the message, the tagline. Light theme, inline styles, tables
+  only, so it survives Outlook and webmail. Nothing is fetched (an air-gapped office must not, and
+  clients block remote images): the icon is the brand's SVG inlined, and the wordmark is text in
+  IBM Plex Mono where the reader has it, monospace otherwise. Clients that strip inline SVG
+  (Gmail, Outlook for Windows) show the wordmark alone.
 -->
 <#macro emailLayout>
 <!DOCTYPE html>
@@ -22,8 +23,14 @@
       <td align="center" style="padding:32px 16px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;">
           <tr>
-            <td style="padding:0 4px 20px; font-family:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; font-weight:500; font-size:22px; line-height:1; color:#020205;">
-              s&#363;veryn
+            <td style="padding:0 4px 20px;">
+              <#-- The lockup: 30px icon, 12px gap, 22px wordmark (brand guidelines). -->
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding:0 12px 0 0; vertical-align:middle;"><#include "suveryn-icon.ftl"></td>
+                  <td style="vertical-align:middle; font-family:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; font-weight:500; font-size:22px; line-height:1; color:#020205;">s&#363;veryn</td>
+                </tr>
+              </table>
             </td>
           </tr>
           <tr>
