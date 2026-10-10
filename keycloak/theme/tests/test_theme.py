@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from oklch_contrast import ratio
+
 THEME = Path(__file__).resolve().parents[1]
 SRC = THEME / "src" / "suveryn"
 TAGLINE = "AI for work that can''t leave the premises."  # '' is one apostrophe in Keycloak messages
@@ -57,12 +59,13 @@ def test_air_gapped_badge_is_off_by_default_and_only_shown_when_enabled():
 def test_badge_matches_the_website_component():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     rule = re.search(r"\.suv-badge-airgapped \{(.*?)\}", css, re.S).group(1)
-    for decl in ("gap: 5px", "font-size: 10px", "font-weight: 600", "color: #0F8A82",
+    for decl in ("gap: 5px", "font-size: 10px", "font-weight: 600", "color: var(--suv-teal-ink)",
                  "background: rgba(58, 212, 202, 0.10)", "border: 1px solid rgba(58, 212, 202, 0.35)",
                  "border-radius: 20px", "padding: 3px 8px", "display: inline-flex"):
         assert decl in rule, decl
     svg = re.search(r'<span class="suv-badge-airgapped">\s*(<svg.*?</svg>)', (SRC / "login" / "template.ftl").read_text(), re.S).group(1)
-    assert 'width="9" height="9"' in svg and 'stroke="#0F8A82"' in svg and 'stroke-width="2.4"' in svg
+    # the website's #0F8A82 darkened to #00837C (same hue) for 4.5:1, see test_text_contrast_by_oklch
+    assert 'width="9" height="9"' in svg and 'stroke="#00837C"' in svg and 'stroke-width="2.4"' in svg
     assert svg.count("<path") == 7  # Lucide wifi-off
 
 
@@ -81,7 +84,8 @@ def test_no_white_text_on_the_accent():
 def test_teal_focus_on_inputs():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     focus = re.search(r"\.pf-v5-c-form-control:focus-within::before \{(.*?)\}", css, re.S).group(1)
-    assert "border-color: #0F8A82" in focus and "box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15)" in focus
+    assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15)" in focus
+    assert "--suv-teal-focus: #0F8A82" in css
 
 
 def test_nothing_is_loaded_from_the_internet():
@@ -101,13 +105,13 @@ def test_ibm_plex_mono_only_for_the_wordmark():
     assert "IBM Plex Mono" not in (SRC / "account" / "resources" / "css" / "account.css").read_text()
 
 
-FORMAL = re.compile(r"(^|[ =(>'\"])([Uu]w?)(?=[ ,.?!:;)<]|$)")
+INFORMAL = re.compile(r"(^|[ =(>'\"])([Jj]e|[Jj]ouw|[Jj]ij)(?=[ ,.?!:;)<]|$)")
 
 
 @pytest.mark.parametrize("path", sorted(SRC.glob("*/messages/messages_nl.properties")), ids=str)
-def test_dutch_is_informal(path):
-    formal = {k: v for k, v in props(path).items() if FORMAL.search(v)}
-    assert formal == {}
+def test_dutch_is_formal(path):
+    """Sūveryn's Dutch copy uses "u"/"uw", like Keycloak's own Dutch strings."""
+    assert {k: v for k, v in props(path).items() if INFORMAL.search(v)} == {}
 
 
 US = re.compile(r"(organiz|authoriz|recogniz|customiz|initializ|realiz|synchroniz|categoriz|utiliz|"
@@ -140,3 +144,33 @@ def test_built_theme_if_present():
         assert (out / "login" / "resources" / "fonts" / font).stat().st_size > 10_000
     notices = (out / "THIRD-PARTY-NOTICES.txt").read_text()
     assert "SIL Open Font" in notices and "Lucide" in notices and "TRADEMARK_POLICY" in notices
+
+
+def css_vars(path: Path) -> dict[str, str]:
+    return dict(re.findall(r"(--suv-[\w-]+):\s*([^;]+);", path.read_text()))
+
+
+def test_text_contrast_by_oklch():
+    """Every text colour meets 4.5:1 (and UI boundaries 3:1), measured from OKLCH lightness."""
+    v = css_vars(SRC / "login" / "resources" / "css" / "suveryn.css")
+    card, page = v["--suv-card"], v["--suv-bg"]
+    wash = "rgba(58, 212, 202, 0.10)"
+    pairs = [
+        (v["--suv-text"], card, 4.5), (v["--suv-text-dim"], card, 4.5), (v["--suv-text-dim"], page, 4.5),
+        (v["--suv-accent-ink"], card, 4.5), (v["--suv-accent-ink"], page, 4.5),
+        (v["--suv-accent-ink-hover"], card, 4.5),
+        (v["--suv-on-accent"], v["--suv-accent"], 4.5), (v["--suv-on-accent"], v["--suv-accent-hover"], 4.5),
+        (v["--suv-teal-ink"], wash, 4.5), (v["--suv-teal-focus"], page, 3.0),
+    ]
+    failing = [(fg, bg, round(ratio(fg, bg), 2)) for fg, bg, need in pairs if ratio(fg, bg) < need]
+    assert failing == []
+    # the reference point: white on the accent fails, which is why buttons use ink
+    assert round(ratio("#FFFFFF", v["--suv-accent"]), 1) == 2.9
+
+
+def test_no_text_in_the_plain_accent_or_tertiary_colour():
+    login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover|text-dimmer)\)", login)
+    account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
+    assert "--pf-v5-global--link--Color: #CD3200" in account
+    assert ".suv-body a { color: #CD3200" in (SRC / "email" / "html" / "template.ftl").read_text()
