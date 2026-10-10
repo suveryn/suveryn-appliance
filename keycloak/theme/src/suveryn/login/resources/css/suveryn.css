@@ -16,6 +16,7 @@
 :root {
   --suv-bg: #FFFFFF;
   --suv-card: #FAFAFA;
+  --suv-surface-alt: #F1F1F3;
   --suv-line: rgba(2, 2, 5, 0.12);
   --suv-text: #020205;
   --suv-text-dim: rgba(2, 2, 5, 0.62);
@@ -116,7 +117,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .pf-v5-c-form-control:focus-within::before { border-color: var(--suv-teal-focus); box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
 .suv-card .pf-v5-c-form-control > input:focus,
 .suv-card .pf-v5-c-form-control > input:focus-visible { outline: none; box-shadow: none; }
-.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: #C9190B; }
+/* Field errors use the brand, not PatternFly's red: the brand has no separate error colour (a red
+   that passes 4.5:1 is either indistinguishable from the accent or reads pink). The error is told
+   apart by its icon and message, never by colour alone. */
+.suv-card .pf-v5-c-form-control.pf-m-error {
+  --pf-v5-c-form-control--m-error--after--BorderBottomColor: var(--suv-accent-ink);
+  --pf-v5-c-form-control--m-error__icon--Color: var(--suv-accent-ink);
+}
+.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-form-control__icon.pf-m-status { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-helper-text__item-text.pf-m-error,
+.suv-card .pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }
 
 /* password show/hide: the button sits inside the field's border, Lucide icons */
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
@@ -166,8 +177,33 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-body a, .suv-card .pf-v5-c-button.pf-m-link { color: var(--suv-accent-ink); text-decoration: underline; text-underline-offset: 2px; }
 .suv-body a:hover, .suv-card .pf-v5-c-button.pf-m-link:hover { color: var(--suv-accent-ink-hover); }
 
-/* alerts (wrong password, expired page, ...) */
-.suv-card .pf-v5-c-alert { border-radius: 6px; font-size: 13.5px; }
+/* Notices (wrong password, "you need to change your password", expired page, ...): one neutral
+   style instead of PatternFly's amber/red/blue/green banners, which aren't brand colours
+   (suveryn-tracker#2). Warnings and errors carry the brand signal: an accent-ink left bar and icon
+   (accent-ink, not the accent: the accent measures 2.6:1 on this surface, accent-ink 4.5:1). Info
+   and success get a quiet icon. Text is always ink. Icons are Lucide (see theme.properties). */
+.suv-card .pf-v5-c-alert {
+  --pf-v5-c-alert--BackgroundColor: var(--suv-surface-alt);
+  --pf-v5-c-alert--BoxShadow: none;
+  --pf-v5-c-alert--BorderTopWidth: 0;
+  --pf-v5-c-alert__title--Color: var(--suv-text);
+  --pf-v5-c-alert__icon--Color: var(--suv-text-dim);
+  background: var(--suv-surface-alt); color: var(--suv-text); box-shadow: none;
+  border: 1px solid var(--suv-line); border-left: 3px solid var(--suv-line); border-radius: 6px;
+  font-family: var(--suv-font-body); font-size: 13.5px; padding: 10px 12px;
+}
+.suv-card .pf-v5-c-alert::before { display: none; }
+.suv-card .pf-v5-c-alert .pf-v5-c-alert__title { color: var(--suv-text); font-weight: 500; }
+.suv-card .pf-v5-c-alert .pf-v5-c-alert__icon { color: var(--suv-text-dim); }
+.suv-card .pf-v5-c-alert.pf-m-warning, .suv-card .pf-v5-c-alert.pf-m-danger { border-left-color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-alert.pf-m-warning .pf-v5-c-alert__icon,
+.suv-card .pf-v5-c-alert.pf-m-danger .pf-v5-c-alert__icon { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-alert .suv-icon { width: 16px; height: 16px; vertical-align: -3px; }
+/* Lucide 1.54 triangle-alert, circle-alert, info, circle-check (ISC licence) */
+.suv-icon-alert-triangle { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E"); }
+.suv-icon-alert-circle { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cline x1='12' x2='12' y1='8' y2='12'/%3E%3Cline x1='12' x2='12.01' y1='16' y2='16'/%3E%3C/svg%3E"); }
+.suv-icon-info { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='M12 16v-4'/%3E%3Cpath d='M12 8h.01'/%3E%3C/svg%3E"); }
+.suv-icon-check-circle { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m16 9-5.5 5.5L8 12'/%3E%3C/svg%3E"); }
 
 /* ---------------------------------------------------------------- small screens */
 @media (max-width: 480px) {
