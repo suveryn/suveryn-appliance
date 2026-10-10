@@ -4,8 +4,8 @@
  * is always ink (#020205), never white; links use the brand's accent-ink (#C42F00), which meets 4.5:1 measured
  * from OKLCH lightness, where the accent itself (#FA5B35) only reaches 2.9:1. Fonts are bundled (fonts/), nothing is loaded from the internet.
  */
-@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
 
 :root {
   color-scheme: light;
