@@ -37,16 +37,8 @@ kcadm.sh update realms/suveryn -s loginTheme=suveryn -s accountTheme=suveryn -s 
 From the reviewed login mockup and the Sūveryn Design System:
 
 - **Light theme only.** `darkMode=false`, so Keycloak's automatic dark mode is off.
-- **Colours:** background `#FFFFFF`, card `#FAFAFA`, borders `rgba(2,2,5,0.12)`, text `#020205`, secondary and helper text `rgba(2,2,5,0.62)`, accent `#FA5B35` (button fills), accent-ink `#CD3200` (links).
-- **Contrast is measured the Design System's way, from OKLCH lightness** ([`tests/oklch_contrast.py`](tests/oklch_contrast.py)): luminance is taken as L³ and the WCAG ratio applied, which reproduces the system's own audit figure for white on the accent (2.88:1). All text meets 4.5:1 and UI boundaries 3:1, and `test_text_contrast_by_oklch` checks every pair. Three spec colours failed and are replaced by the same hue at a lower OKLCH lightness, as the Design System did for teal-ink:
-
-  | Use | Spec colour | Measured | Used instead | Measured |
-  |---|---|---|---|---|
-  | Links | accent `#FA5B35` | 2.8:1 on the card | accent-ink `#CD3200` (OKLCH 0.557 0.197 34.6°) | 4.5:1 card, 4.7:1 white |
-  | Helper text, directory line | `rgba(2,2,5,0.40)` | 2.8:1 | the secondary text colour, `rgba(2,2,5,0.62)` | 6.0:1 |
-  | "Air-gapped" badge text and icon | teal-ink `#0F8A82` | 4.1:1 on the badge wash | `#00837C` (OKLCH 0.550 0.096 188.2°) | 4.5:1 |
-
-- **Text on the accent is always `#020205`, never white.** This covers the login button, the account console's primary buttons, and hover and focus states. A test checks it.
+- **Colours** are suveryn-brand's tokens (version 2): background `#FFFFFF`, card `#FAFAFA`, borders `rgba(2,2,5,0.12)`, text `#020205`, secondary text `rgba(2,2,5,0.62)`, helper text `rgba(2,2,5,0.55)`, accent `#FA5B35` (button fills), accent-ink `#C42F00` (links), teal-ink `#007F78` (the badge).
+- **Contrast is measured the Design System's way, from OKLCH lightness** ([`tests/oklch_contrast.py`](tests/oklch_contrast.py)): luminance is taken as L³ and the WCAG ratio applied. All text meets 4.5:1 and UI boundaries 3:1, and `test_text_contrast_by_oklch` checks every pair. The mockup's link colour (the accent), helper text (0.40) and badge teal (`#0F8A82`) failed that test; suveryn-brand's tokens were corrected for it ([suveryn-brand#2](https://github.com/suveryn/suveryn-brand/pull/2)), and the theme uses the corrected values.
 - **Teal only for system signals:** the "Air-gapped" badge, and the focus state of inputs (`border-color: #0F8A82`, a UI boundary that meets 3:1; `box-shadow: 0 0 0 3px rgba(58,212,202,0.15)`; no browser outline).
 - **Fonts:** Space Grotesk 600 for the card heading, Inter 400/600 for everything else, and IBM Plex Mono 500 only for the wordmark. They are bundled with the theme rather than loaded from Google Fonts: the login page must work air-gapped, and it must not tell a third party when someone signs in.
 - **Layout:** centred card, max 400px wide, 14px corners; inputs and buttons have 6px corners. The logo is 48px high.
@@ -55,7 +47,7 @@ From the reviewed login mockup and the Sūveryn Design System:
 
 ## The "Air-gapped" badge
 
-The badge is the website hero's badge from [suveryn-website](https://github.com/suveryn/suveryn-website) `index.html`: the Lucide wifi-off icon (9×9, stroke-width 2.4), 10px/600 teal text, the teal wash and border, 20px radius and `3px 8px` padding. One difference: text and icon are `#00837C` instead of `#0F8A82`, which measures 4.1:1 on the badge's wash (see the contrast table above). The website's badge and the brand's teal-ink token have the same shortfall.
+The badge is the website hero's badge from [suveryn-website](https://github.com/suveryn/suveryn-website) `index.html`: the Lucide wifi-off icon (9×9, stroke-width 2.4), 10px/600 teal text, the teal wash and border, 20px radius and `3px 8px` padding, with text and icon in the brand's corrected teal-ink (`#007F78`; the website's `#0F8A82` measures 4.1:1 on the badge's wash).
 
 It states a fact, so it is **off** unless the theme property `suverynShowAirGappedBadge` is `true` (`src/suveryn/login/theme.properties`). **Nothing sets it yet.** suveryn-appliance has no setting that records an installation's network mode (connected, outbound-blocked or air-gapped); this is open item #10 in the development context. Once provisioning has that setting, provisioning should set this property from it. Until then the badge never shows. Never set it to `true` by hand on an installation that can reach the internet.
 

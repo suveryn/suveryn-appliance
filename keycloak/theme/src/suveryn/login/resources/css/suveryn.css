@@ -2,8 +2,8 @@
  * Sūveryn login theme (light only), on top of Keycloak's keycloak.v2 styles (PatternFly 5).
  * Values from the reviewed login mockup and the Sūveryn Design System. Contrast rule: text on the
  * accent orange is always ink (#020205), never white. All text meets 4.5:1 measured the Design
- * System's way, from OKLCH lightness (tests/oklch_contrast.py): links use accent-ink, the accent's
- * hue at a lower lightness; helper text uses the secondary text colour.
+ * System's way, from OKLCH lightness (tests/oklch_contrast.py); the colours are suveryn-brand's
+ * tokens (version 2): links use accent-ink, the accent's hue at a lower lightness.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
  * login page loads nothing from the internet and works air-gapped. IBM Plex Mono is used only by
@@ -19,13 +19,13 @@
   --suv-line: rgba(2, 2, 5, 0.12);
   --suv-text: #020205;
   --suv-text-dim: rgba(2, 2, 5, 0.62);
-  --suv-text-dimmer: rgba(2, 2, 5, 0.40);
+  --suv-text-dimmer: rgba(2, 2, 5, 0.55);
   --suv-accent: #FA5B35;
   --suv-accent-hover: #E14A2C;
   --suv-on-accent: #020205;          /* ink: the only colour allowed on the accent */
-  --suv-accent-ink: #CD3200;         /* accent as text (links): OKLCH 0.557 0.197 34.6, 4.5:1 on the card */
+  --suv-accent-ink: #C42F00;         /* brand accent-ink: OKLCH 0.538 0.191 34.5, 4.5:1 on every light surface */
   --suv-accent-ink-hover: #AC2800;
-  --suv-teal-ink: #00837C;           /* teal as text: OKLCH 0.550 0.096 188.2, 4.5:1 on the badge wash */
+  --suv-teal-ink: #007F78;           /* brand teal-ink: OKLCH 0.537 0.093 188.0, 4.5:1 incl. the badge wash */
   --suv-teal-focus: #0F8A82;         /* input focus border (a UI boundary, 3:1) */
   --suv-teal-glow: rgba(58, 212, 202, 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
@@ -66,9 +66,8 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-logo text { font-family: var(--suv-font-wordmark); }
 .suv-tagline { margin: 0; color: var(--suv-text-dim); font-size: 15px; font-weight: 400; max-width: 34ch; }
 
-/* The website's hero "Air-gapped" badge (suveryn-website index.html). Only the text and icon colour
-   differ: #0F8A82 measures 4.13:1 on the badge's own wash by OKLCH lightness, so the same hue at a
-   lower lightness (#00837C, 4.53:1) is used. */
+/* The website's hero "Air-gapped" badge (suveryn-website index.html), with the brand's teal-ink
+   (version 2 of the tokens: #007F78, which holds 4.5:1 on the badge's own wash). */
 .suv-badge-airgapped {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: var(--suv-font-body); font-size: 10px; font-weight: 600; line-height: 1.2;
@@ -135,9 +134,8 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-icon-eye { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0'/%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3C/svg%3E"); }
 .suv-icon-eye-off { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49'/%3E%3Cpath d='M14.084 14.158a3 3 0 0 1-4.242-4.242'/%3E%3Cpath d='M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143'/%3E%3Cpath d='m2 2 20 20'/%3E%3C/svg%3E"); }
 
-/* helper text, including the directory note under the password: secondary text colour, because the
-   tertiary one (0.40) measures 2.8:1 on the card */
-.suv-card .pf-v5-c-helper-text__item-text { color: var(--suv-text-dim); font-size: 13px; }
+/* helper text, including the directory note under the password: tertiary text (0.55: 4.5:1) */
+.suv-card .pf-v5-c-helper-text__item-text { color: var(--suv-text-dimmer); font-size: 13px; }
 .suv-directory-note { margin-top: 2px; }
 
 /* ---------------------------------------------------------------- buttons and links */
