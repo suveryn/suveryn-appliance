@@ -97,11 +97,11 @@ def test_nothing_is_loaded_from_the_internet():
         assert "googleapis" not in text and "gstatic" not in text
 
 
-def test_ibm_plex_mono_only_for_the_wordmark():
+def test_ibm_plex_mono_only_for_the_wordmark_and_drawn_as_outlines():
+    """suveryn-tracker#13: the wordmark as live text flashed in a fallback font on every page load.
+    It is outlined at build time, so the login page loads no IBM Plex Mono at all."""
     css = re.sub(r"/\*.*?\*/", "", (SRC / "login" / "resources" / "css" / "suveryn.css").read_text(), flags=re.S)
-    uses = [line.strip() for line in css.splitlines() if "IBM Plex Mono" in line or "--suv-font-wordmark" in line]
-    allowed = ("@font-face", "--suv-font-wordmark:", ".suv-logo text")
-    assert uses and all(u.startswith(allowed) for u in uses), uses
+    assert "IBM Plex Mono" not in css and "--suv-font-wordmark" not in css
     assert "IBM Plex Mono" not in (SRC / "account" / "resources" / "css" / "account.css").read_text()
 
 
@@ -145,12 +145,13 @@ def test_built_theme_if_present():
     logo = (out / "login" / "suveryn-logo.ftl").read_text()
     view = [float(v) for v in re.search(r'viewBox="([^"]+)"', logo).group(1).split()]
     assert view[0] >= 0 and view[2] < 130 and 20 < view[3] < 26  # the original canvas was 0 0 220 40
-    assert "<text" in logo and "c2pa" not in logo
+    assert "<text" not in logo and logo.count("<path") >= 7 and "c2pa" not in logo  # outlined: no font, no flash
     outlined = (out / "account" / "resources" / "suveryn-logotype.svg").read_text()
     assert "<text" not in outlined and outlined.count("<path") >= 7 and 'height="48"' in outlined
     assert outlined.count("<rect") == 3  # the icon is part of the account console logo (suveryn-tracker#1)
-    for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2", "IBMPlexMono-Medium.woff2"):
+    for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2"):
         assert (out / "login" / "resources" / "fonts" / font).stat().st_size > 10_000
+    assert not (out / "login" / "resources" / "fonts" / "IBMPlexMono-Medium.woff2").exists()  # not needed any more
     notices = (out / "THIRD-PARTY-NOTICES.txt").read_text()
     assert "SIL Open Font" in notices and "Lucide" in notices and "TRADEMARK_POLICY" in notices
 
@@ -257,3 +258,48 @@ def test_language_menu_has_the_lucide_languages_icon_as_in_the_chat_ui():
     svg = utilities[utilities.index("<svg"):utilities.index("</svg>")]
     assert 'aria-hidden="true"' in svg and 'stroke="currentColor"' in svg and svg.count("<path") == 6
     assert 'd="m22 22-5-10-5 10"' in svg  # the "A" of Lucide's languages glyph
+
+
+def test_language_menu_names_each_language_in_itself_with_a_fixed_width():
+    """Switching nl/fr made the menu jump: Keycloak's labels change length with the page language."""
+    template = (SRC / "login" / "template.ftl").read_text()
+    assert '"en": "English", "nl": "Nederlands", "fr": "Français"' in template and '["en", "nl", "fr"]' in template
+    assert "${l.label}" not in template.split("suvNames[l.languageTag]??")[0].split("suvNames =")[1]  # en/nl/fr: own names only
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert ".suv-card .suv-language .pf-v5-c-form-control { width: 9.5rem; }" in css
+
+
+def test_login_page_is_anchored_to_the_top_so_nothing_moves_when_the_language_changes():
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    page = css[css.index(".suv-page {"):css.index("}", css.index(".suv-page {"))]
+    assert "justify-content: flex-start" in page and "justify-content: center" not in page
+
+
+def test_password_field_and_eye_button_are_one_box_with_a_centred_icon():
+    """The eye sat 3 px high (inline on the text baseline), and focus turned only the text part teal."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert "display: inline-flex; align-items: center; justify-content: center;" in css  # icon centred in the button
+    assert ".pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }" \
+        in css.replace(",\n.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button", "\n.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button") \
+        or "focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }" in css
+    assert ".pf-v5-c-button.pf-m-control::after { border-left-width: 0; }" in css  # no line between field and button
+
+def test_language_menu_has_a_fixed_spot_whatever_the_title():
+    """suveryn-tracker#13: next to the title the menu wrapped under longer titles ("Connexion") or with a
+    larger browser font, so it moved on a language switch. It is pinned to the card's top right."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    header = css[css.index(".suv-card .pf-v5-c-login__main-header {"):]
+    header = header[:header.index("}")]
+    assert "position: relative" in header and "display: block" in header and "9.5rem" in header
+    assert ".suv-card .pf-v5-c-login__main-header .suv-language { position: absolute; top: 26px; right: 28px; }" in css
+
+
+def test_fonts_are_preloaded_and_never_swapped_in_late():
+    """suveryn-tracker#13: with font-display swap the tagline flashed (and re-wrapped) on every page load."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    faces = re.findall(r"@font-face \{[^}]*\}", css)
+    assert faces and all("font-display: block" in f for f in faces)
+    template = (SRC / "login" / "template.ftl").read_text()
+    for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2"):
+        assert f'<link rel="preload" href="${{url.resourcesPath}}/fonts/{font}" as="font" type="font/woff2" crossorigin>' in template
+        assert f'url("../fonts/{font}")' in css  # the same file the stylesheet uses (css/ is one level down)
