@@ -272,3 +272,13 @@ def test_login_page_is_anchored_to_the_top_so_nothing_moves_when_the_language_ch
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     page = css[css.index(".suv-page {"):css.index("}", css.index(".suv-page {"))]
     assert "justify-content: flex-start" in page and "justify-content: center" not in page
+
+
+def test_password_field_and_eye_button_are_one_box_with_a_centred_icon():
+    """The eye sat 3 px high (inline on the text baseline), and focus turned only the text part teal."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert "display: inline-flex; align-items: center; justify-content: center;" in css  # icon centred in the button
+    assert ".pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }" \
+        in css.replace(",\n.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button", "\n.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button") \
+        or "focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }" in css
+    assert ".pf-v5-c-button.pf-m-control::after { border-left-width: 0; }" in css  # no line between field and button
