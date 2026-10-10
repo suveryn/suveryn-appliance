@@ -14,7 +14,7 @@
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
   <style>
-    .suv-body a { color: #CD3200; text-decoration: underline; } /* accent-ink: 4.5:1 on the card */
+    .suv-body a { color: #C42F00; text-decoration: underline; } /* brand accent-ink: 4.5:1 */
   </style>
 </head>
 <body style="margin:0; padding:0; background:#FFFFFF; color:#020205;">

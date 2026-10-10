@@ -64,8 +64,8 @@ def test_badge_matches_the_website_component():
                  "border-radius: 20px", "padding: 3px 8px", "display: inline-flex"):
         assert decl in rule, decl
     svg = re.search(r'<span class="suv-badge-airgapped">\s*(<svg.*?</svg>)', (SRC / "login" / "template.ftl").read_text(), re.S).group(1)
-    # the website's #0F8A82 darkened to #00837C (same hue) for 4.5:1, see test_text_contrast_by_oklch
-    assert 'width="9" height="9"' in svg and 'stroke="#00837C"' in svg and 'stroke-width="2.4"' in svg
+    # the brand's teal-ink (tokens v2), which holds 4.5:1 on the wash; see test_text_contrast_by_oklch
+    assert 'width="9" height="9"' in svg and 'stroke="#007F78"' in svg and 'stroke-width="2.4"' in svg
     assert svg.count("<path") == 7  # Lucide wifi-off
 
 
@@ -158,6 +158,7 @@ def test_text_contrast_by_oklch():
     wash = "rgba(58, 212, 202, 0.10)"
     pairs = [
         (v["--suv-text"], card, 4.5), (v["--suv-text-dim"], card, 4.5), (v["--suv-text-dim"], page, 4.5),
+        (v["--suv-text-dimmer"], card, 4.5),
         (v["--suv-accent-ink"], card, 4.5), (v["--suv-accent-ink"], page, 4.5),
         (v["--suv-accent-ink-hover"], card, 4.5),
         (v["--suv-on-accent"], v["--suv-accent"], 4.5), (v["--suv-on-accent"], v["--suv-accent-hover"], 4.5),
@@ -171,10 +172,10 @@ def test_text_contrast_by_oklch():
 
 def test_no_text_in_the_plain_accent_or_tertiary_colour():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
-    assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover|text-dimmer)\)", login)
+    assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover)\)", login)
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
-    assert "--pf-v5-global--link--Color: #CD3200" in account
-    assert ".suv-body a { color: #CD3200" in (SRC / "email" / "html" / "template.ftl").read_text()
+    assert "--pf-v5-global--link--Color: #C42F00" in account
+    assert ".suv-body a { color: #C42F00" in (SRC / "email" / "html" / "template.ftl").read_text()
 
 
 MOJIBAKE = re.compile("Ã|Å|â€|Â")  # UTF-8 read as Latin-1/Windows-1252, e.g. "SÅ«veryn" for "Sūveryn"

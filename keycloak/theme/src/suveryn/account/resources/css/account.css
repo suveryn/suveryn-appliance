@@ -1,7 +1,7 @@
 /*
  * Sūveryn account console (light only), on top of Keycloak's keycloak.v3 account console
  * (PatternFly 5). Only brand variables and a few components are changed. Text on the accent orange
- * is always ink (#020205), never white; links use accent-ink (#CD3200), which meets 4.5:1 measured
+ * is always ink (#020205), never white; links use the brand's accent-ink (#C42F00), which meets 4.5:1 measured
  * from OKLCH lightness, where the accent itself (#FA5B35) only reaches 2.9:1. Fonts are bundled (fonts/), nothing is loaded from the internet.
  */
 @font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
@@ -16,7 +16,7 @@
   --pf-v5-global--BorderColor--100: rgba(2, 2, 5, 0.12);
   --pf-v5-global--primary-color--100: #FA5B35;
   --pf-v5-global--primary-color--200: #E14A2C;
-  --pf-v5-global--link--Color: #CD3200;        /* accent-ink: accent hue, 4.5:1 by OKLCH lightness */
+  --pf-v5-global--link--Color: #C42F00;        /* brand accent-ink: 4.5:1 by OKLCH lightness */
   --pf-v5-global--link--Color--hover: #AC2800;
   --pf-v5-global--BorderRadius--sm: 6px;
   --pf-v5-c-button--m-primary--BackgroundColor: #FA5B35;
