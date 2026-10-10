@@ -43,6 +43,7 @@ From the reviewed login mockup and the Sūveryn Design System:
 - **Fonts:** Space Grotesk 600 for the card heading, Inter 400/600 for everything else, and IBM Plex Mono 500 only for the wordmark. They are bundled with the theme rather than loaded from Google Fonts: the login page must work air-gapped, and it must not tell a third party when someone signs in.
 - **Layout:** centred card, max 400px wide, 14px corners; inputs and buttons have 6px corners. The logo is 48px high.
 - **Tagline, verbatim, in every language:** "AI for work that can't leave the premises."
+- **Notices** (wrong password, "you need to change your password", expired page) use one neutral style instead of PatternFly's amber, red, blue and green: the light surface, a hairline border, ink text. Warnings and errors add an accent-ink left bar and icon; info and success a quiet icon. Icons are Lucide.
 - Under the password field: "Works with your office's existing directory account too." LDAP/AD users sign in with this same form; there is no separate "sign in with" button.
 
 ## The "Air-gapped" badge
