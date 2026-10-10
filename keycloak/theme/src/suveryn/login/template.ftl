@@ -41,6 +41,11 @@
         </#list>
     </#if>
     <title>${title!}</title>
+    <#-- The theme's fonts, fetched as soon as the HTML arrives instead of after the stylesheet, so text
+         isn't first drawn in a fallback font on each page load (each language switch reloads the page;
+         suveryn-tracker#13). crossorigin: fonts are always fetched in CORS mode. -->
+    <link rel="preload" href="${url.resourcesPath}/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="${url.resourcesPath}/fonts/SpaceGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
     <#if themeResources?? && themeResources.favicons?has_content>
         <@themeResourceTags.renderFavicons themeResources.favicons url.resourcesPath />
     <#else>
