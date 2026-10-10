@@ -243,6 +243,13 @@ def test_field_errors_use_the_brand_not_a_red():
     assert props(SRC / "login" / "theme.properties")["kcInputErrorIconClass"] == "suv-icon suv-icon-alert-circle"
 
 
+@pytest.mark.parametrize("lang, link", [("nl", "Terug naar de applicatie"), ("fr", "Retour à l''application")])
+def test_error_pages_name_the_back_link_as_the_link_reads(lang, link):
+    """Keycloak's Dutch and French error texts named "Back to application" differently from the link itself."""
+    msgs = props(SRC / "login" / "messages" / f"messages_{lang}.properties")
+    assert msgs["backToApplication"] == f"« {link}"
+    assert f"Klik op {link}" in msgs["cookieNotFoundMessage"] or f"Cliquez sur {link}" in msgs["cookieNotFoundMessage"]
+
 def test_language_menu_has_the_lucide_languages_icon_as_in_the_chat_ui():
     """The chat UI shows Lucide "languages" before its language menu; the login page does too."""
     template = (SRC / "login" / "template.ftl").read_text()
