@@ -9,8 +9,11 @@
  * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
  * outlines from IBM Plex Mono (build_theme.py), so it needs no web font and never flashes.
  */
-@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+/* font-display: block, with the fonts preloaded in template.ftl: never draw text in a fallback font that
+   swaps a moment later. "swap" made the tagline and headings flash, and re-wrap, on every page load
+   (each language switch; suveryn-tracker#13). From the cache the fonts are ready before the first paint. */
+@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
 
 :root {
   --suv-bg: #FFFFFF;

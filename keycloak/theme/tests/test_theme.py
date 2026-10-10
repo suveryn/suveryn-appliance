@@ -292,3 +292,14 @@ def test_language_menu_has_a_fixed_spot_whatever_the_title():
     header = header[:header.index("}")]
     assert "position: relative" in header and "display: block" in header and "9.5rem" in header
     assert ".suv-card .pf-v5-c-login__main-header .suv-language { position: absolute; top: 26px; right: 28px; }" in css
+
+
+def test_fonts_are_preloaded_and_never_swapped_in_late():
+    """suveryn-tracker#13: with font-display swap the tagline flashed (and re-wrapped) on every page load."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    faces = re.findall(r"@font-face \{[^}]*\}", css)
+    assert faces and all("font-display: block" in f for f in faces)
+    template = (SRC / "login" / "template.ftl").read_text()
+    for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2"):
+        assert f'<link rel="preload" href="${{url.resourcesPath}}/fonts/{font}" as="font" type="font/woff2" crossorigin>' in template
+        assert f'url("../fonts/{font}")' in css  # the same file the stylesheet uses (css/ is one level down)
