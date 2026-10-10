@@ -6,12 +6,14 @@
  * tokens (version 2): links use accent-ink, the accent's hue at a lower lightness.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
- * login page loads nothing from the internet and works air-gapped. IBM Plex Mono is used only by
- * the wordmark.
+ * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
+ * outlines from IBM Plex Mono (build_theme.py), so it needs no web font and never flashes.
  */
-@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
-@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
-@font-face { font-family: "IBM Plex Mono"; src: url("../fonts/IBMPlexMono-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+/* font-display: block, with the fonts preloaded in template.ftl: never draw text in a fallback font that
+   swaps a moment later. "swap" made the tagline and headings flash, and re-wrap, on every page load
+   (each language switch; suveryn-tracker#13). From the cache the fonts are ready before the first paint. */
+@font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
 
 :root {
   --suv-bg: #FFFFFF;
@@ -31,7 +33,6 @@
   --suv-teal-glow: rgba(58, 212, 202, 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
-  --suv-font-wordmark: "IBM Plex Mono", ui-monospace, monospace;
   color-scheme: light;
 }
 
@@ -57,14 +58,17 @@
 html.login-pf, html.login-pf body { background: var(--suv-bg); }
 
 /* ---------------------------------------------------------------- page frame */
+/* Anchored to the top, not centred: a centred page moved as a whole when the card's height changed
+   with the language (a line wrapping in Dutch or French but not in English), so the logo, title and
+   language menu jumped on every switch. The top margin grows with the window, so on a usual screen
+   the block sits about where centring put it. */
 .suv-page {
   min-height: 100vh;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 24px; padding: 32px 16px;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+  gap: 24px; padding: max(32px, calc(50vh - 260px)) 16px 32px;
 }
 .suv-brand { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .suv-logo { height: 48px; width: auto; display: block; }
-.suv-logo text { font-family: var(--suv-font-wordmark); }
 .suv-tagline { margin: 0; color: var(--suv-text-dim); font-size: 15px; font-weight: 400; max-width: 34ch; }
 
 /* The website's hero "Air-gapped" badge (suveryn-website index.html), with the brand's teal-ink
@@ -82,21 +86,28 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   background: var(--suv-card); border: 1px solid var(--suv-line); border-radius: 14px;
   box-shadow: none; padding: 0;
 }
+/* The language menu sits in a fixed spot, the card's top right, whatever the title: next to the
+   title it wrapped under longer titles ("Connexion", error pages) or with a larger browser font size,
+   so it moved on a language switch (suveryn-tracker#13). The title keeps clear of it and wraps itself. */
 .suv-card .pf-v5-c-login__main-header {
   border-top: none; /* keycloak.v2 draws a 4px PatternFly-blue line here */
-  padding: 28px 28px 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  position: relative; display: block; padding: 28px calc(28px + 9.5rem + 32px) 8px 28px; min-height: 36px;
 }
+.suv-card .pf-v5-c-login__main-header .suv-language { position: absolute; top: 26px; right: 28px; }
 .suv-card .pf-v5-c-login__main-body { padding: 8px 28px 28px; }
 .suv-card .pf-v5-c-login__main-footer:empty { display: none; }
 #kc-page-title.pf-v5-c-title {
   font-family: var(--suv-font-display); font-weight: 600; font-size: 24px; line-height: 1.2;
   color: var(--suv-text); margin: 0;
-  flex: 1 0 auto; word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word; the menu wraps instead */
+  word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word */
 }
 
 /* language switcher: quiet, stays out of the heading's way; the Lucide "languages" icon before it, as in the chat UI */
 .suv-card .suv-language { display: flex; align-items: center; gap: 6px; color: var(--suv-text-dim); }
 .suv-card .suv-language-icon { flex: 0 0 auto; }
+/* fixed width: the menu must not change size (and wrap under the title) when the language changes */
+.suv-card .suv-language { flex: 0 0 auto; }
+.suv-card .suv-language .pf-v5-c-form-control { width: 9.5rem; }
 .suv-card .pf-v5-c-login__main-header-utilities .pf-v5-c-form-control {
   --pf-v5-c-form-control--BorderRadius: 6px;
   font-size: 13px; color: var(--suv-text-dim); background: transparent; min-width: 0;
@@ -137,6 +148,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-button--after--BorderColor: var(--suv-line);
   color: var(--suv-text-dim); background: var(--suv-bg);
 }
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
+  display: inline-flex; align-items: center; justify-content: center;  /* icon centred, not on the text baseline */
+}
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control .suv-icon { display: block; }
+/* field and button are one box: no line between them, and the whole box turns teal on focus */
+.suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-m-fill .pf-v5-c-form-control::before { border-right-width: 0; }
+.suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control::after { border-left-width: 0; }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within { border-radius: 6px; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-form-control::before,
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-v5-c-form-control:focus-within::before { box-shadow: none; }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control:hover { color: var(--suv-text); }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control:focus-visible { outline: 2px solid var(--suv-teal-focus); outline-offset: -2px; }
 .suv-card .pf-v5-c-input-group__item:has(.pf-m-control) + * ,
@@ -210,6 +232,9 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 /* ---------------------------------------------------------------- small screens */
 @media (max-width: 480px) {
   .suv-page { justify-content: flex-start; padding-top: 24px; }
+  /* too narrow for menu and title side by side: the menu gets its own line under the title, right-aligned
+     (still a fixed spot, whatever the title) */
   .suv-card .pf-v5-c-login__main-header { padding: 22px 20px 6px; }
+  .suv-card .pf-v5-c-login__main-header .suv-language { position: static; justify-content: flex-end; margin-top: 12px; }
   .suv-card .pf-v5-c-login__main-body { padding: 6px 20px 22px; }
 }

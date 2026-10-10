@@ -21,8 +21,8 @@ uv run keycloak/theme/build_theme.py
 This writes `keycloak/theme/build/theme/suveryn/` (a theme folder) and `keycloak/theme/build/suveryn-keycloak-theme.jar` (the same, for Keycloak's `providers/` folder). It:
 
 1. fetches the brand assets from [suveryn-brand](https://github.com/suveryn/suveryn-brand) at the commit pinned in [`brand-lock.json`](brand-lock.json), and checks each file's SHA-256. The Sūveryn mark is all rights reserved, so it is fetched at build time and never committed to this Apache-2.0 repository. To build without internet access, point `SUVERYN_BRAND_REPO` at a local mirror. To move to a newer brand commit: `--update <commit-or-tag>`.
-2. crops the logotype's canvas (`logo/suveryn-logotype-light-bg.svg` has blank space to the right of the wordmark). The new viewBox is computed from the shapes and from IBM Plex Mono's own glyph metrics, and the shapes and text are untouched. The login page inlines the SVG, so the wordmark `<text>` uses the bundled IBM Plex Mono. The account console shows its logo as an `<img>`, which can't load fonts, so it gets a copy with the wordmark converted to outlines in that same font.
-3. bundles the fonts (Inter, Space Grotesk, IBM Plex Mono, SIL OFL) with their licence texts and the Lucide licence in `THIRD-PARTY-NOTICES.txt`.
+2. crops the logotype's canvas (`logo/suveryn-logotype-light-bg.svg` has blank space to the right of the wordmark). The new viewBox is computed from the shapes and from IBM Plex Mono's own glyph metrics, and the shapes and text are untouched. The wordmark is converted to outlines (paths) from IBM Plex Mono 500, for both the login page (inlined) and the account console (an `<img>`), so neither needs a web font. As live text it flashed in a fallback font on every page load, such as each language switch (suveryn-tracker#13).
+3. bundles the fonts (Inter, Space Grotesk; SIL OFL) with their licence texts, plus IBM Plex Mono's licence, since the wordmark's outlines come from it, and the Lucide licence in `THIRD-PARTY-NOTICES.txt`.
 
 ## Install
 
@@ -40,7 +40,7 @@ From the reviewed login mockup and the Sūveryn Design System:
 - **Colours** are suveryn-brand's tokens (version 2): background `#FFFFFF`, card `#FAFAFA`, borders `rgba(2,2,5,0.12)`, text `#020205`, secondary text `rgba(2,2,5,0.62)`, helper text `rgba(2,2,5,0.55)`, accent `#FA5B35` (button fills), accent-ink `#C42F00` (links), teal-ink `#007F78` (the badge).
 - **Contrast is measured the Design System's way, from OKLCH lightness** ([`tests/oklch_contrast.py`](tests/oklch_contrast.py)): luminance is taken as L³ and the WCAG ratio applied. All text meets 4.5:1 and UI boundaries 3:1, and `test_text_contrast_by_oklch` checks every pair. The mockup's link colour (the accent), helper text (0.40) and badge teal (`#0F8A82`) failed that test; suveryn-brand's tokens were corrected for it ([suveryn-brand#2](https://github.com/suveryn/suveryn-brand/pull/2)), and the theme uses the corrected values.
 - **Teal only for system signals:** the "Air-gapped" badge, and the focus state of inputs (`border-color: #0F8A82`, a UI boundary that meets 3:1; `box-shadow: 0 0 0 3px rgba(58,212,202,0.15)`; no browser outline).
-- **Fonts:** Space Grotesk 600 for the card heading, Inter 400/600 for everything else, and IBM Plex Mono 500 only for the wordmark. They are bundled with the theme rather than loaded from Google Fonts: the login page must work air-gapped, and it must not tell a third party when someone signs in.
+- **Fonts:** Space Grotesk 600 for the card heading, Inter 400/600 for everything else, and IBM Plex Mono 500 only for the wordmark, drawn as outlines so it is never shown in a fallback font. The fonts are bundled with the theme rather than loaded from Google Fonts: the login page must work air-gapped, and it must not tell a third party when someone signs in.
 - **Layout:** centred card, max 400px wide, 14px corners; inputs and buttons have 6px corners. The logo is 48px high.
 - **Tagline, verbatim, in every language:** "AI for work that can't leave the premises."
 - **Notices** (wrong password, "you need to change your password", expired page) use one neutral style instead of PatternFly's amber, red, blue and green: the light surface, a hairline border, ink text. Warnings and errors add an accent-ink left bar and icon; info and success a quiet icon. Icons are Lucide. Field errors (border, message, icon) use accent-ink too: the brand has no separate error red, so an error is told apart by its icon and message.
@@ -54,7 +54,7 @@ It states a fact, so it is **off** unless the theme property `suverynShowAirGapp
 
 ## Languages
 
-`en`, `nl` and `fr`, switched with Keycloak's own language menu.
+`en`, `nl` and `fr`, switched with Keycloak's own language menu. The menu shows each language in its own name (English, Nederlands, Français), has a fixed width and sits in the card's top-right corner whatever the title, so it never moves when the language changes (suveryn-tracker#13).
 
 - **English** is UK English. Keycloak's own English strings that use US spelling ("Organization", "Canceling", "Unauthorized") are overridden.
 - **Dutch** is formal (*u/uw*). Keycloak's own Dutch strings are mostly formal and used as they are. The login theme adds the sūveryn strings and corrects three spelling errors. The account theme rewrites Keycloak's five informal account-console strings (*je*) and adds the two that Keycloak 26.8 hasn't translated, which would otherwise show in English (suveryn-tracker#9). A test fails if an informal form (*je/jouw/jij*) slips in.
