@@ -224,3 +224,12 @@ def test_notices_are_neutral_with_a_brand_signal():
     assert ratio(v["--suv-text"], v["--suv-surface-alt"]) >= 4.5
     assert ratio(v["--suv-accent-ink"], v["--suv-surface-alt"]) >= 4.5  # icon and bar
     assert ratio(v["--suv-accent"], v["--suv-surface-alt"]) < 3  # why the plain accent isn't used here
+
+
+def test_field_errors_use_the_brand_not_a_red():
+    """No colour outside the brand: field errors use accent-ink, with an icon and message as the signal."""
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    assert "#C9190B" not in css and not re.search(r"#[cC][0-9a-fA-F]19|danger--Color", css)
+    assert ".pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }" in css
+    assert "pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }" in css
+    assert props(SRC / "login" / "theme.properties")["kcInputErrorIconClass"] == "suv-icon suv-icon-alert-circle"

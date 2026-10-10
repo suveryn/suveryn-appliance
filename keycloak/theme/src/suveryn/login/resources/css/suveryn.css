@@ -117,7 +117,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .pf-v5-c-form-control:focus-within::before { border-color: var(--suv-teal-focus); box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
 .suv-card .pf-v5-c-form-control > input:focus,
 .suv-card .pf-v5-c-form-control > input:focus-visible { outline: none; box-shadow: none; }
-.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: #C9190B; }
+/* Field errors use the brand, not PatternFly's red: the brand has no separate error colour (a red
+   that passes 4.5:1 is either indistinguishable from the accent or reads pink). The error is told
+   apart by its icon and message, never by colour alone. */
+.suv-card .pf-v5-c-form-control.pf-m-error {
+  --pf-v5-c-form-control--m-error--after--BorderBottomColor: var(--suv-accent-ink);
+  --pf-v5-c-form-control--m-error__icon--Color: var(--suv-accent-ink);
+}
+.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-form-control__icon.pf-m-status { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-helper-text__item-text.pf-m-error,
+.suv-card .pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }
 
 /* password show/hide: the button sits inside the field's border, Lucide icons */
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
