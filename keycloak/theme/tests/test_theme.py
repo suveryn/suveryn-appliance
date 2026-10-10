@@ -198,3 +198,12 @@ def test_email_header_is_the_lockup_icon_and_wordmark():
     if built.exists():
         icon = built.read_text()
         assert 'width="30" height="30"' in icon and icon.count("<rect") == 3 and "c2pa" not in icon
+
+
+def test_product_name_is_lower_case_mid_sentence():
+    """"sūveryn" takes a capital only for the company or at the start of a sentence (or a subject)."""
+    for path in MESSAGES:
+        for key, value in props(path).items():
+            for m in re.finditer("Sūveryn", value):
+                before = re.sub(r"<[^>]+>", "", value[:m.start()]).strip()
+                assert before == "" or before[-1] in ".!?:", (path.name, key, value)
