@@ -94,7 +94,9 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   flex: 1 0 auto; word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word; the menu wraps instead */
 }
 
-/* language switcher: quiet, stays out of the heading's way */
+/* language switcher: quiet, stays out of the heading's way; the Lucide "languages" icon before it, as in the chat UI */
+.suv-card .suv-language { display: flex; align-items: center; gap: 6px; color: var(--suv-text-dim); }
+.suv-card .suv-language-icon { flex: 0 0 auto; }
 .suv-card .pf-v5-c-login__main-header-utilities .pf-v5-c-form-control {
   --pf-v5-c-form-control--BorderRadius: 6px;
   font-size: 13px; color: var(--suv-text-dim); background: transparent; min-width: 0;
