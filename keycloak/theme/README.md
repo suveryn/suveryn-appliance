@@ -57,8 +57,9 @@ It states a fact, so it is **off** unless the theme property `suverynShowAirGapp
 `en`, `nl` and `fr`, switched with Keycloak's own language menu.
 
 - **English** is UK English. Keycloak's own English strings that use US spelling ("Organization", "Canceling", "Unauthorized") are overridden.
-- **Dutch** is formal (*u/uw*), like Keycloak's own Dutch strings, which are used as they are. The theme adds only the sūveryn strings and corrects three spelling errors in Keycloak's Dutch. A test fails if an informal form (*je/jouw/jij*) slips in.
-- **French** has only the sūveryn strings; the rest is Keycloak's.
+- **Dutch** is formal (*u/uw*). Keycloak's own Dutch strings are mostly formal and used as they are. The login theme adds the sūveryn strings and corrects three spelling errors. The account theme rewrites Keycloak's five informal account-console strings (*je*) and adds the two that Keycloak 26.8 hasn't translated, which would otherwise show in English (suveryn-tracker#9). A test fails if an informal form (*je/jouw/jij*) slips in.
+- **French** has only the sūveryn strings; the rest is Keycloak's, which is complete and formal (*vous*).
+- Every theme (login, account, email) ships `messages_en`, `messages_nl` and `messages_fr`, which a test checks.
 - The tagline and the "Air-gapped" label stay in English in every language, as on the Dutch website.
 
 ## Tests
