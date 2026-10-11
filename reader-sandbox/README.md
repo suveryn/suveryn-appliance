@@ -48,6 +48,8 @@ below, set `SUVERYN_EXTRACT_WRAPPER="sudo -n -u suveryn-reader --preserve-env=HF
 <gateway-user> ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *
 ```
 
+This sudo route is not tested yet: the dev pod's gateway runs as root. What is tested is the wrapper started directly as `suveryn-reader` (`tests/`), which is what sudo does; whether sudo passes every variable the reader needs (CUDA, model cache) must be checked on the appliance image.
+
 The code the reader runs (suveryn-core's virtual environment), the model cache (`HF_HOME`) and the
 GPU devices must be readable by `suveryn-reader`; nothing under a 0700 home folder.
 
