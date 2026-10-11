@@ -1,0 +1,3 @@
+# Built by build_realm.py: they hold the client secret and are never committed.
+suveryn-realm.json
+gateway-oidc.env
