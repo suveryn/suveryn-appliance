@@ -72,6 +72,8 @@ def fetch_brand(repo: str, ref: str, into: Path) -> str:
     """Shallow-fetch suveryn-brand at ``ref`` into ``into``; return the commit id."""
     if not re.fullmatch(r"[\w][\w./-]*", ref):
         raise SystemExit(f"not a commit, tag or branch name: {ref}")
+    if repo.startswith("-"):  # git would read it as an option (e.g. --upload-pack=<command>)
+        raise SystemExit(f"not a repository: {repo}")
     git = lambda *a: subprocess.run(["git", "-C", str(into), *a], check=True, capture_output=True, text=True).stdout.strip()  # noqa: E731
     git("init", "-q")
     git("fetch", "-q", "--depth", "1", repo, ref)
@@ -172,12 +174,34 @@ def email_icon(svg_path: Path) -> str:
 
 def notices(brand: Path) -> str:
     parts = ["Third-party material in the Sūveryn Keycloak theme.\n",
-             "The Sūveryn mark (logotype, favicon) is not open source: all rights reserved, see\n"
-             "https://github.com/suveryn/suveryn-brand/blob/main/TRADEMARK_POLICY.md\n"]
+             ("The Sūveryn mark (logotype, favicon) is not open source: all rights reserved, see\n"
+              "https://github.com/suveryn/suveryn-brand/blob/main/TRADEMARK_POLICY.md\n")]
     for family, folder in (("Inter", "Inter"), ("Space Grotesk", "SpaceGrotesk"), ("IBM Plex Mono", "IBMPlexMono")):
         parts.append(f"{'=' * 72}\n{family} font (SIL Open Font Licence 1.1)\n{'=' * 72}\n{(brand / 'fonts' / folder / 'OFL.txt').read_text().strip()}\n")
     parts.append(f"{'=' * 72}\nLucide icons: eye, eye-off, wifi-off, languages (ISC; Feather-derived icons MIT)\n{'=' * 72}\n{(HERE / 'LUCIDE-LICENSE.txt').read_text().strip()}\n")
     return "\n".join(parts)
+
+
+JAR_TIME = (1980, 1, 1, 0, 0, 0)  # the earliest zip date: entries carry no build time
+
+
+def write_jar(theme: Path, jar: Path) -> None:
+    """Package ``theme`` (build/theme/suveryn) for Keycloak's providers/ folder.
+
+    Byte-for-byte reproducible: fixed entry order, dates and permissions, so the same sources and
+    brand commit give the same jar, and an installed theme can be checked against a build.
+    """
+    def add(z: zipfile.ZipFile, name: str, data: bytes) -> None:
+        info = zipfile.ZipInfo(name, JAR_TIME)
+        info.compress_type, info.external_attr = zipfile.ZIP_DEFLATED, 0o644 << 16
+        z.writestr(info, data)
+
+    with zipfile.ZipFile(jar, "w") as z:
+        add(z, "META-INF/keycloak-themes.json", json.dumps(
+            {"themes": [{"name": "suveryn", "types": ["login", "account", "email"]}]}, indent=2).encode())
+        for f in sorted(theme.rglob("*")):
+            if f.is_file():
+                add(z, f"theme/suveryn/{f.relative_to(theme).as_posix()}", f.read_bytes())
 
 
 def main() -> None:
@@ -218,12 +242,7 @@ def main() -> None:
         (out / "THIRD-PARTY-NOTICES.txt").write_text(notices(brand))
 
     jar = BUILD / "suveryn-keycloak-theme.jar"
-    with zipfile.ZipFile(jar, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("META-INF/keycloak-themes.json", json.dumps(
-            {"themes": [{"name": "suveryn", "types": ["login", "account", "email"]}]}, indent=2))
-        for f in sorted(out.rglob("*")):
-            if f.is_file():
-                z.write(f, f"theme/suveryn/{f.relative_to(out)}")
+    write_jar(out, jar)
     print(f"theme built from suveryn-brand@{commit[:7]}: logotype viewBox {view}, {jar.relative_to(HERE)}")
 
 

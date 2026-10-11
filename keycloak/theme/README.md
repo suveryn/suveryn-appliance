@@ -65,10 +65,10 @@ It states a fact, so it is **off** unless the theme property `suverynShowAirGapp
 ## Tests
 
 ```bash
-uv run --no-project --with pytest pytest keycloak/theme/tests
+uv run --no-project --with pytest --with fonttools==4.66.1 pytest keycloak/theme/tests
 ```
 
-The tests check the rules above in the sources: parent themes, light only, no admin theme, the tagline, the badge (off by default, website styling), no white on the accent, contrast of every text colour by OKLCH lightness, teal focus, nothing loaded from the internet, IBM Plex Mono only for the wordmark, formal Dutch, UK English, and the built output (crop, outlined logo, fonts, notices).
+The tests check the rules above in the sources: parent themes, light only, no admin theme, the tagline, the badge (off by default, website styling), no white on the accent, contrast of every text colour by OKLCH lightness, teal focus, nothing loaded from the internet, IBM Plex Mono only for the wordmark, formal Dutch, UK English, and the built output (crop, outlined logo, fonts, notices). `test_build.py` checks that the jar is byte-for-byte reproducible (fixed entry order, dates and permissions) and that `SUVERYN_BRAND_REPO` can't pass options to git; it needs fontTools, like the build.
 
 Checked by hand against Keycloak 26.8.0 with the `suveryn` development realm from suveryn-core:
 - **Login page** in English, Dutch and French, at 1200px and 375px.
