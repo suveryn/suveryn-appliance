@@ -1,6 +1,6 @@
 """build_theme.py: the jar is reproducible, and the brand repository can't smuggle in git options.
 
-Needs fontTools, like the build: uv run --with pytest --with fonttools pytest keycloak/theme/tests
+Needs fontTools and defusedxml, like the build: uv run --with pytest --with fonttools --with defusedxml pytest keycloak/theme/tests
 """
 
 import hashlib

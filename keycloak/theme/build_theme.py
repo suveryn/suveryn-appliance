@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["fonttools==4.66.1"]
+# dependencies = ["defusedxml==0.7.1", "fonttools==4.66.1"]
 # ///
 """Build the Sūveryn Keycloak theme: sources from src/, brand assets from suveryn-brand.
 
@@ -37,12 +37,11 @@ import re
 import shutil
 import subprocess
 import tempfile
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # building and writing SVG; parsing goes through defusedxml
 import zipfile
 from pathlib import Path
 
 import defusedxml.ElementTree as DefusedET
-
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
@@ -107,7 +106,7 @@ def text_layout(font: TTFont, text: str, x: float, y: float, size: float):
 
 def logotype(svg_path: Path, font: TTFont) -> tuple[str, str, tuple]:
     """(inline SVG for the login page, SVG file for the account console, viewBox); both outlined."""
-    root = ET.parse(svg_path).getroot()
+    root = DefusedET.parse(svg_path).getroot()
     for meta in root.findall(f"{{{SVG_NS}}}metadata"):
         root.remove(meta)
     box = [float("inf"), float("inf"), float("-inf"), float("-inf")]
