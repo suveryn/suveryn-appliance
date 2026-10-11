@@ -1,0 +1,113 @@
+#!/usr/bin/python3
+"""Run suveryn-core's PDF reader sandboxed (suveryn-tracker#15). Used as SUVERYN_EXTRACT_WRAPPER.
+
+    SUVERYN_EXTRACT_WRAPPER=/opt/suveryn/bin/suveryn-reader-sandbox
+
+suveryn-core starts the reader as ``<wrapper> python -I -m suveryn_rag.isolation …``, already
+without the gateway's secrets in its environment and returning only JSON. This wrapper adds, before
+it replaces itself with that command (exec):
+
+1. **Its own user** (``SUVERYN_READER_USER``, default ``suveryn-reader``): it can't read the gateway's
+   secrets file, its 0700 work folder or another process's memory. Started as root, it switches to
+   that user for good (supplementary groups dropped); started as that user (``sudo -u``), it stays.
+   Any other user is refused: running unsandboxed must never happen by accident.
+2. **No network**: a seccomp filter refuses every socket except local (AF_UNIX) ones, so a
+   compromised parser can't send a document anywhere, even where network namespaces aren't
+   available (containers).
+3. **Fewer kernel interfaces**: the same filter refuses ptrace and process_vm_*, mount and namespace
+   calls, module loading, kexec, bpf, perf events, keyrings, userfaultfd and io_uring. Calls for
+   other architectures (32-bit entry points) kill the process.
+4. **no_new_privs**, no core dumps, umask 077, and HOME and TMPDIR in the reader's own folder
+   (``SUVERYN_EXTRACT_WORK_DIR``).
+
+The filter and the user apply to everything the reader starts too: Ghostscript, Tesseract, qpdf.
+Needs Linux, Python 3 and python3-seccomp (libseccomp's official binding). If anything is missing,
+the wrapper exits with an error instead of running the reader unsandboxed.
+"""
+
+import ctypes
+import errno
+import os
+import pwd
+import resource
+import socket
+import sys
+
+PR_SET_NO_NEW_PRIVS = 38
+DENIED = [  # refused with EPERM
+    "ptrace", "process_vm_readv", "process_vm_writev",
+    "mount", "umount2", "pivot_root", "chroot", "unshare", "setns", "open_tree", "move_mount", "fsopen",
+    "fsconfig", "fsmount", "fspick", "mount_setattr",
+    "init_module", "finit_module", "delete_module", "kexec_load", "kexec_file_load",
+    "bpf", "perf_event_open", "keyctl", "add_key", "request_key", "userfaultfd",
+    "io_uring_setup", "io_uring_enter", "io_uring_register",
+    "open_by_handle_at", "name_to_handle_at", "quotactl", "lookup_dcookie",
+    "swapon", "swapoff", "reboot", "acct", "settimeofday", "clock_settime", "clock_adjtime", "adjtimex",
+    "iopl", "ioperm", "syslog", "vhangup",
+]
+
+
+def fail(message: str) -> None:
+    print(f"suveryn-reader-sandbox: {message}", file=sys.stderr)
+    raise SystemExit(126)
+
+
+def become(user: str) -> None:
+    """Switch to ``user`` for good when started as root; otherwise insist on already being ``user``."""
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        fail(f"no user {user!r}; provision it (provision-reader.sh)")
+    if pw.pw_uid == 0:
+        fail("the reader user must not be root")
+    if os.geteuid() == 0:
+        os.setgroups([])
+        os.setgid(pw.pw_gid)
+        os.setuid(pw.pw_uid)
+        try:
+            os.setuid(0)
+        except PermissionError:
+            pass
+        else:
+            fail("could regain root after switching user")
+    elif os.geteuid() != pw.pw_uid:
+        fail(f"must start as root or as {user!r}, not uid {os.geteuid()}: refusing to run the reader unsandboxed")
+
+
+def load_filter() -> None:
+    try:
+        import seccomp
+    except ImportError:
+        fail("python3-seccomp is not installed")
+    f = seccomp.SyscallFilter(defaction=seccomp.ALLOW)  # bad architecture: kill (libseccomp's default)
+    for name in DENIED:
+        try:
+            f.add_rule(seccomp.ERRNO(errno.EPERM), name)
+        except (RuntimeError, ValueError):
+            continue  # a call this kernel/architecture doesn't have
+    f.add_rule(seccomp.ERRNO(errno.EACCES), "socket", seccomp.Arg(0, seccomp.NE, socket.AF_UNIX))
+    f.load()
+
+
+def main() -> None:
+    command = sys.argv[1:]
+    if not command:
+        fail("usage: suveryn-reader-sandbox <command> [args...]")
+    work = os.environ.get("SUVERYN_EXTRACT_WORK_DIR")
+    if not work:
+        fail("SUVERYN_EXTRACT_WORK_DIR is not set: the reader needs its own folder")
+    become(os.environ.get("SUVERYN_READER_USER", "suveryn-reader"))
+    os.umask(0o077)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    os.environ.update(HOME=work, TMPDIR=work)
+    if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        fail("could not set no_new_privs")
+    load_filter()
+    try:
+        os.execvp(command[0], command)
+    except OSError as e:
+        fail(f"can't start {command[0]}: {e.strerror}")
+
+
+if __name__ == "__main__":
+    main()
