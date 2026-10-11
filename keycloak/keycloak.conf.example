@@ -1,0 +1,34 @@
+# Keycloak for a sūveryn appliance, production mode (kc.sh start). Keycloak 26.8. suveryn-tracker#16.
+# Copy to Keycloak's conf/keycloak.conf and replace suveryn.office.example with the office's name.
+#
+# Layout: one host name and one certificate for the office. The appliance's TLS reverse proxy serves
+# the chat UI and the gateway at https://suveryn.office.example/ and Keycloak at /idp, forwarding to
+# Keycloak on 127.0.0.1:8180 with X-Forwarded-* headers. The gateway's issuer is then
+# https://suveryn.office.example/idp/realms/suveryn (build_realm.py's default).
+
+# The public URL, fixed: issuer, redirects and links never come from request headers.
+hostname=https://suveryn.office.example/idp
+hostname-strict=true
+http-relative-path=/idp
+
+# TLS ends at the reverse proxy on the same machine; Keycloak listens on loopback only and trusts
+# X-Forwarded-* (only the proxy can reach it).
+proxy-headers=xforwarded
+http-enabled=true
+http-host=127.0.0.1
+http-port=8180
+
+# Its own PostgreSQL database. The password comes from KC_DB_PASSWORD in Keycloak's 0600 environment
+# file, never from this file.
+db=postgres
+db-url=jdbc:postgresql://127.0.0.1:5432/keycloak
+db-username=keycloak
+
+# Health checks on the management port (loopback); no metrics endpoint.
+health-enabled=true
+metrics-enabled=false
+http-management-port=9000
+
+# Logs go to the journal, whose retention the appliance sets. Sign-in and admin events are stored in
+# the database and expire after 180 days (realm settings, build_realm.py).
+log=console
