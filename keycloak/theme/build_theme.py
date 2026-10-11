@@ -41,6 +41,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
+import defusedxml.ElementTree as DefusedET
+
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
@@ -160,7 +162,7 @@ def email_icon(svg_path: Path) -> str:
     Inline SVG, so nothing is fetched. Clients that strip SVG (Gmail, Outlook for Windows) show the
     text wordmark next to it on its own, which is the design without the icon.
     """
-    root = ET.parse(svg_path).getroot()
+    root = DefusedET.parse(svg_path).getroot()
     for meta in root.findall(f"{{{SVG_NS}}}metadata"):
         root.remove(meta)
     root.attrib.pop("xmlns:c2pa", None)
