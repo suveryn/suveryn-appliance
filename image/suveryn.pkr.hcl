@@ -49,6 +49,7 @@ source "qemu" "suveryn" {
   iso_checksum = "sha256:97f3d7ffb032c3eb3b23d2c8be9cc76e60c2c1f2c0146ba5ba9fe01cafae0fd8"
 
   accelerator = var.accelerator
+  cpu_model   = var.accelerator == "kvm" ? "host" : "max" # emulated: a modern CPU (AVX2), as PyTorch expects
   cpus        = var.cpus
   memory      = var.memory
   headless    = true
@@ -74,7 +75,7 @@ source "qemu" "suveryn" {
   boot_wait = "5s"
   boot_command = [
     "e<wait><down><down><down><end>",
-    " autoinstall ds=nocloud-net\;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/",
+    " autoinstall ds=nocloud-net\\;s=http://{{ .HTTPIP }}:{{ .HTTPPort }}/",
     "<f10>",
   ]
 

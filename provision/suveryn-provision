@@ -365,8 +365,11 @@ def llama_server() -> None:
         # native: the card in this machine. An image is built without one, so it gets the generations a
         # 24-48 GB office card can be: Ampere (8.6: RTX A5000/A6000, 3090), Ada (8.9: RTX 4090, L40S),
         # Hopper (9.0); plus 8.0 (A100).
-        archs = "native" if gpu_names() else "80;86;89;90"
+        # Its CPU code likewise: native here, generic in an image (built on an emulated CPU, run on the office's).
+        on_target = bool(gpu_names())
+        archs = "native" if on_target else "80;86;89;90"
         run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", f"-DCMAKE_CUDA_ARCHITECTURES={archs}",
+            f"-DGGML_NATIVE={'ON' if on_target else 'OFF'}",
             "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release", env=env, capture=True)
         run("cmake", "--build", LLAMA / "build", "--target", "llama-server", "-j", str(os.cpu_count() or 8),
             env=env, capture=True)
