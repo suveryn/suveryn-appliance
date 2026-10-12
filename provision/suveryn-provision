@@ -345,8 +345,9 @@ def suveryn_core() -> None:
     env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache")}
     run(UV, "sync", "-q", "--locked", "--all-packages", "--no-dev", cwd=CORE, env=env)
     note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
-    run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0"},
-        cwd=CORE, capture=True)
+    # It loads each model once as a check: on the CPU when there is no GPU (an image is built without one).
+    run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0",
+        **({} if gpu_names() else {"SUVERYN_RAG_DEVICE": "cpu"})}, cwd=CORE, capture=True)
     run("chmod", "-R", "a+rX", *[d for d in (HF_HOME, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
     note(f"embedding and Docling models in {HF_HOME}")
 
