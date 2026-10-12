@@ -15,7 +15,7 @@ PKR_VAR_build_password=$(openssl rand -base64 24) packer build .              # 
 PKR_VAR_build_password=$(openssl rand -base64 24) packer build -var accelerator=tcg .   # without (slow)
 ```
 
-The result is `output/suveryn-appliance.img.zst` (raw, UEFI, GPT) and `output/SHA256SUMS`.
+The result is `/var/tmp/suveryn-image/suveryn-appliance.img.zst` (raw, UEFI, GPT) and `SHA256SUMS` beside it (`-var output_dir=…` to change; never inside this repository, which is uploaded into the build).
 
 Needs: Linux with QEMU (`qemu-system-x86`, `qemu-utils`), OVMF, `zstd`, Packer 1.16.1, network access,
 and about 100 GB free. With KVM the build takes about an hour. Without it (`accelerator=tcg`, e.g. a

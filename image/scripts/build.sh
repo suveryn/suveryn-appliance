@@ -10,8 +10,9 @@ CUDA_KEYRING_SHA256=d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a0
 echo "== This repository into /opt/suveryn/appliance"
 install -d -m 0755 /opt/suveryn
 rm -rf /opt/suveryn/appliance
-mv /tmp/suveryn-appliance /opt/suveryn/appliance
-chown -R root:root /opt/suveryn/appliance
+install -d -m 0755 /opt/suveryn/appliance
+tar -xzf /tmp/suveryn-appliance.tar.gz -C /opt/suveryn/appliance --no-same-owner
+rm /tmp/suveryn-appliance.tar.gz
 
 echo "== Kernel, firmware and tools for bare metal"
 apt-get update -qq
