@@ -102,6 +102,7 @@ build {
   provisioner "file" {
     source      = "${var.output_dir}-appliance.tar.gz"
     destination = "/tmp/suveryn-appliance.tar.gz"
+    generated   = true # made by the step above, during the build
   }
 
   provisioner "shell" {
