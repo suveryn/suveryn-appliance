@@ -1,0 +1,29 @@
+#cloud-config
+# Ubuntu autoinstall for the image build (Packer serves this file during the build only).
+autoinstall:
+  version: 1
+  source:
+    id: ubuntu-server-minimal
+  locale: en_GB.UTF-8
+  keyboard:
+    layout: be
+  timezone: Europe/Brussels
+  # GPT: an EFI system partition and one ext4 root; the root grows to the disk it is flashed onto at
+  # first start (suveryn-grow-root.service).
+  storage:
+    layout:
+      name: direct
+  identity:
+    hostname: suveryn
+    username: suveryn-build
+    password: "${password_hash}"
+  ssh:
+    install-server: true
+    allow-pw: true
+  updates: security
+  late-commands:
+    # Boot from the removable path (EFI/BOOT/BOOTX64.EFI) too, so the flashed disk starts on any UEFI
+    # machine without a boot entry in its firmware.
+    - curtin in-target -- grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable --no-nvram
+    - echo 'suveryn-build ALL=(ALL) ALL' > /target/etc/sudoers.d/90-suveryn-build
+  shutdown: reboot

@@ -94,6 +94,7 @@ NODE = OPT / "node"
 LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
 PACKAGES = [
+    "ufw", "unattended-upgrades",
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
     "python3-seccomp", "nginx", "openssl", "sudo", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
@@ -102,6 +103,9 @@ READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sand
 # What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
 # Not SETENV or --preserve-env: SETENV would let the gateway pass the reader any variable.
 READER_ENV = "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
+# The gateway's settings for the sandboxed reader (reader-sandbox/README.md).
+READER_SETTINGS = {"SUVERYN_EXTRACT_WRAPPER": READER_WRAPPER, "SUVERYN_EXTRACT_INBOX": "/var/lib/suveryn/inbox",
+                   "SUVERYN_EXTRACT_WORK_DIR": "/var/lib/suveryn/reader"}
 
 
 # ---------------------------------------------------------------------------- output and helpers
@@ -358,7 +362,11 @@ def llama_server() -> None:
         fail(f"llama.cpp {v['tag']} isn't at the pinned commit")
     if not binary.exists():
         env = {"PATH": "/usr/local/cuda/bin:" + os.environ["PATH"]}
-        run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=native",
+        # native: the card in this machine. An image is built without one, so it gets the generations a
+        # 24-48 GB office card can be: Ampere (8.6: RTX A5000/A6000, 3090), Ada (8.9: RTX 4090, L40S),
+        # Hopper (9.0); plus 8.0 (A100).
+        archs = "native" if gpu_names() else "80;86;89;90"
+        run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", f"-DCMAKE_CUDA_ARCHITECTURES={archs}",
             "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release", env=env, capture=True)
         run("cmake", "--build", LLAMA / "build", "--target", "llama-server", "-j", str(os.cpu_count() or 8),
             env=env, capture=True)
@@ -366,11 +374,17 @@ def llama_server() -> None:
     note(f"llama.cpp {v['tag']} ({v['commit'][:7]}): {binary}")
 
 
-def llm_models(models_from: Path | None, mode: str) -> list[dict]:
+def llm_models(models_from: Path | None, mode: str, staging: bool = True) -> list[dict]:
+    """The LLM files, each checked against the manifest. Staging (install) may download them whatever the
+    mode; at first boot only a connected installation downloads, the others need them on media."""
     step("Model files (suveryn-core models/manifest.json)")
     llms = [m for m in json.loads((CORE / "models" / "manifest.json").read_text())["models"] if m["role"] == "llm"]
     for m in llms:
         dest = MODELS / m["file"]
+        present = dest.exists() and dest.stat().st_size == m["size_bytes"]
+        if not models_from and not present and not staging and mode != "connected":
+            fail(f"{m['file']} is needed and this installation is {mode}: put the model files on media and pass "
+                 "--models-from <folder> (MODELS_FROM in first-boot.env)")
         if models_from:
             src = models_from / m["file"]
             if not src.exists():
@@ -407,8 +421,9 @@ def presets(llms: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------- 8. Keycloak, theme and realm
-def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
-    step(f"Keycloak {VERSIONS['keycloak']['version']}, theme and production realm")
+def keycloak_software() -> None:
+    """Keycloak, its theme and its build: the same for every office (image)."""
+    step(f"Keycloak {VERSIONS['keycloak']['version']} and the theme")
     v = VERSIONS["keycloak"]
     if not (KEYCLOAK / "bin" / "kc.sh").exists():
         archive = VAR / "downloads" / Path(v["url"]).name
@@ -416,13 +431,24 @@ def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
         with tarfile.open(archive) as t:
             t.extractall(KEYCLOAK.parent, filter="data")
         (KEYCLOAK.parent / f"keycloak-{v['version']}").rename(KEYCLOAK)
-    host = public_url.split("://", 1)[1].rstrip("/")
-    conf = (REPO / "keycloak" / "keycloak.conf.example").read_text().replace("suveryn.office.example", host)
-    (KEYCLOAK / "conf" / "keycloak.conf").write_text(conf)
+    # keycloak.conf's build options (database kind, health, paths) are fixed; the host name is a runtime
+    # option, set at first boot. The example's name stands in until then.
+    shutil.copyfile(REPO / "keycloak" / "keycloak.conf.example", KEYCLOAK / "conf" / "keycloak.conf")
     # The theme, built from suveryn-brand at the commit in keycloak/theme/brand-lock.json.
     run(UV, "run", "-q", REPO / "keycloak" / "theme" / "build_theme.py", cwd=REPO, env={"UV_CACHE_DIR": str(VAR / "uv-cache")})
     shutil.copy2(REPO / "keycloak" / "theme" / "build" / "suveryn-keycloak-theme.jar", KEYCLOAK / "providers")
     run("chown", "-R", "keycloak:keycloak", KEYCLOAK)
+    run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", capture=True)
+    note("Keycloak built with the sūveryn theme")
+
+
+def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
+    """The office's Keycloak: its host name, secrets and the production realm (first boot)."""
+    step("Keycloak: host name, secrets and the production realm")
+    host = public_url.split("://", 1)[1].rstrip("/")
+    conf = (REPO / "keycloak" / "keycloak.conf.example").read_text().replace("suveryn.office.example", host)
+    (KEYCLOAK / "conf" / "keycloak.conf").write_text(conf)
+    run("chown", "keycloak:keycloak", KEYCLOAK / "conf" / "keycloak.conf")
     env = read_env(ETC / "keycloak.env")
     admin_pw = env.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
     kc_env = {"KC_DB_PASSWORD": keycloak_pw, "KC_BOOTSTRAP_ADMIN_USERNAME": "suveryn-setup",
@@ -430,12 +456,12 @@ def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
     write_env(ETC / "keycloak.env", kc_env, "keycloak", header=(
         "# Keycloak's secrets (0600, owner keycloak). KC_BOOTSTRAP_ADMIN_* create a temporary admin in the\n"
         "# master realm on first start only; the office creates its own admin and deletes suveryn-setup.\n"))
-    run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", env=kc_env, capture=True)
     oidc = ETC / "gateway-oidc.env"
     if not oidc.exists():  # the realm is built and imported once: a rebuild would change the client secret
         out = VAR / "realm-build"  # not under /root (0700): the keycloak user imports from here
+        # From the local suveryn-core checkout (the realm-lock commit is in its history): no network needed.
         run(sys.executable, REPO / "keycloak" / "realm" / "build_realm.py", "--public-url", public_url, "--out", out,
-            capture=True)
+            capture=True, env={"SUVERYN_CORE_REPO": str(CORE)})
         realm_file = out / "suveryn-realm.json"
         os.chown(realm_file, pwd.getpwnam("keycloak").pw_uid, 0)
         os.chmod(out, 0o711)
@@ -468,8 +494,7 @@ def reader_sandbox() -> dict[str, str]:
     run("visudo", "-cqf", tmp)
     os.replace(tmp, "/etc/sudoers.d/suveryn-reader")
     note("suveryn-reader, inbox 2750, work folder 0700, the wrapper, and sudo for the gateway")
-    return {"SUVERYN_EXTRACT_WRAPPER": READER_WRAPPER, "SUVERYN_EXTRACT_INBOX": str(VAR / "inbox"),
-            "SUVERYN_EXTRACT_WORK_DIR": str(VAR / "reader")}
+    return READER_SETTINGS
 
 
 def chat_ui() -> None:
@@ -575,6 +600,38 @@ def start_nginx() -> None:
         run("nginx", "-s", "reload")
     else:
         run("nginx")
+
+
+PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "fe80::/10"]
+
+
+def firewall_rules(mode: str) -> list[list[str]]:
+    """ufw commands for the mode: in, only the web ports; out, everything when connected, else only the
+    office's own network (LDAP, DNS, NTP, a local mirror), so nothing leaves it by mistake."""
+    rules = [["--force", "reset"], ["default", "deny", "incoming"], ["default", "deny", "routed"],
+             ["allow", "in", "80/tcp"], ["allow", "in", "443/tcp"]]
+    if mode == "connected":
+        rules.append(["default", "allow", "outgoing"])
+    else:
+        rules.append(["default", "deny", "outgoing"])
+        rules += [["allow", "out", "to", net] for net in PRIVATE_NETS]
+    return rules + [["--force", "enable"]]
+
+
+def firewall(mode: str) -> None:
+    step("Firewall")
+    for rule in firewall_rules(mode):
+        run("ufw", *rule, capture=True)
+    note("in: 80 and 443 only; out: " + ("anywhere" if mode == "connected" else "the office's own network only"))
+
+
+def updates(mode: str) -> None:
+    step("Security updates")
+    conf = Path("/etc/apt/apt.conf.d/20auto-upgrades")
+    on = mode == "connected"
+    conf.write_text(f'APT::Periodic::Update-Package-Lists "{int(on)}";\nAPT::Periodic::Unattended-Upgrade "{int(on)}";\n')
+    note("Ubuntu security updates applied automatically" if on else
+         f"automatic updates off ({mode}): updates arrive as a signed bundle on media (not built yet)")
 
 
 def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: list[dict]) -> None:
@@ -935,18 +992,80 @@ def verify_sign_in(base: str, ctx: ssl.SSLContext, admin_password: str) -> tuple
 
 
 # ---------------------------------------------------------------------------- main
+FIRST_BOOT_DONE = VAR / ".first-boot-done"
+
+
+def image() -> None:
+    """Everything that is the same for every office: built into the appliance image (needs network)."""
+    users()
+    packages()
+    suveryn_core()
+    llama_server()
+    keycloak_software()
+    reader_sandbox()
+    chat_ui()
+    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
+        shutil.copyfile(REPO / "reverse-proxy" / name, Path("/etc/nginx/snippets") / name)
+
+
+def first_boot(a: argparse.Namespace, staging: bool) -> None:
+    """Everything unique to this box and this office: never in the image (secrets, names, certificates)."""
+    step("GPU licence check")
+    may, message = gpu_verdict(gpu_names(), a.site)
+    print(f"   {'!!' if 'TEST' in message or not may else '  '} {message}", flush=True)
+    if not may:
+        fail("stopped at the GPU licence check")
+    if not a.public_url or not a.public_url.startswith("https://"):
+        fail("--public-url must be https (the realm requires TLS everywhere)")
+    network_mode(a.network_mode)
+    mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
+    if not staging:  # the appliance itself; a test pod (install) has no firewall of its own
+        firewall(mode)
+        updates(mode)
+    db_url, keycloak_pw = postgres()
+    llms = llm_models(a.models_from, mode, staging)
+    oidc = keycloak(a.public_url, keycloak_pw)
+    reader = READER_SETTINGS
+    host = a.public_url.split("://", 1)[1].rstrip("/")
+    tls(host, a.tls_cert, a.tls_key)
+    reverse_proxy(host)
+    configure(db_url, oidc, reader, llms)
+    step("Starting the services")
+    services("start")
+    ok = verify(a.public_url)
+    if ok and not staging:
+        FIRST_BOOT_DONE.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()))
+    sys.exit(0 if ok else 1)
+
+
+def first_boot_config(path: Path) -> dict[str, str]:
+    """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
+    values = read_env(path)
+    unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY"}
+    if unknown:
+        fail(f"unknown setting in {path}: {', '.join(sorted(unknown))}")
+    return values
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="suveryn-provision", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="command", required=True)
-    i = sub.add_parser("install", help="install and wire up every service, then verify")
-    i.add_argument("--public-url", required=True, help="the https URL people will open sūveryn at")
-    i.add_argument("--network-mode", choices=["connected", "outbound-blocked", "air-gapped"],
-                   help="the installation's network mode once in use (asked when omitted on a console)")
-    i.add_argument("--site", choices=["on-premise", "datacenter", "test"],
-                   help="where this machine runs; required with a GeForce card")
-    i.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
-    i.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
-    i.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
+
+    def office_args(p: argparse.ArgumentParser, required: bool) -> None:
+        p.add_argument("--public-url", required=required, help="the https URL people will open sūveryn at")
+        p.add_argument("--network-mode", choices=["connected", "outbound-blocked", "air-gapped"],
+                       help="the installation's network mode once in use (asked when omitted on a console)")
+        p.add_argument("--site", choices=["on-premise", "datacenter", "test"],
+                       help="where this machine runs; required with a GeForce card")
+        p.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
+        p.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
+        p.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
+
+    office_args(sub.add_parser("install", help="image and first-boot in one go (a test or staging machine)"), True)
+    sub.add_parser("image", help="build-time steps: everything the same for every office (needs network)")
+    f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
+    office_args(f, False)
+    f.add_argument("--config", type=Path, help="first-boot.env: PUBLIC_URL, NETWORK_MODE, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
     sub.add_parser("verify", help="check every service, end to end")
     s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
     s.add_argument("action", choices=["start", "stop", "status"])
@@ -958,31 +1077,24 @@ def main() -> None:
         return
     if a.command == "verify":
         sys.exit(0 if verify(None) else 1)
-
-    step("GPU licence check")
-    may, message = gpu_verdict(gpu_names(), a.site)
-    print(f"   {'!!' if 'TEST' in message or not may else '  '} {message}", flush=True)
-    if not may:
-        fail("stopped at the GPU licence check")
-    if not a.public_url.startswith("https://"):
-        fail("--public-url must be https (the realm requires TLS everywhere)")
-    users()
-    network_mode(a.network_mode)
-    packages()
-    db_url, keycloak_pw = postgres()
-    suveryn_core()
-    llama_server()
-    llms = llm_models(a.models_from, a.network_mode or "connected")
-    oidc = keycloak(a.public_url, keycloak_pw)
-    reader = reader_sandbox()
-    chat_ui()
-    host = a.public_url.split("://", 1)[1].rstrip("/")
-    tls(host, a.tls_cert, a.tls_key)
-    reverse_proxy(host)
-    configure(db_url, oidc, reader, llms)
-    step("Starting the services")
-    services("start")
-    sys.exit(0 if verify(a.public_url) else 1)
+    if a.command == "image":
+        image()
+        return
+    if a.command == "first-boot":
+        if FIRST_BOOT_DONE.exists():
+            note(f"first boot already done ({FIRST_BOOT_DONE.read_text().strip()}); nothing to do")
+            return
+        if a.config:
+            c = first_boot_config(a.config)
+            a.public_url = a.public_url or c.get("PUBLIC_URL")
+            a.network_mode = a.network_mode or c.get("NETWORK_MODE")
+            a.site = a.site or c.get("SITE")
+            for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
+                if not getattr(a, attr) and c.get(key):
+                    setattr(a, attr, Path(c[key]))
+        first_boot(a, staging=False)
+    image()
+    first_boot(a, staging=True)
 
 
 if __name__ == "__main__":
