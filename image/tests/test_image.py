@@ -79,3 +79,9 @@ def test_first_boot_runs_once_and_never_prints_the_admin_password_to_the_journal
     assert "$admin" in shown  # on the machine's own screen
     assert script.count("$admin") == 1  # and nowhere else (stdout goes to the journal)
     assert 'rm -f "$ESP/first-boot.env" "$ESP"/*.key "$ESP"/*.pem' in script  # no private key left on the FAT partition
+
+
+def test_the_network_comes_up_on_any_machine():
+    """The installer configures the build VM's interface; a flashed server's ports have other names."""
+    harden = (HERE / "scripts" / "harden.sh").read_text()
+    assert "rm -f /etc/netplan/*.yaml" in harden and 'name: "en*"' in harden and "dhcp4: true" in harden
