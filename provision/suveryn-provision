@@ -122,17 +122,25 @@ def fail(text: str) -> None:
     raise SystemExit(1)
 
 
+def error_lines(output: str, limit: int = 15) -> str:
+    """The lines of a command's output that say what failed (dpkg names the package there), else its end."""
+    hits = [line for line in output.splitlines() if re.search(r"error|failed|Errors were", line, re.I)]
+    return "\n".join(hits[-limit:]) if hits else output.strip()[-600:]
+
+
 def run(*cmd, env: dict | None = None, user: str | None = None, cwd: Path | None = None, input: str | None = None,
-        capture: bool = False) -> str:
-    """Run a command (as ``user`` with runuser), fail the provisioning if it fails."""
+        capture: bool = False, check: bool = True) -> str:
+    """Run a command (as ``user`` with runuser); fail the provisioning if it fails, unless ``check`` is off."""
     argv = [str(c) for c in cmd]
     if user:
         argv = [RUNUSER, "-u", user, "--", *argv]
     r = subprocess.run(argv, env={**os.environ, **(env or {})}, cwd=cwd, input=input, text=True,
                        capture_output=capture, check=False)
-    if r.returncode != 0:
-        detail = (r.stderr or "").strip()[-600:] if capture else ""
-        fail(f"{' '.join(argv[:6])}… failed ({r.returncode}) {detail}")
+    if r.returncode != 0 and check:
+        detail = error_lines((r.stdout or "") + "\n" + (r.stderr or "")) if capture else ""
+        fail(f"{' '.join(argv[:6])}… failed ({r.returncode})\n{detail}")
+    if not check:
+        return "" if r.returncode == 0 else error_lines((r.stdout or "") + "\n" + (r.stderr or "")) or "failed"
     return r.stdout if capture else ""
 
 
@@ -262,7 +270,14 @@ def packages() -> None:
     if missing:
         env = {"DEBIAN_FRONTEND": "noninteractive"}
         run("apt-get", "update", "-qq", env=env, capture=True)  # apt's output only when it fails
-        run("apt-get", "install", "-y", "-qq", "--no-install-recommends", *missing, env=env, capture=True)
+        install = ["apt-get", "install", "-y", "-qq", "--no-install-recommends", *missing]
+        problem = run(*install, env=env, capture=True, check=False)
+        if problem:
+            # A package's set-up script can fail on a first try (a service that starts too slowly, e.g.
+            # in an emulated build machine). Finish what was half-configured, then try once more.
+            note(f"apt-get install failed; finishing the set-up and trying once more:\n{problem}")
+            run("dpkg", "--configure", "-a", env=env, capture=True, check=False)
+            run(*install, env=env, capture=True)
         note(f"installed: {', '.join(missing)}")
     else:
         note("all present")
