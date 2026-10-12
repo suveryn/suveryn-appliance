@@ -1,0 +1,18 @@
+# Keycloak in production mode, on loopback behind the appliance's TLS reverse proxy (keycloak.conf).
+[Unit]
+Description=Keycloak (sūveryn sign-in)
+After=network.target postgresql.service
+Requires=postgresql.service
+
+[Service]
+User=keycloak
+Group=keycloak
+EnvironmentFile=/etc/suveryn/keycloak.env
+ExecStart=/opt/keycloak/bin/kc.sh start --optimized
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

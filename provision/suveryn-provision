@@ -1,0 +1,723 @@
+#!/usr/bin/python3
+"""Provision a sūveryn appliance: install and wire up every runtime service suveryn-core needs.
+
+    sudo provision/suveryn-provision install --public-url https://suveryn.office.example \\
+         --network-mode air-gapped --site on-premise
+    sudo provision/suveryn-provision verify          # check every service, end to end
+    sudo provision/suveryn-provision services start  # start the services (also without systemd)
+
+What ``install`` does, in order (each step is idempotent: run it again and it continues or changes
+nothing):
+
+1. **GPU licence check.** A GeForce card may only run on the office's own premises (NVIDIA's driver
+   licence forbids datacenter use). ``--site`` must say where this machine is; the answer is printed
+   and a GeForce card with ``--site datacenter`` stops the run.
+2. **Network mode** (``network-mode/``): ``/etc/suveryn/network-mode.env``.
+3. **Packages** from Ubuntu 24.04: PostgreSQL 16 with pgvector, Java 21 (Keycloak), Tesseract and
+   Ghostscript (OCR), python3-seccomp (reader sandbox), and the tools to build llama.cpp.
+4. **Users**: ``suveryn`` (gateway), ``suveryn-llm`` (model server), ``keycloak``; the reader's
+   ``suveryn-reader`` comes from ``reader-sandbox/provision-reader.sh``.
+5. **PostgreSQL**: databases ``suveryn`` and ``keycloak``, each with its own role and a random
+   password, and the ``vector`` extension. suveryn-core creates its own tables when the gateway
+   starts (``CREATE TABLE IF NOT EXISTS``); there are no migrations to apply.
+6. **suveryn-core** at the commit in ``versions.json``, into ``/opt/suveryn/core`` (``uv sync
+   --locked``), and its non-LLM models into ``/var/lib/suveryn/hf`` (``suveryn-fetch-models``).
+7. **llama-server** built from llama.cpp at the pinned commit (CUDA), and the LLM files from
+   suveryn-core's ``models/manifest.json``, each checked against its size and sha256: downloaded,
+   or copied from ``--models-from`` (physical media, for an air-gapped installation).
+8. **Keycloak** at the pinned version (sha256 checked), the sūveryn theme (``keycloak/theme``) and
+   the production realm (``keycloak/realm/build_realm.py``: sslRequired all, 180-day events, exact
+   redirect URLs, a new client secret), imported once; the realm file is deleted after the import.
+9. **The reader sandbox** (``reader-sandbox/``): its user and folders, the wrapper, and the gateway
+   set to use it (``SUVERYN_EXTRACT_WRAPPER``); sudo lets the gateway start it as the reader.
+10. **Configuration** in ``/etc/suveryn`` (each secret in a 0600 file owned by the service that
+    reads it) and the systemd units in ``provision/systemd``.
+
+Provisioning needs network access to fetch packages and pinned downloads (it is meant to run while
+the appliance is staged). The network mode describes the installation once it is in use.
+
+Without systemd (a container, e.g. the RunPod test pod), ``services start`` runs the same units with
+a small runner: each command as its unit's user, with its unit's environment files, logging to
+``/var/log/suveryn``. That runner is for testing only; an appliance runs systemd.
+
+Python 3 standard library only.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import pwd
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+VERSIONS = json.loads((HERE / "versions.json").read_text())
+
+ETC = Path("/etc/suveryn")
+OPT = Path("/opt/suveryn")
+VAR = Path("/var/lib/suveryn")
+LOGS = Path("/var/log/suveryn")
+RUN = Path("/run/suveryn")
+KEYCLOAK = Path("/opt/keycloak")
+CORE = OPT / "core"
+LLAMA = OPT / "llama.cpp"
+MODELS = VAR / "models"
+HF_HOME = VAR / "hf"
+UV = OPT / "bin" / "uv"
+UNITS = ["suveryn-llm", "keycloak", "suveryn-gateway"]
+RUNUSER = "/usr/sbin/runuser"  # by full path: the services get a minimal PATH
+
+PACKAGES = [
+    "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
+    "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
+    "python3-seccomp", "sudo", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
+]
+READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"
+# What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
+# Not SETENV or --preserve-env: SETENV would let the gateway pass the reader any variable.
+READER_ENV = "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
+
+
+# ---------------------------------------------------------------------------- output and helpers
+def step(title: str) -> None:
+    print(f"\n== {title}", flush=True)
+
+
+def note(text: str) -> None:
+    print(f"   {text}", flush=True)
+
+
+def fail(text: str) -> None:
+    print(f"\nsuveryn-provision: {text}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def run(*cmd, env: dict | None = None, user: str | None = None, cwd: Path | None = None, input: str | None = None,
+        capture: bool = False) -> str:
+    """Run a command (as ``user`` with runuser), fail the provisioning if it fails."""
+    argv = [str(c) for c in cmd]
+    if user:
+        argv = [RUNUSER, "-u", user, "--", *argv]
+    r = subprocess.run(argv, env={**os.environ, **(env or {})}, cwd=cwd, input=input, text=True,
+                       capture_output=capture, check=False)
+    if r.returncode != 0:
+        detail = (r.stderr or "").strip()[-600:] if capture else ""
+        fail(f"{' '.join(argv[:6])}… failed ({r.returncode}) {detail}")
+    return r.stdout if capture else ""
+
+
+def sha256_of(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(1 << 22):
+            h.update(block)
+    return h.hexdigest()
+
+
+def download(url: str, dest: Path, sha256: str | None = None, size: int | None = None) -> None:
+    """Fetch ``url`` to ``dest`` (resumes a partial file), then check its size and sha256."""
+    if dest.exists() and (size is None or dest.stat().st_size == size) and (sha256 is None or sha256_of(dest) == sha256):
+        note(f"{dest.name}: already here, checksum matches")
+        return
+    part = dest.with_name(dest.name + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    run("curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-sS", "-o", part, url)
+    if size is not None and part.stat().st_size != size:
+        fail(f"{dest.name}: {part.stat().st_size} bytes, expected {size}")
+    if sha256 is not None and sha256_of(part) != sha256:
+        part.unlink()
+        fail(f"{dest.name}: sha256 doesn't match the pinned value; deleted")
+    part.rename(dest)
+    note(f"{dest.name}: downloaded, checksum verified")
+
+
+def read_env(path: Path) -> dict[str, str]:
+    """KEY=value lines (systemd EnvironmentFile / shell); comments and blank lines ignored."""
+    out = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    return out
+
+
+def write_env(path: Path, values: dict[str, str], owner: str, mode: int = 0o600, header: str = "") -> None:
+    """Write an environment file atomically, owned by the service that reads it."""
+    for k, v in values.items():
+        if "\n" in v or not re.fullmatch(r"[A-Z][A-Z0-9_]*", k):
+            fail(f"bad environment entry {k!r}")
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.unlink(missing_ok=True)
+    with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode), "w") as f:
+        f.write(header + "".join(f"{k}={v}\n" for k, v in values.items()))
+    pw = pwd.getpwnam(owner)
+    os.chown(tmp, pw.pw_uid, pw.pw_gid)
+    os.replace(tmp, path)
+
+
+def systemd_running() -> bool:
+    return Path("/run/systemd/system").is_dir()
+
+
+def ensure_user(name: str, home: Path | None = None) -> None:
+    try:
+        pwd.getpwnam(name)
+    except KeyError:
+        run("useradd", "--system", "--user-group", "--home-dir", home or "/nonexistent", "--no-create-home",
+            "--shell", "/usr/sbin/nologin", name)
+        note(f"user {name} created")
+
+
+# ---------------------------------------------------------------------------- 1. GPU licence check
+def gpu_names() -> list[str]:
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True,
+                             text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return [n.strip() for n in out.splitlines() if n.strip()]
+
+
+def gpu_verdict(names: list[str], site: str | None) -> tuple[bool, str]:
+    """(may continue, message). GeForce cards: on-premise only (NVIDIA GeForce driver licence)."""
+    if not names:
+        return False, "no NVIDIA GPU found (nvidia-smi); llama-server and Docling need one"
+    geforce = [n for n in names if "geforce" in n.lower() or "titan" in n.lower()]
+    if not geforce:
+        return True, f"GPU: {', '.join(names)}: a datacenter-class card, no site restriction"
+    card = ", ".join(geforce)
+    if site == "on-premise":
+        return True, (f"GPU: {card} is a GeForce card. Confirmed: an on-premise office installation, which "
+                      "NVIDIA's GeForce driver licence allows")
+    if site == "test":
+        return True, (f"GPU: {card} is a GeForce card. This is a TEST or development machine, not a customer "
+                      "installation; NVIDIA's GeForce driver licence forbids datacenter deployment, so never "
+                      "deliver an installation like this one from a datacenter")
+    if site == "datacenter":
+        return False, (f"GPU: {card} is a GeForce card, and NVIDIA's GeForce driver licence forbids datacenter "
+                       "deployment. A hosted or datacenter installation needs a datacenter-class GPU")
+    return False, (f"GPU: {card} is a GeForce card. Say where this machine runs: --site on-premise (the office's "
+                   "own premises), --site datacenter (refused for GeForce) or --site test (development only)")
+
+
+# ---------------------------------------------------------------------------- 2. network mode
+def network_mode(mode: str | None) -> None:
+    step("Network mode")
+    tool = OPT / "bin" / "suveryn-network-mode"
+    shutil.copy2(REPO / "network-mode" / "suveryn-network-mode", tool)
+    os.chmod(tool, 0o755)
+    if mode is None and sys.stdin.isatty():
+        print("   Which network mode is this installation in, once in use?\n"
+              "     connected | outbound-blocked | air-gapped")
+        mode = input("   mode: ").strip()
+    if mode is None:
+        current = subprocess.run([tool, "get"], capture_output=True, text=True).stdout.strip()
+        if current == "unknown":
+            fail("no network mode: pass --network-mode connected|outbound-blocked|air-gapped")
+        note(f"kept: {current}")
+        return
+    run(tool, "set", mode)
+    note(f"set: {mode} ({ETC / 'network-mode.env'})")
+
+
+# ---------------------------------------------------------------------------- 3-4. packages and users
+def packages() -> None:
+    step("Packages (Ubuntu 24.04)")
+    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
+    if release.get("VERSION_ID", "").strip('"') != "24.04":
+        fail("this script supports Ubuntu 24.04 only (PostgreSQL 16 and pgvector come from its archive)")
+    missing = [p for p in PACKAGES if subprocess.run(["dpkg", "-s", p], capture_output=True).returncode != 0]
+    if missing:
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+        run("apt-get", "update", "-qq", env=env, capture=True)  # apt's output only when it fails
+        run("apt-get", "install", "-y", "-qq", "--no-install-recommends", *missing, env=env, capture=True)
+        note(f"installed: {', '.join(missing)}")
+    else:
+        note("all present")
+    if not shutil.which("nvcc", path="/usr/local/cuda/bin:" + os.environ.get("PATH", "")):
+        fail("the CUDA toolkit (nvcc) is needed to build llama-server; install NVIDIA's cuda-toolkit first")
+
+
+def users() -> None:
+    step("Users and folders")
+    ensure_user("suveryn")
+    ensure_user("suveryn-llm")
+    ensure_user("keycloak", KEYCLOAK)
+    for d, owner, mode in ((ETC, "root", 0o755), (OPT / "bin", "root", 0o755), (VAR, "root", 0o755),
+                           (VAR / "work", "suveryn", 0o700), (MODELS, "root", 0o755), (HF_HOME, "root", 0o755),
+                           (LOGS, "root", 0o755)):
+        d.mkdir(parents=True, exist_ok=True)
+        pw = pwd.getpwnam(owner)
+        os.chown(d, pw.pw_uid, pw.pw_gid)
+        os.chmod(d, mode)
+    note("suveryn (gateway), suveryn-llm (model server), keycloak; /etc/suveryn, /opt/suveryn, /var/lib/suveryn")
+
+
+# ---------------------------------------------------------------------------- 5. PostgreSQL
+def start_postgres() -> None:
+    if systemd_running():
+        run("systemctl", "enable", "--now", "postgresql")
+    elif subprocess.run(["pg_ctlcluster", "16", "main", "status"], capture_output=True).returncode != 0:
+        run("pg_ctlcluster", "16", "main", "start")
+
+
+def postgres() -> tuple[str, str]:
+    step("PostgreSQL 16 + pgvector")
+    start_postgres()
+    gw, kc = read_env(ETC / "gateway.env"), read_env(ETC / "keycloak.env")
+    db_url = gw.get("SUVERYN_DATABASE_URL")
+    suveryn_pw = db_url.split(":", 2)[2].split("@", 1)[0] if db_url else secrets.token_urlsafe(24)
+    keycloak_pw = kc.get("KC_DB_PASSWORD") or secrets.token_urlsafe(24)
+    # Passwords go in on psql's standard input as variables (quoted by psql where used), never on a
+    # command line, where any process could read them.
+    sql = f"""\\set suveryn_pw {suveryn_pw}
+\\set keycloak_pw {keycloak_pw}
+SELECT format('CREATE ROLE %I LOGIN', r) FROM unnest(ARRAY['suveryn','keycloak']) r
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) \\gexec
+ALTER ROLE suveryn PASSWORD :'suveryn_pw';
+ALTER ROLE keycloak PASSWORD :'keycloak_pw';
+SELECT format('CREATE DATABASE %I OWNER %I', d, d) FROM unnest(ARRAY['suveryn','keycloak']) d
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = d) \\gexec
+\\c suveryn
+CREATE EXTENSION IF NOT EXISTS vector;
+"""
+    run("psql", "-q", "-v", "ON_ERROR_STOP=1", user="postgres", input=sql)
+    note("databases suveryn and keycloak, their roles, extension vector (listening on localhost only)")
+    return f"postgresql://suveryn:{suveryn_pw}@127.0.0.1:5432/suveryn", keycloak_pw
+
+
+# ---------------------------------------------------------------------------- 6. suveryn-core
+def install_uv() -> None:
+    if UV.exists():
+        return
+    v = VERSIONS["uv"]
+    archive = VAR / "downloads" / Path(v["url"]).name
+    download(v["url"], archive, v["sha256"])
+    with tarfile.open(archive) as t:
+        member = next(m for m in t.getmembers() if m.name.endswith("/uv"))
+        member.name = "uv"
+        t.extract(member, OPT / "bin", filter="data")
+    os.chmod(UV, 0o755)
+
+
+def suveryn_core() -> None:
+    step("suveryn-core")
+    install_uv()
+    c = VERSIONS["suveryn_core"]
+    if not (CORE / ".git").exists():
+        run("git", "clone", "-q", c["repo"], CORE)
+    run("git", "-C", CORE, "fetch", "-q", "origin", c["commit"])
+    run("git", "-C", CORE, "checkout", "-q", "--detach", c["commit"])
+    if run("git", "-C", CORE, "rev-parse", "HEAD", capture=True).strip() != c["commit"]:
+        fail("suveryn-core isn't at the pinned commit")
+    env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache")}
+    run(UV, "sync", "-q", "--locked", "--all-packages", "--no-dev", cwd=CORE, env=env)
+    note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
+    run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0"},
+        cwd=CORE, capture=True)
+    run("chmod", "-R", "a+rX", *[d for d in (HF_HOME, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
+    note(f"embedding and Docling models in {HF_HOME}")
+
+
+# ---------------------------------------------------------------------------- 7. llama-server and the models
+def llama_server() -> None:
+    step("llama-server (llama.cpp, CUDA)")
+    v = VERSIONS["llama_cpp"]
+    binary = LLAMA / "build" / "bin" / "llama-server"
+    if not (LLAMA / ".git").exists():
+        run("git", "-c", "advice.detachedHead=false", "clone", "-q", "--depth", "1", "--branch", v["tag"], v["repo"], LLAMA)
+    if run("git", "-C", LLAMA, "rev-parse", "HEAD", capture=True).strip() != v["commit"]:
+        fail(f"llama.cpp {v['tag']} isn't at the pinned commit")
+    if not binary.exists():
+        env = {"PATH": "/usr/local/cuda/bin:" + os.environ["PATH"]}
+        run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=native",
+            "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release", env=env, capture=True)
+        run("cmake", "--build", LLAMA / "build", "--target", "llama-server", "-j", str(os.cpu_count() or 8),
+            env=env, capture=True)
+    run("chmod", "-R", "a+rX", LLAMA)
+    note(f"llama.cpp {v['tag']} ({v['commit'][:7]}): {binary}")
+
+
+def llm_models(models_from: Path | None, mode: str) -> list[dict]:
+    step("Model files (suveryn-core models/manifest.json)")
+    llms = [m for m in json.loads((CORE / "models" / "manifest.json").read_text())["models"] if m["role"] == "llm"]
+    for m in llms:
+        dest = MODELS / m["file"]
+        if models_from:
+            src = models_from / m["file"]
+            if not src.exists():
+                fail(f"{m['file']} is not in {models_from}")
+            if not (dest.exists() and dest.stat().st_size == m["size_bytes"] and sha256_of(dest) == m["sha256"]):
+                shutil.copyfile(src, dest)
+            if dest.stat().st_size != m["size_bytes"] or sha256_of(dest) != m["sha256"]:
+                dest.unlink()
+                fail(f"{m['file']} from {models_from} doesn't match the manifest's sha256; deleted")
+            note(f"{m['file']}: copied from {models_from}, checksum verified")
+        else:
+            if mode != "connected" and not dest.exists():
+                note(f"(downloading while staging; the installation will be {mode})")
+            download(f"{m['source']}/resolve/main/{m['file']}", dest, m["sha256"], m["size_bytes"])
+        os.chmod(dest, 0o644)
+    return llms
+
+
+def presets(llms: list[dict]) -> str:
+    """llama-server's router presets from the manifest: shared settings, then one section per model."""
+    out = ["; Written by suveryn-provision from suveryn-core's models/manifest.json.", "[*]",
+           "n-gpu-layers = 99", "flash-attn = on", "cache-type-k = q8_0", "cache-type-v = q8_0", "parallel = 4",
+           "kv-unified = true", "ctx-size = 65536", "cache-ram = 32768", ""]
+    for m in llms:
+        out += [f"[{m['id']}]", f"model = {MODELS / m['file']}"]
+        if "--jinja" in m.get("llama_server_args", ""):
+            out.append("jinja = true")
+        if (kw := re.search(r"--chat-template-kwargs '([^']*)'", m.get("llama_server_args", ""))):
+            out.append(f"chat-template-kwargs = {kw.group(1)}")
+        if m.get("default"):
+            out.append("load-on-startup = true")
+        out.append("")
+    return "\n".join(out)
+
+
+# ---------------------------------------------------------------------------- 8. Keycloak, theme and realm
+def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
+    step(f"Keycloak {VERSIONS['keycloak']['version']}, theme and production realm")
+    v = VERSIONS["keycloak"]
+    if not (KEYCLOAK / "bin" / "kc.sh").exists():
+        archive = VAR / "downloads" / Path(v["url"]).name
+        download(v["url"], archive, v["sha256"])
+        with tarfile.open(archive) as t:
+            t.extractall(KEYCLOAK.parent, filter="data")
+        (KEYCLOAK.parent / f"keycloak-{v['version']}").rename(KEYCLOAK)
+    host = public_url.split("://", 1)[1].rstrip("/")
+    conf = (REPO / "keycloak" / "keycloak.conf.example").read_text().replace("suveryn.office.example", host)
+    (KEYCLOAK / "conf" / "keycloak.conf").write_text(conf)
+    # The theme, built from suveryn-brand at the commit in keycloak/theme/brand-lock.json.
+    run(UV, "run", "-q", REPO / "keycloak" / "theme" / "build_theme.py", cwd=REPO, env={"UV_CACHE_DIR": str(VAR / "uv-cache")})
+    shutil.copy2(REPO / "keycloak" / "theme" / "build" / "suveryn-keycloak-theme.jar", KEYCLOAK / "providers")
+    run("chown", "-R", "keycloak:keycloak", KEYCLOAK)
+    env = read_env(ETC / "keycloak.env")
+    admin_pw = env.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
+    kc_env = {"KC_DB_PASSWORD": keycloak_pw, "KC_BOOTSTRAP_ADMIN_USERNAME": "suveryn-setup",
+              "KC_BOOTSTRAP_ADMIN_PASSWORD": admin_pw}
+    write_env(ETC / "keycloak.env", kc_env, "keycloak", header=(
+        "# Keycloak's secrets (0600, owner keycloak). KC_BOOTSTRAP_ADMIN_* create a temporary admin in the\n"
+        "# master realm on first start only; the office creates its own admin and deletes suveryn-setup.\n"))
+    run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", env=kc_env, capture=True)
+    oidc = ETC / "gateway-oidc.env"
+    if not oidc.exists():  # the realm is built and imported once: a rebuild would change the client secret
+        out = VAR / "realm-build"  # not under /root (0700): the keycloak user imports from here
+        run(sys.executable, REPO / "keycloak" / "realm" / "build_realm.py", "--public-url", public_url, "--out", out,
+            capture=True)
+        realm_file = out / "suveryn-realm.json"
+        os.chown(realm_file, pwd.getpwnam("keycloak").pw_uid, 0)
+        os.chmod(out, 0o711)
+        try:
+            run(KEYCLOAK / "bin" / "kc.sh", "import", "--file", realm_file, "--optimized", user="keycloak", env=kc_env,
+                capture=True)
+        finally:
+            realm_file.unlink(missing_ok=True)  # it holds the client secret
+        shutil.move(out / "gateway-oidc.env", oidc)
+        os.chmod(oidc, 0o600)
+        shutil.rmtree(out, ignore_errors=True)
+        note("production realm built and imported; the realm file (with the client secret) deleted")
+    else:
+        note("realm already imported; kept (rebuilding it would change the client secret)")
+    return read_env(oidc)
+
+
+# ---------------------------------------------------------------------------- 9-10. reader sandbox and configuration
+def reader_sandbox() -> dict[str, str]:
+    step("Reader sandbox")
+    run("sh", REPO / "reader-sandbox" / "provision-reader.sh", "suveryn", VAR / "inbox", VAR / "reader")
+    shutil.copy2(REPO / "reader-sandbox" / "suveryn-reader-sandbox", OPT / "bin" / "suveryn-reader-sandbox")
+    os.chmod(OPT / "bin" / "suveryn-reader-sandbox", 0o755)
+    rule = "suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *\n"
+    tmp = Path("/etc/sudoers.d/.suveryn-reader.tmp")
+    tmp.write_text("# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).\n"
+                   "Defaults:suveryn !requiretty\n"
+                   f'Defaults>suveryn-reader env_keep += "{READER_ENV}"\n' + rule)
+    os.chmod(tmp, 0o440)
+    run("visudo", "-cqf", tmp)
+    os.replace(tmp, "/etc/sudoers.d/suveryn-reader")
+    note("suveryn-reader, inbox 2750, work folder 0700, the wrapper, and sudo for the gateway")
+    return {"SUVERYN_EXTRACT_WRAPPER": READER_WRAPPER, "SUVERYN_EXTRACT_INBOX": str(VAR / "inbox"),
+            "SUVERYN_EXTRACT_WORK_DIR": str(VAR / "reader")}
+
+
+def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: list[dict]) -> None:
+    step("Configuration and services")
+    (ETC / "llama-presets.ini").write_text(presets(llms))
+    default = next(m["id"] for m in llms if m.get("default"))
+    gateway = {"SUVERYN_HOST": "127.0.0.1", "SUVERYN_PORT": "8000", "SUVERYN_DATABASE_URL": db_url,
+               "SUVERYN_WORK_DIR": str(VAR / "work"), "HF_HOME": str(HF_HOME),
+               "SUVERYN_LLM_BASE_URL": "http://127.0.0.1:8080", "SUVERYN_LLM_DEFAULT_MODEL": default,
+               "SUVERYN_OCR_JOBS": str(min(8, os.cpu_count() or 8)), **oidc, **reader}
+    write_env(ETC / "gateway.env", gateway, "suveryn", header=(
+        "# suveryn-core's gateway (0600, owner suveryn). Written by suveryn-provision.\n"
+        "# The reader sandbox is required: never add SUVERYN_EXTRACT_UNSANDBOXED here.\n"))
+    for unit in UNITS:
+        shutil.copy2(HERE / "systemd" / f"{unit}.service", f"/etc/systemd/system/{unit}.service")
+    if systemd_running():
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", *UNITS)
+    note(f"/etc/suveryn: gateway.env, keycloak.env, gateway-oidc.env (0600), llama-presets.ini; units: {', '.join(UNITS)}")
+
+
+# ---------------------------------------------------------------------------- services (systemd, or the test runner)
+def parse_unit(path: Path) -> dict:
+    """The few [Service] keys the test runner needs: User, EnvironmentFile (all), WorkingDirectory, ExecStart."""
+    unit: dict = {"env_files": []}
+    section = None
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            section = line
+        elif section == "[Service]" and "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            if k == "EnvironmentFile":
+                unit["env_files"].append((v.startswith("-"), Path(v.lstrip("-"))))
+            elif k in ("User", "WorkingDirectory", "ExecStart"):
+                unit[k] = v
+    return unit
+
+
+def services(action: str) -> None:
+    if systemd_running():
+        if action == "start":
+            run("systemctl", "start", "postgresql", *UNITS)
+        elif action == "stop":
+            run("systemctl", "stop", *reversed(UNITS))
+        else:
+            subprocess.run(["systemctl", "--no-pager", "status", "postgresql", *UNITS], check=False)
+        return
+    RUN.mkdir(parents=True, exist_ok=True)
+    LOGS.mkdir(parents=True, exist_ok=True)
+    if action == "start":
+        start_postgres()
+    for name in (UNITS if action != "stop" else list(reversed(UNITS))):
+        pidfile = RUN / f"{name}.pid"
+        pid = int(pidfile.read_text()) if pidfile.exists() else None
+        alive = pid is not None and Path(f"/proc/{pid}").exists()
+        if action == "status":
+            print(f"{name}: {'running (pid %d)' % pid if alive else 'stopped'}")
+        elif action == "stop" and alive:
+            os.killpg(pid, signal.SIGTERM)
+            for _ in range(30):
+                if not Path(f"/proc/{pid}").exists():
+                    break
+                time.sleep(1)
+            pidfile.unlink(missing_ok=True)
+            print(f"{name}: stopped")
+        elif action == "start" and not alive:
+            unit = parse_unit(Path(f"/etc/systemd/system/{name}.service"))
+            env = {"PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C.UTF-8"}
+            for optional, f in unit["env_files"]:
+                if f.exists() or not optional:
+                    env.update(read_env(f))
+            log = open(LOGS / f"{name}.log", "ab")
+            p = subprocess.Popen([RUNUSER, "-u", unit["User"], "--", *unit["ExecStart"].split()], env=env,
+                                 cwd=unit.get("WorkingDirectory") or "/", stdout=log, stderr=log,
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+            pidfile.write_text(str(p.pid))
+            print(f"{name}: started (pid {p.pid}, log {LOGS / name}.log; test runner, not systemd)")
+
+
+# ---------------------------------------------------------------------------- verify
+def http(url: str, headers: dict | None = None, data: bytes | None = None, timeout: float = 10) -> tuple[int, bytes]:
+    req = urllib.request.Request(url, data=data, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+    except OSError:
+        return 0, b""
+
+
+def wait_for(check, what: str, seconds: int) -> bool:
+    for _ in range(seconds // 2):
+        if check():
+            return True
+        time.sleep(2)
+    print(f"   {what}: not ready after {seconds} s")
+    return False
+
+
+def test_pdf() -> bytes:
+    """A fictional one-page text PDF, written by hand (no PDF library in this script)."""
+    text = "Testakte sūveryn provisioning. Koopprijs EUR 123.456,00."
+    stream = f"BT /F1 12 Tf 72 720 Td ({text.encode('latin-1', 'replace').decode('latin-1')}) Tj ET".encode("latin-1")
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+               b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+               b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"]
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for i, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (i, body)
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, xref)
+    return bytes(out)
+
+
+READ_CHECK = r'''
+import io, json, sys, time
+from suveryn_rag.config import RagSettings
+from suveryn_rag.service import DocumentService
+docs = DocumentService(RagSettings.from_env())
+docs.start()
+for _ in range(300):
+    if docs.state != "starting":
+        break
+    time.sleep(1)
+if docs.state != "ready":
+    print(json.dumps({"state": docs.state, "error": docs.error})); sys.exit(1)
+job = docs.accept_upload(io.BytesIO(sys.stdin.buffer.read()), "provisioning-check.pdf", "provisioning-check")
+for _ in range(600):
+    j = docs.job(job.id, "provisioning-check")
+    if j.status not in ("queued", "processing"):
+        break
+    time.sleep(1)
+result = {"state": docs.state, "status": j.status, "pages": j.pages, "error": j.error, "warnings": [w["kind"] for w in j.warnings]}
+if j.document_id:
+    docs.delete(j.document_id, "provisioning-check")
+print(json.dumps(result))
+'''
+
+
+def verify(public_url: str | None) -> bool:
+    ok = True
+
+    def result(name: str, passed: bool, detail: str) -> None:
+        nonlocal ok
+        ok &= passed
+        print(f"   {'OK  ' if passed else 'FAIL'} {name}: {detail}", flush=True)
+
+    step("Verify")
+    gw = read_env(ETC / "gateway.env")
+    # PostgreSQL: the gateway's own role reaches its database, and pgvector is there.
+    q = subprocess.run([RUNUSER, "-u", "suveryn", "--", "psql", gw.get("SUVERYN_DATABASE_URL", ""), "-tAc",
+                        "SELECT extversion FROM pg_extension WHERE extname = 'vector'"], capture_output=True, text=True)
+    result("PostgreSQL", q.returncode == 0 and q.stdout.strip() != "",
+           f"database suveryn as role suveryn, pgvector {q.stdout.strip() or '?'}")
+    # llama-server: the default model loaded and answering.
+    wait_for(lambda: http("http://127.0.0.1:8080/health")[0] == 200, "llama-server", 300)
+    status, body = http("http://127.0.0.1:8080/v1/models")
+    ids = [m.get("id") for m in json.loads(body or b"{}").get("data", [])] if status == 200 else []
+    default = gw.get("SUVERYN_LLM_DEFAULT_MODEL")
+    status, body = http("http://127.0.0.1:8080/v1/chat/completions", {"Content-Type": "application/json"}, json.dumps(
+        {"model": default, "messages": [{"role": "user", "content": "Antwoord met één woord: ja"}], "max_tokens": 5}).encode(),
+        timeout=180)
+    result("llama-server", status == 200 and default in ids, f"models {ids}, default {default} answered ({status})")
+    # Keycloak: ready, the realm with its production settings and the sūveryn theme (through the admin API,
+    # and the realm's discovery as the reverse proxy will ask it, https in X-Forwarded-Proto).
+    wait_for(lambda: 200 in (http("http://127.0.0.1:9000/idp/health/ready")[0], http("http://127.0.0.1:9000/health/ready")[0]),
+             "Keycloak", 180)
+    kc = read_env(ETC / "keycloak.env")
+    status, body = http("http://127.0.0.1:8180/idp/realms/master/protocol/openid-connect/token", data=(
+        "grant_type=password&client_id=admin-cli&username=suveryn-setup&password="
+        + urllib.parse.quote(kc.get("KC_BOOTSTRAP_ADMIN_PASSWORD", ""))).encode())
+    token = json.loads(body or b"{}").get("access_token") if status == 200 else None
+    realm = {}
+    if token:
+        s, b = http("http://127.0.0.1:8180/idp/admin/realms/suveryn", {"Authorization": f"Bearer {token}"})
+        realm = json.loads(b) if s == 200 else {}
+    host = (public_url or gw.get("SUVERYN_PUBLIC_URL", "")).split("://", 1)[-1].rstrip("/")
+    s, b = http("http://127.0.0.1:8180/idp/realms/suveryn/.well-known/openid-configuration",
+                {"X-Forwarded-Proto": "https", "X-Forwarded-Host": host})
+    issuer = json.loads(b).get("issuer") if s == 200 else None
+    result("Keycloak", bool(realm) and realm.get("sslRequired") == "all" and realm.get("loginTheme") == "suveryn"
+           and realm.get("eventsExpiration") == 180 * 86400 and issuer == gw.get("SUVERYN_OIDC_ISSUER"),
+           f"realm suveryn: sslRequired {realm.get('sslRequired')}, theme {realm.get('loginTheme')}, events "
+           f"{(realm.get('eventsExpiration') or 0) // 86400} days, issuer matches the gateway's: "
+           f"{issuer == gw.get('SUVERYN_OIDC_ISSUER')}")
+    # The reader sandbox: set, never bypassed, and a document really read through it.
+    sandboxed = gw.get("SUVERYN_EXTRACT_WRAPPER") == READER_WRAPPER and "SUVERYN_EXTRACT_UNSANDBOXED" not in gw
+    # On the CPU: the running services hold the GPU; the sandbox path is the same either way.
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", **gw, "SUVERYN_RAG_DEVICE": "cpu", "CUDA_VISIBLE_DEVICES": ""}
+    r = subprocess.run([RUNUSER, "-u", "suveryn", "--", str(CORE / ".venv" / "bin" / "python"), "-c", READ_CHECK],
+                       input=test_pdf(), capture_output=True, env=env, timeout=900)
+    try:
+        read = json.loads(r.stdout.decode().strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        read = {"error": r.stderr.decode()[-400:]}
+    result("Reader sandbox", sandboxed and read.get("status") in ("ready", "needs_review") and read.get("pages") == 1,
+           f"wrapper set and required: {sandboxed}; a test PDF uploaded as the gateway's user: {read}")
+    # The gateway service: up, and its own view of the services.
+    wait_for(lambda: http("http://127.0.0.1:8000/health")[0] in (200, 503), "gateway", 120)
+    s, b = http("http://127.0.0.1:8000/health")
+    h = json.loads(b) if b else {}
+    parts = {k: (h.get(k) or {}).get("status") for k in ("backend", "documents", "history", "usage", "auth")}
+    result("Gateway", s == 200 and parts["documents"] == "ready" and parts["history"] == "ready",
+           f"/health {s}: {parts}")
+    if parts.get("auth") != "ready":
+        note("auth isn't ready: the gateway reaches Keycloak only through its public https URL, which needs the "
+             "appliance's reverse proxy (not part of this script yet)")
+    mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
+    result("Network mode", mode != "unknown", mode)
+    return ok
+
+
+# ---------------------------------------------------------------------------- main
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="suveryn-provision", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    i = sub.add_parser("install", help="install and wire up every service, then verify")
+    i.add_argument("--public-url", required=True, help="the https URL people will open sūveryn at")
+    i.add_argument("--network-mode", choices=["connected", "outbound-blocked", "air-gapped"],
+                   help="the installation's network mode once in use (asked when omitted on a console)")
+    i.add_argument("--site", choices=["on-premise", "datacenter", "test"],
+                   help="where this machine runs; required with a GeForce card")
+    i.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
+    sub.add_parser("verify", help="check every service, end to end")
+    s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
+    s.add_argument("action", choices=["start", "stop", "status"])
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        fail("run as root")
+    if a.command == "services":
+        services(a.action)
+        return
+    if a.command == "verify":
+        sys.exit(0 if verify(None) else 1)
+
+    step("GPU licence check")
+    may, message = gpu_verdict(gpu_names(), a.site)
+    print(f"   {'!!' if 'TEST' in message or not may else '  '} {message}", flush=True)
+    if not may:
+        fail("stopped at the GPU licence check")
+    if not a.public_url.startswith("https://"):
+        fail("--public-url must be https (the realm requires TLS everywhere)")
+    users()
+    network_mode(a.network_mode)
+    packages()
+    db_url, keycloak_pw = postgres()
+    suveryn_core()
+    llama_server()
+    llms = llm_models(a.models_from, a.network_mode or "connected")
+    oidc = keycloak(a.public_url, keycloak_pw)
+    reader = reader_sandbox()
+    configure(db_url, oidc, reader, llms)
+    step("Starting the services")
+    services("start")
+    sys.exit(0 if verify(a.public_url) else 1)
+
+
+if __name__ == "__main__":
+    main()
