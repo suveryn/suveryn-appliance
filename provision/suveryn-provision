@@ -30,7 +30,11 @@ nothing):
    redirect URLs, a new client secret), imported once; the realm file is deleted after the import.
 9. **The reader sandbox** (``reader-sandbox/``): its user and folders, the wrapper, and the gateway
    set to use it (``SUVERYN_EXTRACT_WRAPPER``); sudo lets the gateway start it as the reader.
-10. **Configuration** in ``/etc/suveryn`` (each secret in a 0600 file owned by the service that
+10. **The chat UI**, built from suveryn-core with a pinned Node, into ``/opt/suveryn/ui``.
+11. **TLS and the reverse proxy** (``reverse-proxy/``, nginx): the office's certificate
+    (``--tls-cert``/``--tls-key``) or one from a local CA made on the machine; one https origin for
+    the UI, the gateway and Keycloak, with strict security headers.
+12. **Configuration** in ``/etc/suveryn`` (each secret in a 0600 file owned by the service that
     reads it) and the systemd units in ``provision/systemd``.
 
 Provisioning needs network access to fetch packages and pinned downloads (it is meant to run while
@@ -51,6 +55,8 @@ import pwd
 import re
 import secrets
 import shutil
+import socket
+import ssl
 import signal
 import subprocess
 import sys
@@ -59,6 +65,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
+from http.cookiejar import CookieJar
+from html import unescape
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -77,12 +86,16 @@ MODELS = VAR / "models"
 HF_HOME = VAR / "hf"
 UV = OPT / "bin" / "uv"
 UNITS = ["suveryn-llm", "keycloak", "suveryn-gateway"]
-RUNUSER = "/usr/sbin/runuser"  # by full path: the services get a minimal PATH
+RUNUSER = "/usr/sbin/runuser"
+TLS = ETC / "tls"
+UI = OPT / "ui"
+NODE = OPT / "node"
+LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
 PACKAGES = [
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
-    "python3-seccomp", "sudo", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
+    "python3-seccomp", "nginx", "openssl", "sudo", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
 ]
 READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"
 # What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
@@ -458,6 +471,111 @@ def reader_sandbox() -> dict[str, str]:
             "SUVERYN_EXTRACT_WORK_DIR": str(VAR / "reader")}
 
 
+def chat_ui() -> None:
+    step("Chat UI")
+    v = VERSIONS["node"]
+    if not (NODE / "bin" / "node").exists():
+        archive = VAR / "downloads" / Path(v["url"]).name
+        download(v["url"], archive, v["sha256"])
+        with tarfile.open(archive) as t:
+            t.extractall(OPT, filter="data")
+        (OPT / Path(v["url"]).name.removesuffix(".tar.xz")).rename(NODE)
+    env = {"PATH": f"{NODE / 'bin'}:{os.environ['PATH']}", "npm_config_cache": str(VAR / "npm-cache"),
+           "npm_config_update_notifier": "false", "npm_config_fund": "false", "npm_config_audit": "false"}
+    src = CORE / "packages" / "chat-ui"
+    run("npm", "ci", "--no-progress", cwd=src, env=env, capture=True)  # package-lock.json: every package by hash
+    run("npm", "run", "build", cwd=src, env=env, capture=True)
+    shutil.rmtree(UI, ignore_errors=True)
+    shutil.copytree(src / "dist", UI)
+    run("chmod", "-R", "a+rX", UI)
+    note(f"built with Node {v['version']} into {UI}")
+
+
+def tls(host: str, cert: Path | None, key: Path | None) -> None:
+    step("TLS certificate")
+    TLS.mkdir(mode=0o755, exist_ok=True)
+    server_crt, server_key = TLS / "server.crt", TLS / "server.key"
+    if cert or key:
+        if not (cert and key):
+            fail("--tls-cert and --tls-key go together")
+        shutil.copyfile(cert, server_crt)
+        shutil.copyfile(key, server_key)
+        os.chmod(server_key, 0o600)
+        note(f"the office's certificate for {host}")
+        return
+    names = run("openssl", "x509", "-in", server_crt, "-noout", "-ext", "subjectAltName", capture=True) \
+        if server_crt.exists() else ""
+    if f"DNS:{host}" in names:
+        note(f"kept: the local CA's certificate for {host}")
+        return
+    # A local certificate authority made on this machine, its key never leaving it. Workstations trust
+    # it once (ca.crt); the machine itself trusts it too, so the gateway can reach Keycloak over https.
+    ca_key, ca_crt = TLS / "ca.key", TLS / "ca.crt"
+    if not ca_crt.exists():
+        run("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "3650",
+            "-subj", f"/CN=sūveryn local CA ({host})", "-keyout", ca_key, "-out", ca_crt,
+            "-addext", "basicConstraints=critical,CA:TRUE,pathlen:0", "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            capture=True)
+        os.chmod(ca_key, 0o600)
+    csr = TLS / "server.csr"
+    run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", f"/CN={host}",
+        "-keyout", server_key, "-out", csr, capture=True)
+    ext = TLS / "server.ext"
+    ext.write_text(f"subjectAltName=DNS:{host}\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+                   "extendedKeyUsage=serverAuth\n")
+    run("openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial", "-days", "397",
+        "-sha256", "-extfile", ext, "-out", server_crt, capture=True)
+    csr.unlink()
+    ext.unlink()
+    os.chmod(server_key, 0o600)
+    shutil.copyfile(ca_crt, LOCAL_CA)
+    run("update-ca-certificates", capture=True)
+    note(f"a local CA ({ca_crt}; give it to the office's workstations to trust) and a certificate for {host}, "
+         "valid 397 days")
+
+
+def reverse_proxy(host: str) -> None:
+    step("Reverse proxy (nginx)")
+    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
+        shutil.copyfile(REPO / "reverse-proxy" / name, Path("/etc/nginx/snippets") / name)
+    site = (REPO / "reverse-proxy" / "suveryn.conf.template").read_text().replace("@HOST@", host)
+    Path("/etc/nginx/sites-available/suveryn").write_text(site)
+    enabled = Path("/etc/nginx/sites-enabled/suveryn")
+    if not enabled.exists():
+        enabled.symlink_to("/etc/nginx/sites-available/suveryn")
+    Path("/etc/nginx/sites-enabled/default").unlink(missing_ok=True)
+    # The machine reaches its own public name locally (the gateway asks Keycloak through it).
+    hosts = Path("/etc/hosts").read_text()
+    if not re.search(rf"^127\.0\.0\.1\s.*\b{re.escape(host)}\b", hosts, re.M):
+        Path("/etc/hosts").write_text(hosts.rstrip("\n") + f"\n127.0.0.1 {host}  # suveryn-provision\n")
+    run("nginx", "-t", capture=True)
+    # Ubuntu's nginx.conf loads sites-enabled/; an image with its own nginx.conf may not (RunPod's
+    # doesn't), and the site would then silently not be served.
+    if f"server_name {host};" not in run("nginx", "-T", capture=True):
+        fail("nginx's main configuration doesn't load /etc/nginx/sites-enabled/; add "
+             "'include /etc/nginx/sites-enabled/*;' to its http block (Ubuntu's own nginx.conf has it)")
+    note(f"https://{host}/: the chat UI, the gateway (/v1, /auth, /health) and Keycloak (/idp); http redirects to https")
+
+
+def _nginx_running() -> bool:
+    """Whether /run/nginx.pid names a running nginx (a stale file can name an unrelated process)."""
+    try:
+        pid = Path("/run/nginx.pid").read_text().strip()
+        return Path(f"/proc/{pid}/comm").read_text().strip() == "nginx"
+    except OSError:
+        return False
+
+
+def start_nginx() -> None:
+    if systemd_running():
+        run("systemctl", "enable", "--now", "nginx")
+        run("systemctl", "reload", "nginx")
+    elif _nginx_running():
+        run("nginx", "-s", "reload")
+    else:
+        run("nginx")
+
+
 def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: list[dict]) -> None:
     step("Configuration and services")
     (ETC / "llama-presets.ini").write_text(presets(llms))
@@ -465,7 +583,9 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
     gateway = {"SUVERYN_HOST": "127.0.0.1", "SUVERYN_PORT": "8000", "SUVERYN_DATABASE_URL": db_url,
                "SUVERYN_WORK_DIR": str(VAR / "work"), "HF_HOME": str(HF_HOME),
                "SUVERYN_LLM_BASE_URL": "http://127.0.0.1:8080", "SUVERYN_LLM_DEFAULT_MODEL": default,
-               "SUVERYN_OCR_JOBS": str(min(8, os.cpu_count() or 8)), **oidc, **reader}
+               "SUVERYN_OCR_JOBS": str(min(8, os.cpu_count() or 8)),
+               # The system's CA bundle, which includes the local CA: the gateway reaches Keycloak at its public https URL.
+               "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt", **oidc, **reader}
     write_env(ETC / "gateway.env", gateway, "suveryn", header=(
         "# suveryn-core's gateway (0600, owner suveryn). Written by suveryn-provision.\n"
         "# The reader sandbox is required: never add SUVERYN_EXTRACT_UNSANDBOXED here.\n"))
@@ -498,7 +618,7 @@ def parse_unit(path: Path) -> dict:
 def services(action: str) -> None:
     if systemd_running():
         if action == "start":
-            run("systemctl", "start", "postgresql", *UNITS)
+            run("systemctl", "start", "postgresql", *UNITS, "nginx")
         elif action == "stop":
             run("systemctl", "stop", *reversed(UNITS))
         else:
@@ -534,6 +654,10 @@ def services(action: str) -> None:
                                  stdin=subprocess.DEVNULL, start_new_session=True)
             pidfile.write_text(str(p.pid))
             print(f"{name}: started (pid {p.pid}, log {LOGS / name}.log; test runner, not systemd)")
+    if action == "start":
+        start_nginx()
+    elif action == "stop" and Path("/run/nginx.pid").exists():
+        subprocess.run(["nginx", "-s", "quit"], check=False)
 
 
 # ---------------------------------------------------------------------------- verify
@@ -666,12 +790,145 @@ def verify(public_url: str | None) -> bool:
     parts = {k: (h.get(k) or {}).get("status") for k in ("backend", "documents", "history", "usage", "auth")}
     result("Gateway", s == 200 and parts["documents"] == "ready" and parts["history"] == "ready",
            f"/health {s}: {parts}")
-    if parts.get("auth") != "ready":
-        note("auth isn't ready: the gateway reaches Keycloak only through its public https URL, which needs the "
-             "appliance's reverse proxy (not part of this script yet)")
+    result("Sign-in configured", parts.get("auth") == "ready", f"the gateway reaches Keycloak through https: {parts.get('auth')}")
+    host = (public_url or gw.get("SUVERYN_PUBLIC_URL", "")).split("://", 1)[-1].rstrip("/")
+    for name, passed, detail in verify_proxy(host, kc.get("KC_BOOTSTRAP_ADMIN_PASSWORD", "")):
+        result(name, passed, detail)
     mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
     result("Network mode", mode != "unknown", mode)
     return ok
+
+
+UI_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; "
+          "manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+COMMON_HEADERS = {"strict-transport-security": "max-age=31536000", "x-content-type-options": "nosniff",
+                  "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin"}
+
+
+def tls_context(maximum: ssl.TLSVersion | None = None) -> ssl.SSLContext:
+    ctx = ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt")
+    if maximum:
+        ctx.minimum_version = ssl.TLSVersion.MINIMUM_SUPPORTED
+        ctx.maximum_version = maximum
+        ctx.set_ciphers("ALL:@SECLEVEL=0")
+    return ctx
+
+
+def tls_handshake(host: str, maximum: ssl.TLSVersion | None = None) -> str | None:
+    """The protocol a handshake ends with, or None if the server refuses it."""
+    try:
+        with socket.create_connection((host, 443), timeout=10) as raw, \
+                tls_context(maximum).wrap_socket(raw, server_hostname=host) as tls_sock:
+            return tls_sock.version()
+    except (ssl.SSLError, OSError):
+        return None
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def verify_proxy(host: str, admin_password: str) -> list[tuple[str, bool, str]]:
+    """The proxy as a browser on the office network sees it, then sign-in and an upload end to end."""
+    out = []
+    base = f"https://{host}"
+    ctx = tls_context()
+    # TLS: 1.2 and 1.3 accepted, 1.1 refused, the certificate valid for the name; http redirects.
+    modern, old = tls_handshake(host), tls_handshake(host, ssl.TLSVersion.TLSv1_1)
+    out.append(("TLS", modern in ("TLSv1.3", "TLSv1.2") and old is None,
+                f"handshake {modern}, certificate verified for {host}; TLS 1.1 refused: {old is None}"))
+    plain = urllib.request.build_opener(_NoRedirect)
+    try:
+        plain.open(f"http://{host}/", timeout=10)
+        redirect = None
+    except urllib.error.HTTPError as e:
+        redirect = (e.code, e.headers.get("Location"))
+    out.append(("HTTP to HTTPS", redirect == (301, f"{base}/"), f"http://{host}/ → {redirect}"))
+    # Headers on the UI, the API (also an error answer) and Keycloak's pages.
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _NoRedirect)
+
+    def get(path: str):
+        try:
+            r = opener.open(f"{base}{path}", timeout=20)
+            return r.status, {k.lower(): v for k, v in r.headers.items()}
+        except urllib.error.HTTPError as e:
+            return e.code, {k.lower(): v for k, v in e.headers.items()}
+
+    problems = []
+    for path, expect_status, csp in (("/", 200, UI_CSP), ("/health", 200, UI_CSP), ("/v1/documents", 401, UI_CSP),
+                                     ("/idp/realms/suveryn/.well-known/openid-configuration", 200, None)):
+        status, h = get(path)
+        if status != expect_status:
+            problems.append(f"{path}: status {status}")
+        for k, v in COMMON_HEADERS.items():
+            if h.get(k) != v:
+                problems.append(f"{path}: {k} {h.get(k)!r}")
+        if csp and h.get("content-security-policy") != csp:
+            problems.append(f"{path}: CSP {h.get('content-security-policy')!r}")
+        if "server" in h and "/" in h["server"]:
+            problems.append(f"{path}: server version shown ({h['server']})")
+    out.append(("Security headers", not problems,
+                "HSTS, nosniff, no-referrer, COOP on the UI, the API and Keycloak; the UI's strict CSP on the UI and API; "
+                "no server version" if not problems else "; ".join(problems)))
+    docs = [get(path)[0] for path in ("/docs", "/redoc", "/openapi.json")]
+    out.append(("API docs off", docs == [404, 404, 404], f"/docs, /redoc, /openapi.json: {docs}"))
+    out += [verify_sign_in(base, ctx, admin_password)]
+    return out
+
+
+def verify_sign_in(base: str, ctx: ssl.SSLContext, admin_password: str) -> tuple[str, bool, str]:
+    """Sign in through the proxy as a temporary user, upload a fictional PDF over HTTPS, read it, delete it."""
+    status, body = http("http://127.0.0.1:8180/idp/realms/master/protocol/openid-connect/token", data=(
+        "grant_type=password&client_id=admin-cli&username=suveryn-setup&password=" + urllib.parse.quote(admin_password)).encode())
+    if status != 200:
+        return "Sign-in and upload over HTTPS", False, f"no admin token ({status})"
+    auth = {"Authorization": f"Bearer {json.loads(body)['access_token']}", "Content-Type": "application/json"}
+    users = "http://127.0.0.1:8180/idp/admin/realms/suveryn/users"
+    name, password = f"verify-{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(18)
+    http(users, auth, json.dumps({"username": name, "enabled": True, "email": f"{name}@provision.invalid",
+                                  "emailVerified": True, "firstName": "Provisioning", "lastName": "Check",
+                                  "credentials": [{"type": "password", "value": password, "temporary": False}]}).encode())
+    status, body = http(f"{users}?username={name}&exact=true", auth)
+    user_id = (json.loads(body) or [{}])[0].get("id") if status == 200 else None
+    jar = CookieJar()
+    browser = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), urllib.request.HTTPCookieProcessor(jar))
+    origin = {"Origin": base}
+    steps = []
+    try:
+        page = browser.open(f"{base}/auth/login?return_to=/", timeout=30).read().decode()
+        action = re.search(r'<form[^>]*id="kc-form-login"[^>]*action="([^"]+)"', page) or \
+            re.search(r'<form[^>]*action="([^"]+)"[^>]*id="kc-form-login"', page)
+        steps.append(f"login page {'found' if action else 'not found'}")
+        landed = browser.open(unescape(action.group(1)), data=urllib.parse.urlencode(
+            {"username": name, "password": password, "credentialId": ""}).encode(), timeout=30)
+        me = json.loads(browser.open(f"{base}/auth/me", timeout=30).read())
+        steps.append(f"signed in as {me.get('username')}, back at {urllib.parse.urlsplit(landed.url).path}")
+        boundary = uuid.uuid4().hex
+        form = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"provisioning-check.pdf\"\r\n"
+                f"Content-Type: application/pdf\r\n\r\n").encode() + test_pdf() + f"\r\n--{boundary}--\r\n".encode()
+        job = json.loads(browser.open(urllib.request.Request(f"{base}/v1/documents", data=form, headers={
+            **origin, "Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=60).read())
+        for _ in range(300):
+            job = json.loads(browser.open(f"{base}/v1/documents/jobs/{job['id']}", timeout=30).read())
+            if job["status"] not in ("queued", "processing"):
+                break
+            time.sleep(1)
+        steps.append(f"uploaded over HTTPS: {job['status']}, {job.get('pages')} page(s)")
+        if job.get("document_id"):
+            browser.open(urllib.request.Request(f"{base}/v1/documents/{job['document_id']}?conversations=delete",
+                                                headers=origin, method="DELETE"), timeout=30)
+            steps.append("deleted")
+        browser.open(urllib.request.Request(f"{base}/auth/logout", headers=origin, method="POST"), timeout=30)
+        ok = me.get("username") == name and job["status"] == "ready" and job.get("pages") == 1
+    except (urllib.error.URLError, OSError, ValueError, KeyError, AttributeError) as e:
+        steps.append(f"failed: {type(e).__name__} {getattr(e, 'code', '')} {str(e)[:120]}")
+        ok = False
+    finally:
+        if user_id:
+            urllib.request.urlopen(urllib.request.Request(f"{users}/{user_id}", headers=auth, method="DELETE"), timeout=10)
+            steps.append("test user removed")
+    return "Sign-in and upload over HTTPS", ok, "; ".join(steps)
 
 
 # ---------------------------------------------------------------------------- main
@@ -685,6 +942,8 @@ def main() -> None:
     i.add_argument("--site", choices=["on-premise", "datacenter", "test"],
                    help="where this machine runs; required with a GeForce card")
     i.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
+    i.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
+    i.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
     sub.add_parser("verify", help="check every service, end to end")
     s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
     s.add_argument("action", choices=["start", "stop", "status"])
@@ -713,6 +972,10 @@ def main() -> None:
     llms = llm_models(a.models_from, a.network_mode or "connected")
     oidc = keycloak(a.public_url, keycloak_pw)
     reader = reader_sandbox()
+    chat_ui()
+    host = a.public_url.split("://", 1)[1].rstrip("/")
+    tls(host, a.tls_cert, a.tls_key)
+    reverse_proxy(host)
     configure(db_url, oidc, reader, llms)
     step("Starting the services")
     services("start")
