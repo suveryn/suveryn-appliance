@@ -36,8 +36,9 @@ variable "build_password" {
   description = "the temporary build user's password; the user is deleted before the image is finished"
 }
 variable "output_dir" {
-  type    = string
-  default = "output"
+  type        = string
+  default     = "/var/tmp/suveryn-image"
+  description = "where the image is written: outside this repository, which is uploaded into the build"
 }
 
 locals {
@@ -92,11 +93,15 @@ source "qemu" "suveryn" {
 build {
   sources = ["source.qemu.suveryn"]
 
-  # This repository, as it is: the provisioning script, the reverse proxy, the reader sandbox, the
-  # network-mode tool, the Keycloak theme and realm, and these image scripts.
+  # This repository, as one archive (without .git and build output): the provisioning script, the
+  # reverse proxy, the reader sandbox, the network-mode tool, the Keycloak theme and realm, and these
+  # image scripts. build.sh unpacks it into /opt/suveryn/appliance.
+  provisioner "shell-local" {
+    inline = ["tar -C '${local.appliance}' --exclude=.git --exclude='./image/output' --exclude='./keycloak/theme/build' --exclude='__pycache__' -czf '${var.output_dir}-appliance.tar.gz' ."]
+  }
   provisioner "file" {
-    source      = "${local.appliance}/"
-    destination = "/tmp/suveryn-appliance"
+    source      = "${var.output_dir}-appliance.tar.gz"
+    destination = "/tmp/suveryn-appliance.tar.gz"
   }
 
   provisioner "shell" {
