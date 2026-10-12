@@ -105,3 +105,13 @@ def test_the_reader_gets_its_variables_through_env_keep_not_preserve_env():
     assert "--preserve-env" not in p.READER_WRAPPER and "SETENV" not in p.READER_WRAPPER
     needed = {"HF_HOME", "SUVERYN_EXTRACT_WORK_DIR", "SUVERYN_OCR_JOBS"}  # suveryn-core's child_env keeps these
     assert needed <= set(p.READER_ENV.split())
+
+
+def test_a_failure_shows_the_lines_that_name_what_failed():
+    """apt's last 600 characters left out which package's set-up failed (found in an image build)."""
+    out = "\n".join(["Setting up foo (1.0) ..."] * 200 + ["dpkg: error processing package postgresql-16 (--configure):",
+                     " installed post-installation script subprocess returned error exit status 1",
+                     "Errors were encountered while processing:", " postgresql-16"] + ["noise"] * 50)
+    shown = p.error_lines(out)
+    assert "dpkg: error processing package postgresql-16" in shown and "Errors were encountered" in shown
+    assert p.error_lines("all fine, nothing to see") == "all fine, nothing to see"
