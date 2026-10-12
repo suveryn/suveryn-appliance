@@ -12,6 +12,25 @@ systemctl disable --now motd-news.timer 2>/dev/null || true
 rm -f /etc/nginx/sites-enabled/default
 systemctl disable nginx >/dev/null 2>&1 || true
 
+echo "== Network: DHCP on every Ethernet port, whatever the machine names it"
+# The installer wrote the build VM's interface (by name/MAC); a flashed server has other ones.
+rm -f /etc/netplan/*.yaml
+cat > /etc/netplan/01-suveryn.yaml <<'NETPLAN'
+# sūveryn appliance: DHCP (IPv4 and IPv6) on every Ethernet port. A fixed address is set by the
+# office's DHCP server (a reservation), so the image needs no per-site network settings.
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    all-ethernet:
+      match:
+        name: "en*"
+      dhcp4: true
+      dhcp6: true
+      optional: true
+NETPLAN
+chmod 600 /etc/netplan/01-suveryn.yaml
+
 echo "== Firewall (ufw): nothing in until first boot sets the office's rules"
 ufw --force reset >/dev/null
 ufw default deny incoming >/dev/null
