@@ -1,0 +1,17 @@
+# llama-server in router mode: the installed models, one in GPU memory at a time (a 24 GB card).
+[Unit]
+Description=sūveryn model server (llama-server)
+After=network.target
+
+[Service]
+User=suveryn-llm
+Group=suveryn-llm
+ExecStart=/opt/suveryn/llama.cpp/build/bin/llama-server --models-preset /etc/suveryn/llama-presets.ini --models-max 1 --host 127.0.0.1 --port 8080
+Restart=on-failure
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
