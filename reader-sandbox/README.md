@@ -41,12 +41,19 @@ SUVERYN_EXTRACT_WORK_DIR=/var/lib/suveryn/reader      # owner suveryn-reader, 07
 ```
 
 A gateway running as root (the dev pod) is enough as is: the wrapper switches to `suveryn-reader`.
-A gateway running as its own user needs sudo to start the wrapper as the reader. With the sudoers line
-below, set `SUVERYN_EXTRACT_WRAPPER="sudo -n -u suveryn-reader --preserve-env=HF_HOME,SUVERYN_EXTRACT_WORK_DIR,SUVERYN_OCR_JOBS /opt/suveryn/bin/suveryn-reader-sandbox"`:
+A gateway running as its own user needs sudo to start the wrapper as the reader. With the sudoers lines
+below, set `SUVERYN_EXTRACT_WRAPPER="sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"`
+([`provision/suveryn-provision`](../provision/README.md) does both):
 
 ```
+Defaults:<gateway-user> !requiretty
+Defaults>suveryn-reader env_keep += "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
 <gateway-user> ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *
 ```
+
+`env_keep` keeps exactly the variables the reader needs, for that one target user. sudo refuses
+`--preserve-env=…` without the `SETENV` tag, and `SETENV` would let the gateway pass the reader any
+variable, so neither is used.
 
 This sudo route is not tested yet: the dev pod's gateway runs as root. What is tested is the wrapper started directly as `suveryn-reader` (`tests/`), which is what sudo does; whether sudo passes every variable the reader needs (CUDA, model cache) must be checked on the appliance image.
 

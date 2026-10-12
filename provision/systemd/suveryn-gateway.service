@@ -1,0 +1,19 @@
+# suveryn-core's gateway. Its PDF reader starts through sudo as suveryn-reader (sudoers.d/suveryn-reader),
+# so NoNewPrivileges must stay off here; the reader sandbox sets no_new_privs itself.
+[Unit]
+Description=sūveryn gateway (suveryn-core)
+After=network.target postgresql.service suveryn-llm.service keycloak.service
+Wants=postgresql.service suveryn-llm.service keycloak.service
+
+[Service]
+User=suveryn
+Group=suveryn
+EnvironmentFile=/etc/suveryn/gateway.env
+EnvironmentFile=-/etc/suveryn/network-mode.env
+WorkingDirectory=/opt/suveryn/core
+ExecStart=/opt/suveryn/core/.venv/bin/suveryn-gateway
+Restart=on-failure
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
