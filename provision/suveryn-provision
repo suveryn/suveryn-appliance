@@ -97,7 +97,10 @@ PACKAGES = [
     "ufw", "unattended-upgrades",
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
-    "python3-seccomp", "nginx", "openssl", "sudo", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
+    "python3-seccomp", "nginx", "openssl", "sudo",
+    # Libraries suveryn-core's Python packages load (OpenCV in Docling) that Ubuntu's minimal installation
+    # lacks: found by comparing every library they link against with the minimal image's package list.
+    "libgl1", "libsm6", "libice6", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
 ]
 READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"
 # What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
