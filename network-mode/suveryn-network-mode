@@ -1,0 +1,96 @@
+#!/usr/bin/python3
+"""Record and read the installation's network mode (development context, open decision 7).
+
+    suveryn-network-mode set air-gapped     # at provisioning, as root
+    suveryn-network-mode get                # prints connected, outbound-blocked, air-gapped or unknown
+
+One value, chosen at provisioning: ``connected``, ``outbound-blocked`` or ``air-gapped``. It lives in
+one file, the only source of it:
+
+    /etc/suveryn/network-mode.env           (0644, owner root; SUVERYN_NETWORK_MODE_FILE overrides the path)
+
+    SUVERYN_NETWORK_MODE=air-gapped
+
+A component reads it either as the environment variable ``SUVERYN_NETWORK_MODE``, when its service
+loads the file (systemd ``EnvironmentFile=``; it is also valid shell), or from the file itself. No
+network call or database is involved. The mode is what the installer declared, not something
+measured: setting ``air-gapped`` on a machine that can reach the internet makes every claim built on
+it false. A missing file, a value other than the three, or the key given twice is **unknown**, and a
+component must then take the safe reading for its purpose: never claim to be air-gapped, and never
+rely on outbound access either.
+
+Python 3 standard library only, so it runs on a fresh appliance before anything else is installed.
+"""
+
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+MODES = ("connected", "outbound-blocked", "air-gapped")
+KEY = "SUVERYN_NETWORK_MODE"
+DEFAULT_FILE = Path("/etc/suveryn/network-mode.env")
+HEADER = ("# The installation's network mode, written by suveryn-network-mode at provisioning.\n"
+          "# One of: connected, outbound-blocked, air-gapped. Read by any component as the environment\n"
+          "# variable of the same name (systemd EnvironmentFile=) or from this file. Change it with\n"
+          "# suveryn-network-mode set <mode>, not by hand. See suveryn-appliance network-mode/README.md.\n")
+
+
+def mode_file() -> Path:
+    return Path(os.environ.get("SUVERYN_NETWORK_MODE_FILE") or DEFAULT_FILE)
+
+
+def read(path: Path) -> str:
+    """The recorded mode, or "unknown" if the file is missing, unreadable or not exactly one valid value."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return "unknown"
+    values = [line.split("=", 1)[1].strip() for line in lines
+              if not line.lstrip().startswith("#") and line.split("=", 1)[0].strip() == KEY and "=" in line]
+    return values[0] if len(values) == 1 and values[0] in MODES else "unknown"
+
+
+def write(path: Path, mode: str) -> None:
+    """Write the mode atomically (a reader never sees half a file), 0644."""
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".network-mode.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(f"{HEADER}{KEY}={mode}\n")
+            out.flush()
+            os.fsync(out.fileno())
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def main(argv: list[str]) -> int:
+    path = mode_file()
+    if argv[:1] == ["get"] and len(argv) == 1:
+        mode = read(path)
+        print(mode)
+        if mode == "unknown":
+            print(f"suveryn-network-mode: no valid mode in {path}; set one with: suveryn-network-mode set <mode>",
+                  file=sys.stderr)
+            return 1
+        return 0
+    if argv[:1] == ["set"] and len(argv) == 2:
+        if argv[1] not in MODES:
+            print(f"suveryn-network-mode: {argv[1]!r} is not a mode; use one of: {', '.join(MODES)}", file=sys.stderr)
+            return 2
+        try:
+            write(path, argv[1])
+        except OSError as e:
+            print(f"suveryn-network-mode: can't write {path}: {e.strerror} (run as root at provisioning)", file=sys.stderr)
+            return 1
+        print(f"network mode: {argv[1]} ({path})")
+        return 0
+    print("usage: suveryn-network-mode get | set {connected|outbound-blocked|air-gapped}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
