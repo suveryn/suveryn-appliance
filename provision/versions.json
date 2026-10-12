@@ -1,0 +1,22 @@
+{
+  "comment": "What suveryn-provision installs, pinned. Each download is checked against its sha256 (Keycloak, uv) or its commit (llama.cpp, suveryn-core). Model files are pinned by suveryn-core's models/manifest.json.",
+  "keycloak": {
+    "version": "26.8.0",
+    "url": "https://github.com/keycloak/keycloak/releases/download/26.8.0/keycloak-26.8.0.tar.gz",
+    "sha256": "9e41da899f838a58cd510fc98ed4f7cadc715aed5683e42aca20a0c9a2a3980a"
+  },
+  "llama_cpp": {
+    "repo": "https://github.com/ggml-org/llama.cpp",
+    "tag": "b11223",
+    "commit": "4da6337767f973e2b4d0797e5b323d77d8565e4a"
+  },
+  "uv": {
+    "version": "0.12.19",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.12.19/uv-x86_64-unknown-linux-gnu.tar.gz",
+    "sha256": "23bf5552d220e0842b65c862097b2ebaeba0064b74eda5e565e77fd25969d8c8"
+  },
+  "suveryn_core": {
+    "repo": "https://github.com/suveryn/suveryn-core",
+    "commit": "9b34d1b78a2f36901e67bc5d661f569848d6be58"
+  }
+}
