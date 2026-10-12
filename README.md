@@ -7,5 +7,6 @@ OS image build, hardening and first-boot provisioning for sūveryn appliances, i
 | [`keycloak/theme`](keycloak/theme/README.md) | The sūveryn Keycloak theme: login pages, account console and emails |
 | [`keycloak/realm`](keycloak/realm/README.md) | The production realm, built from suveryn-core's development realm, and Keycloak's production configuration |
 | [`reader-sandbox`](reader-sandbox/README.md) | Runs suveryn-core's PDF reader as its own user, without network, under seccomp |
+| [`network-mode`](network-mode/README.md) | The installation's network mode (`connected`, `outbound-blocked` or `air-gapped`), set at provisioning in `/etc/suveryn/network-mode.env` and readable by any component |
 
 Related: [suveryn-docs](https://github.com/suveryn/suveryn-docs) (installation and administration), [suveryn-brand](https://github.com/suveryn/suveryn-brand) (the mark, fonts and tokens; the mark is not covered by this repository's licence and is fetched at build time).

@@ -50,7 +50,7 @@ From the reviewed login mockup and the Sūveryn Design System:
 
 The badge is the website hero's badge from [suveryn-website](https://github.com/suveryn/suveryn-website) `index.html`: the Lucide wifi-off icon (9×9, stroke-width 2.4), 10px/600 teal text, the teal wash and border, 20px radius and `3px 8px` padding, with text and icon in the brand's corrected teal-ink (`#007F78`; the website's `#0F8A82` measures 4.1:1 on the badge's wash).
 
-It states a fact, so it is **off** unless the theme property `suverynShowAirGappedBadge` is `true` (`src/suveryn/login/theme.properties`). **Nothing sets it yet.** suveryn-appliance has no setting that records an installation's network mode (connected, outbound-blocked or air-gapped); this is open item #10 in the development context. Once provisioning has that setting, provisioning should set this property from it. Until then the badge never shows. Never set it to `true` by hand on an installation that can reach the internet.
+It states a fact, so it is **off** unless the theme property `suverynShowAirGappedBadge` is `true` (`src/suveryn/login/theme.properties`). **Nothing sets it yet.** The installation's network mode is now recorded at provisioning in `/etc/suveryn/network-mode.env` ([`network-mode`](../../network-mode/README.md)); the next step is to set this property from it, only when the mode is `air-gapped`. Until then the badge never shows. Never set it to `true` by hand on an installation that can reach the internet.
 
 ## Languages
 
