@@ -1,5 +1,5 @@
 {
-  "comment": "What suveryn-provision installs, pinned. Each download is checked against its sha256 (Keycloak, uv) or its commit (llama.cpp, suveryn-core). Model files are pinned by suveryn-core's models/manifest.json.",
+  "comment": "What suveryn-provision installs, pinned. Each download is checked against its sha256 (Keycloak, uv, Node) or its commit (llama.cpp, suveryn-core). Model files are pinned by suveryn-core's models/manifest.json.",
   "keycloak": {
     "version": "26.8.0",
     "url": "https://github.com/keycloak/keycloak/releases/download/26.8.0/keycloak-26.8.0.tar.gz",
@@ -18,5 +18,11 @@
   "suveryn_core": {
     "repo": "https://github.com/suveryn/suveryn-core",
     "commit": "9b34d1b78a2f36901e67bc5d661f569848d6be58"
+  },
+  "node": {
+    "version": "22.23.3",
+    "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz",
+    "sha256": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de",
+    "used_for": "building suveryn-core's chat UI (Vite 8 needs Node 20.19 or later; Ubuntu 24.04 has 18)"
   }
 }
