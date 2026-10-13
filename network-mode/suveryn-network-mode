@@ -1,95 +1,399 @@
 #!/usr/bin/python3
-"""Record and read the installation's network mode (development context, open decision 7).
+"""The installation's network mode and what it lets out (development context §5, open decision 7; tracker #38).
 
-    suveryn-network-mode set air-gapped     # at provisioning, as root
-    suveryn-network-mode get                # prints connected, outbound-blocked, air-gapped or unknown
+    suveryn-network-mode set connected [--outbound approved|all]   # as root; approved is the default
+    suveryn-network-mode set air-gapped
+    suveryn-network-mode get                 # prints connected, air-gapped or unknown
+    suveryn-network-mode get --outbound      # prints approved, all, none or unknown
+    suveryn-network-mode show                # the mode, the outgoing policy and the approved destinations
+    suveryn-network-mode allow <domain>      # add to the office's own approved destinations (as root)
+    suveryn-network-mode disallow <domain>
+    suveryn-network-mode apply               # load the firewall and DNS rules for the mode (as root)
+    suveryn-network-mode check [--json]      # the outgoing-traffic check: does the appliance get out?
 
-One value, chosen at provisioning: ``connected``, ``outbound-blocked`` or ``air-gapped``. It lives in
-one file, the only source of it:
+Two modes:
 
-    /etc/suveryn/network-mode.env           (0644, owner root; SUVERYN_NETWORK_MODE_FILE overrides the path)
+- ``connected``: the appliance may reach the internet. Either only **approved destinations**
+  (``--outbound approved``, the default) or **all outgoing traffic** (``--outbound all``, for an
+  office whose own firewall decides).
+- ``air-gapped``: no outgoing connections beyond the office's own network.
 
-    SUVERYN_NETWORK_MODE=air-gapped
+The mode lives in one file, the only source of it, which any component may read without a network
+call or a database:
 
-A component reads it either as the environment variable ``SUVERYN_NETWORK_MODE``, when its service
-loads the file (systemd ``EnvironmentFile=``; it is also valid shell), or from the file itself. No
-network call or database is involved. The mode is what the installer declared, not something
-measured: setting ``air-gapped`` on a machine that can reach the internet makes every claim built on
-it false. A missing file, a value other than the three, or the key given twice is **unknown**, and a
-component must then take the safe reading for its purpose: never claim to be air-gapped, and never
-rely on outbound access either.
+    /etc/suveryn/network-mode.env            (0644, owner root; SUVERYN_NETWORK_MODE_FILE overrides the path)
 
-Python 3 standard library only, so it runs on a fresh appliance before anything else is installed.
+    SUVERYN_NETWORK_MODE=connected
+    SUVERYN_OUTBOUND=approved
+
+The mode is declared, not measured. A missing file, any other value, a key given twice, or an
+outgoing policy that doesn't fit the mode is **unknown**: a component then never claims to be
+air-gapped and never relies on outbound access, and the firewall lets nothing out but the office's
+own network.
+
+Approved destinations are domain names (a name also covers its subdomains). The appliance's own
+list (sūveryn updates and models, Ubuntu's security updates, time) ships with the image in
+``builtin-destinations``; the office's additions (connectors it enables) are in
+``/etc/suveryn/approved-destinations``. The appliance enforces them itself:
+
+- a local DNS resolver (dnsmasq, ``127.0.0.1``) answers every lookup through the office's DNS, and
+  puts the addresses of approved names into two nftables sets as it answers;
+- an nftables table, ``inet suveryn_egress``, lets out only: loopback, the office's own (private)
+  network, the resolver's own DNS queries, and web (80, 443) and time (123) traffic to addresses in
+  those sets. Everything else is refused at once.
+
+So a program that connects to an address it didn't look up through the resolver, or to an approved
+name's address after the name was dropped, is refused. With ``--outbound all`` the table isn't
+loaded. Python 3 standard library only, so it runs on a fresh appliance before anything else is
+installed.
 """
 
+import json
 import os
+import re
+import shutil
+import socket
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-MODES = ("connected", "outbound-blocked", "air-gapped")
-KEY = "SUVERYN_NETWORK_MODE"
-DEFAULT_FILE = Path("/etc/suveryn/network-mode.env")
-HEADER = ("# The installation's network mode, written by suveryn-network-mode at provisioning.\n"
-          "# One of: connected, outbound-blocked, air-gapped. Read by any component as the environment\n"
-          "# variable of the same name (systemd EnvironmentFile=) or from this file. Change it with\n"
-          "# suveryn-network-mode set <mode>, not by hand. See suveryn-appliance network-mode/README.md.\n")
+MODES = ("connected", "air-gapped")
+OUTBOUND = {"connected": ("approved", "all"), "air-gapped": ("none",)}
+KEY, OUT_KEY = "SUVERYN_NETWORK_MODE", "SUVERYN_OUTBOUND"
+HERE = Path(__file__).resolve().parent
+
+# Paths, each overridable for tests.
+ENV = os.environ.get
+MODE_FILE = Path(ENV("SUVERYN_NETWORK_MODE_FILE") or "/etc/suveryn/network-mode.env")
+APPROVED_FILE = Path(ENV("SUVERYN_APPROVED_FILE") or "/etc/suveryn/approved-destinations")
+BUILTIN_FILE = Path(ENV("SUVERYN_BUILTIN_DESTINATIONS") or HERE / "builtin-destinations")
+DNSMASQ_CONF = Path(ENV("SUVERYN_DNSMASQ_CONF") or "/etc/suveryn/dnsmasq.conf")
+UPSTREAM_RESOLV = ENV("SUVERYN_UPSTREAM_RESOLV") or "/run/systemd/resolve/resolv.conf"
+DNS_USER = ENV("SUVERYN_DNS_USER") or "suveryn-dns"
+
+TABLE = "suveryn_egress"
+# The office's own network: what stays reachable in every mode (LDAP/AD, DNS, NTP, a local mirror).
+PRIVATE_V4 = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"]
+PRIVATE_V6 = ["fc00::/7", "fe80::/10"]
+APPROVED_TCP, APPROVED_UDP = (80, 443), (123,)
+# Entries outlive dnsmasq's cache (max-cache-ttl), so a cached answer always has its address in the set.
+SET_TIMEOUT, MAX_CACHE_TTL = "1h", 300
+
+# The check: addresses that must never be approved. Reaching any of them means traffic gets out.
+CHECK_TARGETS = [t for t in (ENV("SUVERYN_CHECK_TARGETS") or
+                             "example.com:443 1.1.1.1:443 9.9.9.9:443 [2606:4700:4700::1111]:443").split()]
+CHECK_TIMEOUT = float(ENV("SUVERYN_CHECK_TIMEOUT") or 3)
+
+HEADER = ("# The installation's network mode, written by suveryn-network-mode. Read by any component as\n"
+          "# environment variables (systemd EnvironmentFile=) or from this file. Change it with\n"
+          "# suveryn-network-mode set ..., not by hand. See suveryn-appliance network-mode/README.md.\n")
+DOMAIN = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
-def mode_file() -> Path:
-    return Path(os.environ.get("SUVERYN_NETWORK_MODE_FILE") or DEFAULT_FILE)
+class Usage(Exception):
+    pass
 
 
-def read(path: Path) -> str:
-    """The recorded mode, or "unknown" if the file is missing, unreadable or not exactly one valid value."""
+# ---------------------------------------------------------------------------- the mode file
+def read(path: Path = MODE_FILE) -> tuple[str, str]:
+    """(mode, outbound), each "unknown" unless the file holds exactly one valid, consistent value."""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        return "unknown"
-    values = [line.split("=", 1)[1].strip() for line in lines
-              if not line.lstrip().startswith("#") and line.split("=", 1)[0].strip() == KEY and "=" in line]
-    return values[0] if len(values) == 1 and values[0] in MODES else "unknown"
+        return "unknown", "unknown"
+    values: dict[str, list[str]] = {}
+    for line in lines:
+        if line.lstrip().startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        values.setdefault(k.strip(), []).append(v.strip())
+    modes, outs = values.get(KEY, []), values.get(OUT_KEY, [])
+    if len(modes) != 1 or modes[0] not in MODES or len(outs) > 1:
+        return "unknown", "unknown"
+    mode = modes[0]
+    # A connected file without an outgoing policy reads as the strict one.
+    out = outs[0] if outs else ("approved" if mode == "connected" else "none")
+    return (mode, out) if out in OUTBOUND[mode] else ("unknown", "unknown")
 
 
-def write(path: Path, mode: str) -> None:
-    """Write the mode atomically (a reader never sees half a file), 0644."""
+def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
+    """Write a file atomically (a reader never sees half of it)."""
     path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".network-mode.")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write(f"{HEADER}{KEY}={mode}\n")
+            out.write(text)
             out.flush()
             os.fsync(out.fileno())
-        os.chmod(tmp, 0o644)
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
 
 
+def write(mode: str, outbound: str, path: Path = MODE_FILE) -> None:
+    write_atomic(path, f"{HEADER}{KEY}={mode}\n{OUT_KEY}={outbound}\n")
+
+
+# ---------------------------------------------------------------------------- approved destinations
+def domains(path: Path) -> list[str]:
+    """The domains in a list file: one per line, # comments, blank lines ignored; invalid lines skipped."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return []
+    out = []
+    for line in lines:
+        d = line.split("#", 1)[0].strip().lower().rstrip(".")
+        if d and DOMAIN.match(d) and d not in out:
+            out.append(d)
+    return out
+
+
+def approved() -> tuple[list[str], list[str]]:
+    """(built-in, the office's own), the office's without what is built in already."""
+    builtin = domains(BUILTIN_FILE)
+    return builtin, [d for d in domains(APPROVED_FILE) if d not in builtin]
+
+
+def check_hosts() -> list[str]:
+    return [t.rsplit(":", 1)[0].strip("[]") for t in CHECK_TARGETS]
+
+
+def covered(name: str, approved_domains: list[str]) -> bool:
+    return any(name == d or name.endswith("." + d) for d in approved_domains)
+
+
+def edit_approved(domain: str, add: bool) -> str:
+    domain = domain.strip().lower().rstrip(".")
+    if not DOMAIN.match(domain):
+        raise Usage(f"{domain!r} is not a domain name (e.g. portal.example.com)")
+    if add and any(covered(h, [domain]) or covered(domain, [h]) for h in check_hosts()):
+        raise Usage(f"{domain} is used by the outgoing-traffic check as an address that must stay unreachable")
+    builtin, own = approved()
+    if not add and domain in builtin:
+        raise Usage(f"{domain} is one of the appliance's own destinations; it can't be removed")
+    own = [d for d in own if d != domain] + ([domain] if add and domain not in builtin else [])
+    write_atomic(APPROVED_FILE, "# The office's own approved destinations (connectors), one domain per line.\n"
+                 "# A domain also covers its subdomains. Change it with suveryn-network-mode allow|disallow.\n"
+                 + "".join(f"{d}\n" for d in own))
+    return domain
+
+
+# ---------------------------------------------------------------------------- firewall and resolver
+def nft_ruleset(mode: str, outbound: str) -> str:
+    """The egress table for the mode. Empty for outbound "all": nothing is limited."""
+    if outbound == "all":
+        return f"table inet {TABLE}\ndelete table inet {TABLE}\n"
+    v4, v6 = ", ".join(PRIVATE_V4), ", ".join(PRIVATE_V6)
+    lines = [
+        f"table inet {TABLE}",
+        f"delete table inet {TABLE}",
+        f"table inet {TABLE} {{",
+        f"  set approved4 {{ type ipv4_addr; flags timeout; timeout {SET_TIMEOUT}; }}",
+        f"  set approved6 {{ type ipv6_addr; flags timeout; timeout {SET_TIMEOUT}; }}",
+        "  chain output {",
+        "    type filter hook output priority filter; policy accept;",
+        "    oif lo accept",
+        "    ct state established,related accept",
+        f"    ip daddr {{ {v4} }} accept",
+        f"    ip6 daddr {{ {v6} }} accept",
+        f'    meta skuid "{DNS_USER}" meta l4proto {{ tcp, udp }} th dport 53 accept',
+    ]
+    if mode == "connected" and outbound == "approved":
+        tcp, udp = ", ".join(map(str, APPROVED_TCP)), ", ".join(map(str, APPROVED_UDP))
+        lines += [f"    ip daddr @approved4 tcp dport {{ {tcp} }} accept",
+                  f"    ip6 daddr @approved6 tcp dport {{ {tcp} }} accept",
+                  f"    ip daddr @approved4 udp dport {{ {udp} }} accept",
+                  f"    ip6 daddr @approved6 udp dport {{ {udp} }} accept"]
+    lines += ['    limit rate 10/minute log prefix "suveryn-egress refused: " level info',
+              "    reject with icmpx admin-prohibited",
+              "  }", "}", ""]
+    return "\n".join(lines)
+
+
+def dnsmasq_conf(mode: str, outbound: str, approved_domains: list[str]) -> str:
+    """The local resolver: every name through the office's DNS; approved names also fill the sets."""
+    lines = ["# Written by suveryn-network-mode apply. The appliance's own resolver (network-mode/README.md).",
+             "listen-address=127.0.0.1", "bind-interfaces", "port=53", "no-hosts",
+             f"resolv-file={UPSTREAM_RESOLV}", f"user={DNS_USER}", "domain-needed",
+             f"max-cache-ttl={MAX_CACHE_TTL}", "log-facility=-", "pid-file="]
+    if mode == "connected" and outbound == "approved":
+        lines += [f"nftset=/{d}/4#inet#{TABLE}#approved4,6#inet#{TABLE}#approved6" for d in approved_domains]
+    return "\n".join(lines) + "\n"
+
+
+def apply() -> str:
+    mode, outbound = read()
+    if mode == "unknown":
+        # Fail closed: nothing out but the office's own network until a valid mode is set.
+        mode, outbound = "air-gapped", "none"
+        note = "no valid mode recorded: letting nothing out but the office's own network"
+    else:
+        note = describe(mode, outbound)
+    builtin, own = approved()
+    write_atomic(DNSMASQ_CONF, dnsmasq_conf(mode, outbound, builtin + own))
+    ruleset = nft_ruleset(mode, outbound)
+    subprocess.run(["nft", "-f", "-"], input=ruleset, text=True, check=True)
+    if ENV("SUVERYN_DNS_RELOAD", "1") == "1" and shutil.which("systemctl"):
+        # The resolver rereads its configuration only on a restart; the unit may not exist yet in a build.
+        subprocess.run(["systemctl", "try-restart", "suveryn-dns.service"], check=False)
+    return note
+
+
+def describe(mode: str, outbound: str) -> str:
+    return {("connected", "approved"): "connected: approved destinations only",
+            ("connected", "all"): "connected: all outgoing traffic allowed",
+            ("air-gapped", "none"): "air-gapped: nothing out but the office's own network"}.get(
+        (mode, outbound), "unknown")
+
+
+# ---------------------------------------------------------------------------- the outgoing-traffic check
+def table_matches(mode: str, outbound: str) -> bool:
+    """Whether the loaded egress table is the one this mode needs (none at all for "all")."""
+    r = subprocess.run(["nft", "-j", "list", "table", "inet", TABLE], capture_output=True, text=True)
+    if outbound == "all":
+        return r.returncode != 0
+    if r.returncode != 0:
+        return False
+    try:
+        rules = [x["rule"] for x in json.loads(r.stdout)["nftables"] if "rule" in x]
+    except (ValueError, KeyError):
+        return False
+    text = json.dumps(rules)
+    has_approved = "approved4" in text
+    return bool(rules) and '"reject"' in text and has_approved == (outbound == "approved")
+
+
+def reach(target: str) -> tuple[bool, str]:
+    """Try one TCP connection: (got through, what happened)."""
+    host, port = target.rsplit(":", 1)
+    host = host.strip("[]")
+    try:
+        infos = socket.getaddrinfo(host, int(port), type=socket.SOCK_STREAM)
+    except OSError as e:
+        return False, f"not resolved ({e.strerror or e})"
+    last = "no address"
+    for family, kind, proto, _, addr in infos:
+        s = socket.socket(family, kind, proto)
+        s.settimeout(CHECK_TIMEOUT)
+        try:
+            s.connect(addr)
+            return True, f"connected to {addr[0]}"
+        except OSError as e:
+            last = f"{addr[0]}: {e.strerror or type(e).__name__}"
+        finally:
+            s.close()
+    return False, last
+
+
+def check() -> dict:
+    mode, outbound = read()
+    builtin, own = approved()
+    firewall = table_matches(mode, outbound) if mode != "unknown" else False
+    probes = []
+    for t in CHECK_TARGETS:
+        got, detail = reach(t)
+        probes.append({"target": t, "reached": got, "detail": detail})
+    outside = [p["target"] for p in probes if p["reached"]]
+    if outbound == "all":
+        passed, summary = firewall, "all outgoing traffic is allowed; the appliance doesn't limit it"
+    elif mode == "unknown":
+        passed, summary = False, "no valid network mode is recorded"
+    elif not firewall:
+        passed, summary = False, "the appliance's own outgoing rules aren't loaded"
+    elif outside:
+        passed, summary = False, "reached an address outside the approved list"
+    else:
+        passed = True
+        summary = ("only approved destinations reachable" if outbound == "approved"
+                   else "no outgoing connections beyond the office's own network")
+    return {"mode": mode, "outbound": outbound, "firewall_active": firewall, "passed": passed,
+            "summary": summary, "outside_reached": outside, "probes": probes,
+            "approved_destinations": builtin + own}
+
+
+# ---------------------------------------------------------------------------- command line
+def need_root(what: str) -> None:
+    if os.geteuid() != 0 and not ENV("SUVERYN_NETWORK_MODE_TEST"):
+        raise Usage(f"{what} needs root")
+
+
 def main(argv: list[str]) -> int:
-    path = mode_file()
-    if argv[:1] == ["get"] and len(argv) == 1:
-        mode = read(path)
-        print(mode)
+    try:
+        return run(argv)
+    except Usage as e:
+        print(f"suveryn-network-mode: {e}", file=sys.stderr)
+        return 2
+    except OSError as e:
+        print(f"suveryn-network-mode: {e.strerror or e}: {getattr(e, 'filename', '') or ''}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(f"suveryn-network-mode: {' '.join(map(str, e.cmd))} failed ({e.returncode})", file=sys.stderr)
+        return 1
+
+
+def run(argv: list[str]) -> int:
+    cmd, args = (argv[0], argv[1:]) if argv else ("", [])
+    if cmd == "get" and args in ([], ["--outbound"]):
+        mode, outbound = read()
+        print(outbound if args else mode)
         if mode == "unknown":
-            print(f"suveryn-network-mode: no valid mode in {path}; set one with: suveryn-network-mode set <mode>",
+            print(f"suveryn-network-mode: no valid mode in {MODE_FILE}; set one with: suveryn-network-mode set <mode>",
                   file=sys.stderr)
             return 1
         return 0
-    if argv[:1] == ["set"] and len(argv) == 2:
-        if argv[1] not in MODES:
-            print(f"suveryn-network-mode: {argv[1]!r} is not a mode; use one of: {', '.join(MODES)}", file=sys.stderr)
-            return 2
+    if cmd == "set" and args:
+        mode, rest = args[0], args[1:]
+        if mode not in MODES:
+            raise Usage(f"{mode!r} is not a mode; use one of: {', '.join(MODES)}")
+        outbound = OUTBOUND[mode][0]
+        if rest[:1] == ["--outbound"] and len(rest) == 2:
+            outbound = rest[1]
+        elif rest:
+            raise Usage("usage: set connected [--outbound approved|all] | set air-gapped")
+        if outbound not in OUTBOUND[mode]:
+            raise Usage(f"--outbound {outbound} doesn't fit {mode}; use one of: {', '.join(OUTBOUND[mode])}")
+        need_root("set")
         try:
-            write(path, argv[1])
+            write(mode, outbound)
         except OSError as e:
-            print(f"suveryn-network-mode: can't write {path}: {e.strerror} (run as root at provisioning)", file=sys.stderr)
+            print(f"suveryn-network-mode: can't write {MODE_FILE}: {e.strerror} (run as root)", file=sys.stderr)
             return 1
-        print(f"network mode: {argv[1]} ({path})")
+        print(f"network mode: {describe(mode, outbound)} ({MODE_FILE}). Run 'suveryn-network-mode apply' and restart "
+              "the services that read it.")
         return 0
-    print("usage: suveryn-network-mode get | set {connected|outbound-blocked|air-gapped}", file=sys.stderr)
-    return 2
+    if cmd == "show" and not args:
+        mode, outbound = read()
+        builtin, own = approved()
+        print(f"mode: {describe(mode, outbound)}")
+        print("approved destinations (the appliance's own): " + ", ".join(builtin))
+        print("approved destinations (this office's): " + (", ".join(own) or "none"))
+        return 0 if mode != "unknown" else 1
+    if cmd in ("allow", "disallow") and len(args) == 1:
+        need_root(cmd)
+        d = edit_approved(args[0], cmd == "allow")
+        print(f"{'approved' if cmd == 'allow' else 'no longer approved'}: {d}. Run 'suveryn-network-mode apply'.")
+        return 0
+    if cmd == "apply" and not args:
+        need_root("apply")
+        print(f"applied: {apply()}")
+        return 0
+    if cmd == "check" and args in ([], ["--json"]):
+        result = check()
+        if args:
+            print(json.dumps(result, indent=1))
+        else:
+            print(f"{'passed' if result['passed'] else 'FAILED'}: {result['summary']}")
+            print(f"   mode: {describe(result['mode'], result['outbound'])}; own rules loaded: "
+                  f"{'yes' if result['firewall_active'] else 'no'}")
+            for p in result["probes"]:
+                print(f"   {p['target']}: {'REACHED' if p['reached'] else 'blocked'} ({p['detail']})")
+        return 0 if result["passed"] else 1
+    raise Usage("usage: suveryn-network-mode get [--outbound] | set connected [--outbound approved|all] | "
+                "set air-gapped | show | allow <domain> | disallow <domain> | apply | check [--json]")
 
 
 if __name__ == "__main__":
