@@ -513,6 +513,9 @@ def reader_sandbox() -> dict[str, str]:
     run("sh", REPO / "reader-sandbox" / "provision-reader.sh", "suveryn", VAR / "inbox", VAR / "reader")
     shutil.copy2(REPO / "reader-sandbox" / "suveryn-reader-sandbox", OPT / "bin" / "suveryn-reader-sandbox")
     os.chmod(OPT / "bin" / "suveryn-reader-sandbox", 0o755)
+    # verify's probe of the sandbox through the production route (readable by suveryn-reader)
+    shutil.copy2(REPO / "reader-sandbox" / "tests" / "probe.py", OPT / "bin" / "suveryn-sandbox-probe.py")
+    os.chmod(OPT / "bin" / "suveryn-sandbox-probe.py", 0o644)
     rule = "suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *\n"
     tmp = Path("/etc/sudoers.d/.suveryn-reader.tmp")
     tmp.write_text("# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).\n"
@@ -869,6 +872,8 @@ def verify(public_url: str | None) -> bool:
         read = {"error": r.stderr.decode()[-400:]}
     result("Reader sandbox", sandboxed and read.get("status") in ("ready", "needs_review") and read.get("pages") == 1,
            f"wrapper set and required: {sandboxed}; a test PDF uploaded as the gateway's user: {read}")
+    for name, passed, detail in verify_sandbox_boundary(gw):
+        result(name, passed, detail)
     # The gateway service: up, and its own view of the services.
     wait_for(lambda: http("http://127.0.0.1:8000/health")[0] in (200, 503), "gateway", 120)
     s, b = http("http://127.0.0.1:8000/health")
@@ -883,6 +888,44 @@ def verify(public_url: str | None) -> bool:
     mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
     result("Network mode", mode != "unknown", mode)
     return ok
+
+
+def sandbox_boundary(probe: dict, reader_uid: int) -> list[str]:
+    """What a probe run through the production route showed that it shouldn't have (empty: all held)."""
+    refused = lambda v: v not in ("allowed", None)  # noqa: E731
+    problems = []
+    if probe.get("uid") != reader_uid or probe.get("euid") != reader_uid:
+        problems.append(f"runs as uid {probe.get('uid')}, not suveryn-reader")
+    for key in ("inet_socket", "inet6_socket", "netlink_socket"):
+        if not refused(probe.get(key)):
+            problems.append(f"{key} {probe.get(key)}")
+    for key, what in (("read_secret", "reads the gateway's secrets"), ("ptrace", "ptrace"),
+                      ("setuid_root", "becomes root"), ("write_root", "writes to /root"), ("unshare", "unshare")):
+        if not refused(probe.get(key)):
+            problems.append(what)
+    if probe.get("no_new_privs") != "1" or probe.get("seccomp") != "2" or probe.get("core_limit") != 0:
+        problems.append(f"no_new_privs {probe.get('no_new_privs')}, seccomp {probe.get('seccomp')}, core {probe.get('core_limit')}")
+    return problems
+
+
+def verify_sandbox_boundary(gw: dict[str, str]) -> list[tuple[str, bool, str]]:
+    """The sandbox through the exact production route: as the gateway's user, with the wrapper command
+    from gateway.env (sudo to suveryn-reader), the probe checks what a taken-over reader could do."""
+    wrapper = gw.get("SUVERYN_EXTRACT_WRAPPER", "")
+    cmd = [RUNUSER, "-u", "suveryn", "--", *wrapper.split(), "/usr/bin/python3", "-I",
+           str(OPT / "bin" / "suveryn-sandbox-probe.py"), str(ETC / "gateway.env"), str(VAR / "reader")]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                       env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HF_HOME": str(HF_HOME),
+                            "SUVERYN_EXTRACT_WORK_DIR": str(VAR / "reader")})
+    try:
+        probe = json.loads(r.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return [("Sandbox boundary", False, f"the probe didn't run through the wrapper: {r.stderr.strip()[-300:]}")]
+    (VAR / "reader" / "probe.txt").unlink(missing_ok=True)
+    problems = sandbox_boundary(probe, pwd.getpwnam("suveryn-reader").pw_uid)
+    return [("Sandbox boundary", not problems,
+             "as the gateway's user through sudo: suveryn-reader, no network sockets, the gateway's secrets unreadable, "
+             "no ptrace, no root, seccomp and no_new_privs on" if not problems else "; ".join(problems))]
 
 
 UI_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self'; connect-src 'self'; "
