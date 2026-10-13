@@ -21,6 +21,7 @@ rm -f /var/lib/dbus/machine-id
 # --no-create: fs.protected_regular refuses opening other users' log files (e.g. PostgreSQL's) with O_CREAT,
 # even for root.
 find /var/log -type f -exec truncate --no-create -s 0 {} +
+rm -rf /var/log/journal/*   # the build machine's journal folder (named after its machine-id)
 rm -f /root/.bash_history
 
 echo "== Free space trimmed (zeros in the raw image compress away)"

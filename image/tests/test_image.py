@@ -85,3 +85,8 @@ def test_the_network_comes_up_on_any_machine():
     """The installer configures the build VM's interface; a flashed server's ports have other names."""
     harden = (HERE / "scripts" / "harden.sh").read_text()
     assert "rm -f /etc/netplan/*.yaml" in harden and 'name: "en*"' in harden and "dhcp4: true" in harden
+
+
+def test_the_build_machines_journal_is_not_left_behind():
+    """Found in the boot test: a journal folder named after the build machine's machine-id."""
+    assert "rm -rf /var/log/journal/*" in (HERE / "scripts" / "cleanup.sh").read_text()
