@@ -18,7 +18,9 @@ cloud-init clean --logs >/dev/null 2>&1 || true
 touch /etc/cloud/cloud-init.disabled
 truncate -s 0 /etc/machine-id
 rm -f /var/lib/dbus/machine-id
-find /var/log -type f -exec truncate -s 0 {} +
+# --no-create: fs.protected_regular refuses opening other users' log files (e.g. PostgreSQL's) with O_CREAT,
+# even for root.
+find /var/log -type f -exec truncate --no-create -s 0 {} +
 rm -f /root/.bash_history
 
 echo "== Free space trimmed (zeros in the raw image compress away)"
