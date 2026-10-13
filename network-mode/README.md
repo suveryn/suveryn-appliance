@@ -1,81 +1,135 @@
 # Network mode
 
-An installation runs in one of three network modes (development context §5), and some components
-need to know which one: the login page's "Air-gapped" badge may only say so when it is true, and
-features that fetch updates or reach a legal source must know whether they can. This folder makes
-that one value real: set once at provisioning, readable by any component without a network call or
-a database.
+An installation runs in one of two network modes (development context §5; tracker #38). The appliance
+records the mode once, lets any component read it without a network call or a database, and
+enforces it with its own firewall.
 
-| Mode | Meaning |
-|---|---|
-| `connected` | The appliance may reach the internet |
-| `outbound-blocked` | The office's network blocks the appliance's outbound connections; it can still be reached on the local network |
-| `air-gapped` | No network path to the internet at all; updates and models arrive on physical media |
+| Mode | Outgoing | Meaning |
+|---|---|---|
+| `connected` | `approved` (default) | Reaches only approved destinations: sūveryn updates and models, Ubuntu's security updates, time, and the connectors the office enables. The appliance blocks everything else itself |
+| `connected` | `all` | Any program on the appliance may reach the internet. Only for an office whose own firewall decides what the appliance may reach |
+| `air-gapped` | `none` | No outgoing connections beyond the office's own network. Updates and extra models arrive on a USB stick or from a mirror on the office network |
 
-## Where the value lives
+In every mode the office's own network stays reachable: private addresses (`10/8`, `172.16/12`,
+`192.168/16`, link-local, and their IPv6 equivalents), for LDAP/AD, DNS, time and a local mirror.
 
-One file, the only source of the mode:
+The third mode of earlier versions, `outbound-blocked`, was dropped in October 2026: Connected with
+approved destinations covers it. A file that still says `outbound-blocked` reads as **unknown**.
 
-```
-/etc/suveryn/network-mode.env        owner root, 0644 (any component may read it; it holds no secret)
-```
+## Where it lives
 
-```bash
-# The installation's network mode, written by suveryn-network-mode at provisioning.
-# …
-SUVERYN_NETWORK_MODE=air-gapped
-```
-
-`/etc/suveryn` is the appliance's configuration folder, next to `/opt/suveryn/bin` (programs) and
-`/var/lib/suveryn` (data, e.g. the reader sandbox's folders). No existing configuration file fitted:
-the realm build writes a secret, one-time `gateway-oidc.env` to a folder of the installer's choice,
-and `suveryn-fetch-models` (in suveryn-core) has no configuration file.
-
-## Setting it (provisioning)
+| File | What | Who writes it |
+|---|---|---|
+| `/etc/suveryn/network-mode.env` | The mode and the outgoing policy (0644, no secret) | `suveryn-network-mode set` |
+| `/etc/suveryn/approved-destinations` | The office's own approved destinations, one domain per line | `suveryn-network-mode allow` / `disallow` |
+| `/opt/suveryn/network-mode/builtin-destinations` | The appliance's own approved destinations, from [`builtin-destinations`](builtin-destinations); can't be removed on the appliance | The image |
+| `/etc/suveryn/dnsmasq.conf` | The resolver's configuration, made from the above | `suveryn-network-mode apply` |
 
 ```bash
-sudo install -m 0755 network-mode/suveryn-network-mode /opt/suveryn/bin/
-sudo /opt/suveryn/bin/suveryn-network-mode set air-gapped     # or connected, outbound-blocked
+# The installation's network mode, written by suveryn-network-mode. …
+SUVERYN_NETWORK_MODE=connected
+SUVERYN_OUTBOUND=approved
 ```
 
-`set` refuses anything but the three values and writes the file atomically, so a reader never sees
-half a file. Change the mode the same way, never by editing the file, and restart the services that
-load it (below). Only the installer can know the mode: it is **declared, not measured**. Setting
-`air-gapped` on a machine that can reach the internet makes every claim built on it false.
+`SUVERYN_OUTBOUND` is `approved` or `all` for `connected`, and `none` for `air-gapped`. A connected
+file without it reads as `approved`, the stricter of the two.
+
+## Setting it
+
+```bash
+sudo suveryn-network-mode set connected                  # approved destinations only
+sudo suveryn-network-mode set connected --outbound all
+sudo suveryn-network-mode set air-gapped
+sudo suveryn-network-mode allow portal.example-connector.com
+sudo suveryn-network-mode disallow portal.example-connector.com
+sudo suveryn-network-mode apply                           # load the rules for what is recorded
+```
+
+`set` refuses anything but these values and writes the file atomically, so a reader never sees half a
+file. `allow` takes a domain name, which also covers its subdomains; it refuses anything that isn't
+a domain name and any name the outgoing-traffic check uses as an address that must stay unreachable.
+The appliance's own destinations can't be removed. Change the mode with the tool, never by editing
+the file, then run `apply` and restart the services that read the mode (the gateway and Keycloak).
+
+Provisioning sets it from `--network-mode` and `--outbound` (`NETWORK_MODE` and `OUTBOUND` in
+`first-boot.env`). The web setup screen (#37) will set it the same way. The mode is **declared, not
+measured**, but on the appliance it is also enforced (below), and the check says whether that holds.
 
 ## Reading it (any component)
 
-Pick whichever is simplest for the component; both read the same file.
-
-- **As an environment variable.** Add the file to the service's systemd unit, and the process gets
-  `SUVERYN_NETWORK_MODE`:
+- **As environment variables.** Add the file to the service's systemd unit, and the process gets
+  `SUVERYN_NETWORK_MODE` and `SUVERYN_OUTBOUND`:
 
   ```ini
   [Service]
   EnvironmentFile=-/etc/suveryn/network-mode.env
   ```
 
-  The `-` keeps a service starting when the file is missing; the variable is then unset, which
+  The `-` keeps a service starting when the file is missing; the variables are then unset, which
   means unknown. The file is also valid shell (`. /etc/suveryn/network-mode.env`).
-- **From the file**, e.g. a component that isn't started by systemd: read the one line
-  `SUVERYN_NETWORK_MODE=<mode>`, ignoring blank lines and lines starting with `#`.
-- **From a shell script:** `mode=$(/opt/suveryn/bin/suveryn-network-mode get)`; it prints the mode, or
-  `unknown` and exits 1.
+- **From the file**: read the `SUVERYN_NETWORK_MODE=` and `SUVERYN_OUTBOUND=` lines, ignoring blank
+  lines and lines starting with `#`.
+- **From a shell script:** `suveryn-network-mode get` prints the mode, `get --outbound` the policy;
+  each prints `unknown` and exits 1 when no valid mode is recorded.
 
-**Unknown** means the file is missing, or doesn't hold exactly one of the three values (the key
-twice counts as unknown, not as the first or last). A component must then take the safe reading
-for its purpose: **never claim to be air-gapped, and never rely on outbound access either.** Don't
-set `SUVERYN_NETWORK_MODE` anywhere else (a unit's `Environment=`, a gateway env file): one source.
+**Unknown** means the file is missing, a key is given twice, a value isn't one of the above, or the
+policy doesn't fit the mode. A component must then take the safe reading for its purpose: **never
+claim to be air-gapped, and never rely on outbound access either.** Don't set these variables
+anywhere else: one source.
 
-## Who reads it
+Read by: the gateway (`suveryn-gateway.service`) and Keycloak (`keycloak.service`), whose login page
+shows its "Air-gapped" badge only when the mode is `air-gapped` ([`keycloak/theme`](../keycloak/theme/README.md#the-air-gapped-badge)).
 
-Nothing yet. Planned:
+## How the appliance enforces it
 
-- **The Keycloak login theme** ([`keycloak/theme`](../keycloak/theme/README.md#the-air-gapped-badge)):
-  the "Air-gapped" badge should show only when the mode is `air-gapped`. The theme lives in this
-  repository; wiring the badge to this value is a separate step.
-- **suveryn-core**, wherever a feature depends on the mode (updates, legal sources). Its gateway can
-  load the file with `EnvironmentFile=`.
+ufw only decides what comes in (80 and 443). What goes out is decided by the network mode, in two
+parts that `apply` writes and loads:
+
+1. **`suveryn-egress`** (systemd, before the network comes up): an nftables table, `inet
+   suveryn_egress`, on outgoing traffic. It lets out: loopback; connections already established; the
+   office's own network; the resolver's DNS queries (as user `suveryn-dns`); and, with approved
+   destinations only, web (80, 443) and time (123) traffic to addresses in two sets, `approved4` and
+   `approved6`. Everything else is refused at once (logged, at most 10 a minute, prefix
+   `suveryn-egress refused:`). With `--outbound all` the table isn't loaded.
+2. **`suveryn-dns`**: the appliance's own resolver (dnsmasq) on `127.0.0.1`, which every program on
+   the appliance uses (`/etc/resolv.conf`). It asks the office's DNS servers (from DHCP, via
+   systemd-resolved) and, as it answers a lookup for an approved name or a subdomain of one, puts the
+   address into the sets. Entries expire after an hour and the resolver caches answers for at most
+   five minutes, so a cached answer always has its address in the set.
+
+So a program can only reach an approved destination by looking its name up through the appliance's
+resolver, and an address it got any other way is refused.
+
+Without a valid mode, `apply` lets nothing out but the office's own network (fail closed).
+
+**Limits, stated plainly:**
+
+- The rules work by address. An approved name that shares its address with other sites (a CDN)
+  also lets those sites through on that address.
+- DNS lookups for any name go to the office's DNS servers, as in every network. Whatever the office's
+  DNS forwards is outside the appliance's control.
+- Anything with root on the appliance can change the rules. The check (below) reports when they
+  aren't loaded.
+- In `all`, the appliance doesn't limit outgoing traffic at all; the office's own firewall must.
+
+## The outgoing-traffic check
+
+```bash
+suveryn-network-mode check          # passed / FAILED, with what was tried
+suveryn-network-mode check --json   # the same for the web setup's last screen and the admin dashboard
+```
+
+It checks that the appliance's own rules are loaded as the mode needs, then tries to connect to
+addresses that are never approved (`example.com`, `1.1.1.1`, `9.9.9.9` and an IPv6 address, port
+443). It **passes** when the rules are loaded and none of those is reached, and **fails** when the
+rules aren't loaded, when no valid mode is recorded, or when any of them is reached: then traffic gets
+out, for example through a proxy on the office network. With `--outbound all` it passes when the
+table is absent and reports that nothing is limited. `suveryn-provision verify` runs it on the
+appliance. Exit code 0 when it passes, 1 when it doesn't.
+
+The JSON holds the mode and policy, `firewall_active`, `passed`, a one-line `summary`,
+`outside_reached` (the targets that were reached), each probe with its result, and the approved
+destinations.
 
 ## Tests
 
@@ -83,6 +137,13 @@ Nothing yet. Planned:
 python3 -m pytest network-mode/tests
 ```
 
-They run the tool against a file in a temporary folder (`SUVERYN_NETWORK_MODE_FILE` overrides the
-path): every mode set and read back, the file's permissions, atomic writes, the file as an
-environment file and as shell, refused values, and every kind of unknown.
+- `test_network_mode.py`, any machine: the mode file (every mode and policy, atomic writes, valid
+  as an environment file and shell, every kind of unknown, including `outbound-blocked`), the
+  approved destinations (adding, removing, what can't be approved), and the rules and resolver
+  configuration made from them; as root, also that `nft` accepts the rules.
+- `test_egress.py`, Linux as root with `ip`, `nft` and `dnsmasq`: the rules and resolver for real, in
+  two network namespaces (the appliance, and an office network with a DNS server and the internet).
+  Approved names are reachable once looked up, including subdomains, and not before; other addresses
+  are refused by name and by address; the office network stays reachable; the office adds and
+  removes a destination; air-gapped and all; and the check passing, and failing when an outside
+  address gets through or the rules aren't loaded; and no valid mode letting nothing out.

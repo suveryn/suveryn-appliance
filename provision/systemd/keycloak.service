@@ -8,6 +8,8 @@ Requires=postgresql.service
 User=keycloak
 Group=keycloak
 EnvironmentFile=/etc/suveryn/keycloak.env
+# The network mode: the login page shows its "Air-gapped" badge only when it is true (keycloak/theme).
+EnvironmentFile=-/etc/suveryn/network-mode.env
 ExecStart=/opt/keycloak/bin/kc.sh start --optimized
 Restart=on-failure
 NoNewPrivileges=yes
