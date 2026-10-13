@@ -1,0 +1,126 @@
+# sūveryn's reverse proxy (nginx). Written by suveryn-provision, which replaces @HOST@.
+#
+# One origin, https://@HOST@:
+#   /            the chat UI's built files (/opt/suveryn/ui)
+#   /v1/ /auth/ /health   suveryn-core's gateway (127.0.0.1:8000)
+#   /idp/        Keycloak (127.0.0.1:8180, keycloak.conf: hostname https://@HOST@/idp)
+# Nothing else reaches the gateway: FastAPI's /docs, /redoc and /openapi.json are not routed (and
+# /docs is off in the gateway as well, SUVERYN_API_DOCS unset).
+#
+# Confidentiality: uploads stream to the gateway without being spooled to nginx's temporary files,
+# no proxied response is written to disk (proxy_max_temp_file_size 0), and the access log has no
+# query strings (a sign-in callback carries its code there) and no referrers.
+
+log_format suveryn '$remote_addr [$time_local] "$request_method $uri $server_protocol" $status $body_bytes_sent $request_time';
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name @HOST@;
+    access_log /var/log/nginx/suveryn.access.log suveryn;
+    return 301 https://@HOST@$request_uri;
+}
+
+server {
+    # HTTP/2 on the listen line: Ubuntu 24.04's nginx is 1.24, which doesn't know `http2 on;` (1.25.1+).
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name @HOST@;
+
+    # TLS 1.2 and 1.3 only, forward-secret ciphers (Mozilla's "intermediate" profile, which every
+    # supported office browser speaks). The certificate is the office's own, or the appliance's
+    # local CA's (suveryn-provision --tls-cert/--tls-key).
+    ssl_certificate     /etc/suveryn/tls/server.crt;
+    ssl_certificate_key /etc/suveryn/tls/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:suveryn:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    access_log /var/log/nginx/suveryn.access.log suveryn;
+    client_max_body_size 101m;           # the gateway's 100 MB upload limit plus multipart overhead
+    proxy_max_temp_file_size 0;          # never write a proxied response (passages, answers) to disk
+
+    # The gateway trusts X-Forwarded-For from 127.0.0.1 (uvicorn's default) for its per-address
+    # sign-in limit: set it to the client's address, never append what the client sent.
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Port 443;
+    proxy_set_header Connection "";
+
+    include /etc/nginx/snippets/suveryn-headers.conf;
+
+    # The chat UI. Hashed assets are immutable; index.html is always revalidated.
+    root /opt/suveryn/ui;
+    location / {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        add_header Cache-Control "no-cache" always;
+        try_files $uri /index.html;
+    }
+    location /assets/ {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # The gateway.
+    location ~ ^/(v1|auth)/ {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_read_timeout 600s;          # a long answer, or a model that has to load first
+    }
+    location = /health {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        proxy_pass http://127.0.0.1:8000;
+    }
+    location = /v1/chat {                 # answers stream as Server-Sent Events: pass each event on at once
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+    }
+    location = /v1/documents {            # uploads stream to the gateway: no copy in nginx's temporary files
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+    }
+    location ~ ^/(docs|redoc|openapi\.json)$ {
+        return 404;
+    }
+
+    # Keycloak: sign-in pages and their resources for everyone; the admin console from the office's
+    # own network only (private and loopback addresses). Keycloak sends its own CSP.
+    location /idp/ {
+        proxy_pass http://127.0.0.1:8180;
+        proxy_buffer_size 16k;            # Keycloak's sign-in redirects carry large cookies
+        proxy_buffers 8 16k;
+    }
+    location /idp/admin/ {
+        allow 127.0.0.0/8;
+        allow ::1;
+        allow 10.0.0.0/8;
+        allow 172.16.0.0/12;
+        allow 192.168.0.0/16;
+        allow fc00::/7;
+        deny all;
+        proxy_pass http://127.0.0.1:8180;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 16k;
+    }
+    location ~ ^/idp/(health|metrics) {   # on Keycloak's management port anyway; never through the proxy
+        return 404;
+    }
+}
