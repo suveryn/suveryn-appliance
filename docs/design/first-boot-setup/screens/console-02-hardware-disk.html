@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer · Hardware and target disk</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c02-disk.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center}
+  .win{position:relative;width:900px;background:#12161B;border:2px solid #757E86;padding:32px 38px 26px}
+  .win-title{position:absolute;top:-14px;left:26px;padding:0 10px;font-weight:600;background:linear-gradient(to bottom,#0B0D10 50%,#12161B 50%)}
+  .h{font-weight:600;margin:0 0 6px}
+  .chk{display:grid;grid-template-columns:34px 140px minmax(0,1fr);column-gap:0}
+  .chk .sub{grid-column:3;color:#A4A6A7;margin-bottom:4px}
+  .disk{display:grid;grid-template-columns:50px 120px 260px 100px minmax(0,1fr);width:100%;text-align:left;background:transparent;border:none;color:#F3F4F5;font:inherit;padding:0 10px;margin:0;cursor:pointer}
+  .disk .mk{color:#FA5B35}
+  .disk.focus{background:#FA5B35;color:#020205}
+  .disk.focus .mk{color:#020205}
+  .disk.off{color:#A4A6A7;cursor:default}
+  .dim{color:#A4A6A7}
+  .ok{color:#3AD4CA}
+  .warn{color:#FA5B35}
+  .btns{display:flex;justify-content:flex-end;gap:28px;margin-top:30px}
+  .tbtn{font:inherit;color:#F3F4F5;text-decoration:none;padding:0 6px}
+  .tbtn.focus{background:#FA5B35;color:#020205}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .keys b{color:#F3F4F5;font-weight:600;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> installer</span><span>2026.10 · Step 2 of 6</span></div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title">Hardware and target disk</div>
+
+      <p class="h">Hardware check</p>
+      <div class="chk">
+        <span class="ok">✓</span><span class="dim">Graphics</span><span>NVIDIA GeForce RTX 4090 · 24 GB</span>
+        <span class="sub">GeForce cards are licensed for on-premise office use only.</span>
+        <span class="ok">✓</span><span class="dim">Processor</span><span>16 cores</span>
+        <span class="ok">✓</span><span class="dim">Security</span><span>TPM 2.0 · unlocks the encrypted disk</span>
+        <span class="warn">!</span><span class="dim">Memory</span><span>32 GB. Recommended: 64 GB.</span>
+        <span class="sub">You can continue. Long documents and several users at once will be slower.</span>
+        <span></span><span class="dim">Sized for</span><span>On-prem Standard, up to about 10 people</span>
+      </div>
+
+      <p class="h" style="margin-top:26px">Install to</p>
+      <div>
+        <button type="button" class="disk focus"><span class="mk">(*)</span><span>nvme0n1</span><span>Samsung 990 PRO</span><span>2.0 TB</span><span></span></button>
+        <button type="button" class="disk"><span class="mk">( )</span><span>nvme1n1</span><span>WD Black SN850X</span><span>1.0 TB</span><span></span></button>
+        <button type="button" class="disk off" disabled=""><span></span><span>sdb</span><span>Sūveryn installer</span><span>64 GB</span><span>installation medium, 2 model bundles</span></button>
+      </div>
+
+      <p style="margin:22px 0 0"><span class="warn">!</span> Everything on the selected disk will be erased. The disk is then encrypted.</p>
+
+      <div class="btns">
+        <a href="console-01-language-keyboard.html" class="tbtn">&lt; Back &gt;</a>
+        <a href="console-03-models.html" class="tbtn">&lt; Next &gt;</a>
+      </div>
+    </div>
+  </div>
+  <div class="keys"><span><b>↑↓</b>Select disk</span><span><b>Tab</b>Next field</span><span><b>Enter</b>Continue</span><span><b>Esc</b>Back</span><span><b>F1</b>Help</span></div>
+</div>
+</body>
+</html>

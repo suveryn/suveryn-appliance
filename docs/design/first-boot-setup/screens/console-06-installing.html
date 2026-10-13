@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer · Installing</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c05-installing.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .win{position:relative;width:900px;background:#12161B;border:2px solid #757E86;padding:32px 38px 26px}
+  .win-title{position:absolute;top:-14px;left:26px;padding:0 10px;font-weight:600;background:linear-gradient(to bottom,#0B0D10 50%,#12161B 50%)}
+  .prog{display:flex;gap:16px;margin-bottom:22px}
+  .prog .done{color:#FA5B35}
+  .prog .todo{color:#757E86}
+  .step{display:grid;grid-template-columns:34px minmax(0,1fr)}
+  .dim{color:#A4A6A7}
+  .ok{color:#3AD4CA}
+  .now{color:#FA5B35}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .preview{margin-top:18px;font-size:14px;color:#A4A6A7}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> installer</span><span>2026.10 · Step 6 of 6</span></div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title">Installing the sūveryn appliance</div>
+      <div class="prog"><span><span class="done">██████████████████████</span><span class="todo">░░░░░░░░░░░░░░░░░░░░░░░░</span></span><span>48%</span></div>
+      <div class="step"><span class="ok">✓</span><span>Partitioning nvme0n1</span></div>
+      <div class="step"><span class="ok">✓</span><span>Encrypting the disk (LUKS2, a new key for this machine)</span></div>
+      <div class="step"><span class="ok">✓</span><span>Copying system files</span></div>
+      <div class="step"><span class="ok">✓</span><span>Installing the NVIDIA driver</span></div>
+      <div class="step"><span class="now">▸</span><span class="now">Copying language models · 1 of 2 · Qwen3.8-27B</span></div>
+      <div class="step"><span></span><span class="dim">Checking the models against their manifest checksums</span></div>
+      <div class="step"><span></span><span class="dim">Applying network settings</span></div>
+      <div class="step"><span></span><span class="dim">Installing the boot loader</span></div>
+      <div class="step"><span></span><span class="dim">Linking the disk key to this machine's TPM</span></div>
+      <div class="step"><span></span><span class="dim">Creating this appliance's ID and signing key</span></div>
+      <p style="margin:26px 0 0">This takes about ten minutes. Do not turn off the machine.</p>
+      <p class="dim" style="margin:0">Then you write down the disk recovery key, and the machine restarts.</p>
+    </div>
+    <a href="console-07-recovery-key.html" class="preview">Preview only: skip to the recovery key</a>
+  </div>
+  <div class="keys"><span>Installation in progress. Keys are disabled.</span></div>
+</div>
+</body>
+</html>

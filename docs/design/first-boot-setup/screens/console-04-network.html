@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer · Network</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c03-network.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center}
+  .win{position:relative;width:900px;background:#12161B;border:2px solid #757E86;padding:32px 38px 26px}
+  .win-title{position:absolute;top:-14px;left:26px;padding:0 10px;font-weight:600;background:linear-gradient(to bottom,#0B0D10 50%,#12161B 50%)}
+  .rows{display:flex;flex-direction:column;gap:13px}
+  .row{display:flex;align-items:flex-start}
+  .k{width:170px;flex:none;color:#A4A6A7}
+  .v{flex:1;min-width:0}
+  .opt{display:block;width:100%;text-align:left;background:transparent;border:none;color:#F3F4F5;font:inherit;padding:0 10px;margin:0;cursor:pointer}
+  .opt .mk{color:#FA5B35}
+  .opt.focus{background:#FA5B35;color:#020205}
+  .opt.focus .mk{color:#020205}
+  .nic{display:grid;grid-template-columns:50px 80px 170px minmax(0,1fr)}
+  .inline{display:flex;gap:30px}
+  .inline .opt{width:auto}
+  .fld{display:flex;width:440px}
+  .br{color:#A4A6A7}
+  .fld.focus .br{color:#FA5B35}
+  .in{flex:1;min-width:0;background:#272C32;color:#F3F4F5;font:inherit;border:none;outline:none;height:26px;padding:0 10px;margin:0 6px;caret-color:#FA5B35}
+  .dim{color:#A4A6A7}
+  .ok{color:#3AD4CA}
+  .btns{display:flex;justify-content:flex-end;gap:28px;margin-top:30px}
+  .tbtn{font:inherit;color:#F3F4F5;text-decoration:none;padding:0 6px}
+  .tbtn.focus{background:#FA5B35;color:#020205}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .keys b{color:#F3F4F5;font-weight:600;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> installer</span><span>2026.10 · Step 4 of 6</span></div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title">Network</div>
+      <div class="rows">
+        <div class="row">
+          <div class="k">Interface</div>
+          <div class="v">
+            <button type="button" class="opt nic"><span class="mk">(*)</span><span>eno1</span><span>Intel I226-V</span><span>connected · 1 Gbit/s</span></button>
+            <button type="button" class="opt nic"><span class="mk">( )</span><span>eno2</span><span>Intel I226-V</span><span class="dim">no cable</span></button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="k">Name</div>
+          <div class="v">
+            <div class="fld focus"><span class="br">[</span><input class="in" type="text" aria-label="Appliance name" value="notary-brussels-01"><span class="br">]</span></div>
+            <div class="dim" style="margin-top:4px">Reachable as notary-brussels-01.local. Letters, digits and hyphens.</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="k">Address</div>
+          <div class="v">
+            <div class="inline">
+              <button type="button" class="opt"><span class="mk">(*)</span> Automatic (DHCP)</button>
+              <button type="button" class="opt"><span class="mk">( )</span> Fixed address</button>
+            </div>
+            <div style="margin-top:8px"><span class="ok">✓</span> Received <b>192.168.1.50/24</b></div>
+            <div class="dim" style="padding-left:24px">gateway 192.168.1.1 · DNS 192.168.1.1</div>
+          </div>
+        </div>
+      </div>
+      <div class="dim" style="margin-top:22px">Ask your network administrator to reserve this address for the appliance, so it stays the same after a restart.</div>
+      <div class="btns">
+        <a href="console-03-models.html" class="tbtn">&lt; Back &gt;</a>
+        <a href="console-05-summary.html" class="tbtn">&lt; Next &gt;</a>
+      </div>
+    </div>
+  </div>
+  <div class="keys"><span><b>↑↓</b>Select</span><span><b>Tab</b>Next field</span><span><b>Enter</b>Continue</span><span><b>Esc</b>Back</span><span><b>F1</b>Help</span></div>
+</div>
+</body>
+</html>
