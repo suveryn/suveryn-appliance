@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boot · Disk won't unlock</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c07-unlock.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  @keyframes blink{50%{opacity:0}}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .body{flex:1;padding:60px 80px 0}
+  .dim{color:#A4A6A7}
+  .warn{color:#FA5B35}
+  .fld{display:flex;width:760px;margin-top:10px}
+  .br{color:#FA5B35}
+  .in{flex:1;min-width:0;background:#272C32;color:#F3F4F5;font:inherit;border:none;outline:none;height:26px;padding:0 10px;margin:0 6px;caret-color:#FA5B35}
+  .rule{height:2px;background:#757E86;margin:28px 0}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .keys b{color:#F3F4F5;font-weight:600;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> 2026.10 · notary-brussels-01</span><span>tty1</span></div>
+  <div class="body">
+    <p style="margin:0;font-weight:600"><span class="warn">!</span> The disk can't unlock by itself.</p>
+    <p style="margin:0" class="dim">This happens after a BIOS or firmware update, a Secure Boot change, or when the disk is moved to another machine.</p>
+
+    <p style="margin:26px 0 0">Enter the recovery key from the sheet you kept at installation. Dashes are optional.</p>
+    <div class="fld"><span class="br">[</span><input class="in" type="text" aria-label="Recovery key" placeholder="xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx-xxxxxxxx"><span class="br">]</span></div>
+    <p style="margin:8px 0 0" class="dim">Attempt 1 of 5. The key uses only letters that sit in the same place on AZERTY and QWERTY.</p>
+
+    <div class="rule"></div>
+
+    <p style="margin:0" class="dim">After unlocking, the appliance links the disk to this machine's TPM again, so the next start is unattended.</p>
+    <p style="margin:0" class="dim">Lost the key? The data on this disk can't be read without it. Install a fresh appliance and restore the latest backup.</p>
+  </div>
+  <div class="keys"><span><b>Enter</b>Unlock</span><span><b>Ctrl+Alt+Del</b>Restart</span></div>
+</div>
+</body>
+</html>

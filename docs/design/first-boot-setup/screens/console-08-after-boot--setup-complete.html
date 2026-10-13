@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Console after first boot (setup-complete)</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c06-console.dc.html, state: setup-complete. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  @keyframes blink{50%{opacity:0}}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .body{flex:1;padding:44px 80px 0}
+  .dim{color:#A4A6A7}
+  .ok{color:#3AD4CA}
+  .acc{color:#FA5B35}
+  .url{padding-left:34px;font-weight:600}
+  .stat{display:grid;grid-template-columns:150px minmax(0,1fr)}
+  .rule{height:2px;background:#757E86;margin:26px 0}
+  .menu{display:grid;grid-template-columns:40px minmax(0,1fr)}
+  .cur{color:#FA5B35;animation:blink 1s steps(1) infinite}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> 2026.10 · notary-brussels-01</span><span>tty1</span></div>
+  <div class="body">
+
+    
+    
+      <div>
+        <p style="margin:0;font-weight:600">The appliance is running.</p>
+        <p style="margin:0 0 13px">Sign in from a browser on another computer on this network:</p>
+        <div class="url"><span class="acc">›</span> https://notary-brussels-01.local</div>
+        <div class="url"><span class="acc">›</span> https://192.168.1.50</div>
+        <p style="margin:13px 0 0" class="dim">Setup is complete and no longer accepts connections.</p>
+      </div>
+    
+
+    <div class="rule"></div>
+
+    <div class="stat">
+      <span class="dim">Network</span><span>eno1 · 192.168.1.50/24 · DHCP <span class="ok">✓ connected</span></span>
+      <span class="dim">Disk</span><span>encrypted · unlocked by TPM <span class="ok">✓</span></span>
+      <span class="dim">Setup</span><span>finished and closed</span>
+      <span class="dim">Appliance ID</span><span>7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41</span>
+      <span class="dim">Support</span><span>Sūveryn Enterprise · 15 users · until 30 September 2027</span>
+      <span class="dim">Time</span><span>Monday 12 October 2026, 14:32 · Europe/Brussels</span>
+    </div>
+
+    <div class="rule"></div>
+
+    <div class="menu">
+      <span class="acc">1</span><span>Show network details</span>
+      <span class="acc">2</span><span>Change network settings</span>
+      <span class="acc">3</span><span>Show the registration QR code</span>
+      <span class="acc">4</span><span>Restart</span>
+      <span class="acc">5</span><span>Shut down</span>
+    </div>
+    <p style="margin:20px 0 0">Choose an option: <span class="cur">█</span></p>
+  </div>
+</div>
+</body>
+</html>

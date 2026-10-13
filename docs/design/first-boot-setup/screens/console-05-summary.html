@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer · Ready to install</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c04-summary.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center}
+  .win{position:relative;width:900px;background:#12161B;border:2px solid #757E86;padding:32px 38px 26px}
+  .win-title{position:absolute;top:-14px;left:26px;padding:0 10px;font-weight:600;background:linear-gradient(to bottom,#0B0D10 50%,#12161B 50%)}
+  .sum{display:grid;grid-template-columns:170px minmax(0,1fr)}
+  .sum .k{color:#A4A6A7}
+  .danger{border:2px solid #FA5B35;padding:14px 18px;margin-top:26px}
+  .fld{display:flex;width:300px}
+  .br{color:#A4A6A7}
+  .fld.focus .br{color:#FA5B35}
+  .in{flex:1;min-width:0;background:#272C32;color:#F3F4F5;font:inherit;border:none;outline:none;height:26px;padding:0 10px;margin:0 6px;caret-color:#FA5B35}
+  .dim{color:#A4A6A7}
+  .warn{color:#FA5B35}
+  .btns{display:flex;justify-content:flex-end;gap:28px;margin-top:30px}
+  .tbtn{font:inherit;color:#F3F4F5;text-decoration:none;padding:0 6px}
+  .tbtn.focus{background:#FA5B35;color:#020205}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .keys b{color:#F3F4F5;font-weight:600;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> installer</span><span>2026.10 · Step 5 of 6</span></div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title">Ready to install</div>
+      <div class="sum">
+        <span class="k">Keyboard</span><span>Belgian (AZERTY)</span>
+        <span class="k">Time zone</span><span>Europe/Brussels</span>
+        <span class="k">Disk</span><span>nvme0n1 · Samsung 990 PRO · 2.0 TB</span>
+        <span class="k">Encryption</span><span>LUKS2 · unlocks with this machine's TPM</span>
+        <span class="k">Name</span><span>notary-brussels-01</span>
+        <span class="k">Address</span><span>192.168.1.50/24 · DHCP</span>
+        <span class="k">Models</span><span>Qwen3.8-27B (default), Mistral Small 3.2 24B</span>
+        <span class="k">Memory</span><span><span class="warn">!</span> 32 GB, below the recommended 64 GB</span>
+      </div>
+
+      <div class="danger">
+        <div><span class="warn">!</span> <b>All data on nvme0n1 will be permanently erased.</b></div>
+        <div style="display:flex;align-items:center;gap:14px;margin-top:10px">
+          <span class="dim">Type ERASE to confirm</span>
+          <div class="fld"><span class="br">[</span><input class="in" type="text" aria-label="Type ERASE to confirm" value="ERASE"><span class="br">]</span></div>
+        </div>
+      </div>
+
+      <div class="btns">
+        <a href="console-04-network.html" class="tbtn">&lt; Back &gt;</a>
+        <a href="console-06-installing.html" class="tbtn focus">&lt; Install &gt;</a>
+      </div>
+    </div>
+  </div>
+  <div class="keys"><span><b>Tab</b>Next field</span><span><b>Enter</b>Install</span><span><b>Esc</b>Back</span><span><b>F1</b>Help</span></div>
+</div>
+</body>
+</html>

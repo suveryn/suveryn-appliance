@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Installer · Disk recovery key</title>
+<!-- Static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard c05b-recovery-key.dc.html. Reference only: not production code. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;600&amp;display=swap">
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  .screen{width:1280px;height:800px;background:#0B0D10;color:#F3F4F5;font-family:'Source Code Pro',ui-monospace,monospace;font-size:17px;line-height:26px;display:flex;flex-direction:column;overflow:hidden}
+  .bar{display:flex;justify-content:space-between;align-items:center;background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;flex:none}
+  .bar b{color:#F3F4F5;font-weight:600}
+  .stage{flex:1;display:flex;align-items:center;justify-content:center}
+  .win{position:relative;width:960px;background:#12161B;border:2px solid #757E86;padding:32px 38px 26px}
+  .win-title{position:absolute;top:-14px;left:26px;padding:0 10px;font-weight:600;background:linear-gradient(to bottom,#0B0D10 50%,#12161B 50%)}
+  .key{border:2px solid #FA5B35;padding:14px 18px;margin:18px 0;font-size:20px;line-height:34px;font-weight:600;letter-spacing:.04em;text-align:center}
+  .fld{display:flex;width:300px}
+  .br{color:#FA5B35}
+  .in{flex:1;min-width:0;background:#272C32;color:#F3F4F5;font:inherit;border:none;outline:none;height:26px;padding:0 10px;margin:0 6px;caret-color:#FA5B35}
+  .dim{color:#A4A6A7}
+  .ok{color:#3AD4CA}
+  .warn{color:#FA5B35}
+  .btns{display:flex;justify-content:flex-end;gap:28px;margin-top:26px}
+  .tbtn{font:inherit;color:#F3F4F5;text-decoration:none;padding:0 6px}
+  .tbtn.focus{background:#FA5B35;color:#020205}
+  .keys{background:#12161B;color:#A4A6A7;height:26px;padding:0 20px;display:flex;gap:30px;align-items:center;flex:none}
+  .keys b{color:#F3F4F5;font-weight:600;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="bar"><span><b>Sūveryn</b> installer</span><span>2026.10 · Step 6 of 6</span></div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title">Write down the disk recovery key</div>
+      <p style="margin:0"><span class="ok">✓</span> The disk is encrypted and linked to this machine's TPM. It unlocks by itself at every start.</p>
+      <p style="margin:0" class="dim">You need this key only if it can't: after a BIOS or firmware update, a Secure Boot change, or when the disk is moved to another machine.</p>
+
+      <div class="key">fjkcbvgt-lrhnedui-tbcvkjfg-hnulrdei<br>cgtbvfkj-rhnlduei-btcgkfvj-unhrlide</div>
+
+      <p style="margin:0"><span class="warn">!</span> <b>This is the only time it is shown.</b> It is not stored on this machine.</p>
+      <p style="margin:0" class="dim">Write it on paper and keep it with the office's other important documents, not with the appliance.</p>
+
+      <div style="display:flex;align-items:center;gap:14px;margin-top:20px">
+        <span>Type the first group to confirm</span>
+        <div class="fld"><span class="br">[</span><input class="in" type="text" aria-label="First group of the recovery key" value="fjkcbvgt"><span class="br">]</span></div>
+        <span class="ok">✓</span>
+      </div>
+
+      <div class="btns">
+        <a href="console-08-after-boot.html" class="tbtn focus">&lt; Restart &gt;</a>
+      </div>
+    </div>
+  </div>
+  <div class="keys"><span><b>Enter</b>Restart</span><span>Remove the installation medium before restarting.</span></div>
+</div>
+</body>
+</html>
