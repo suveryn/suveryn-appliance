@@ -31,9 +31,18 @@ curl -fsSL -o /tmp/cuda-keyring.deb https://developer.download.nvidia.com/comput
 echo "$CUDA_KEYRING_SHA256  /tmp/cuda-keyring.deb" | sha256sum -c --quiet
 dpkg -i /tmp/cuda-keyring.deb >/dev/null && rm /tmp/cuda-keyring.deb
 apt-get update -qq
+# Runtime: llama-server links against cudart, cuBLAS, NCCL (several GPUs) and GNU OpenMP; installed
+# explicitly so removing the build tools in cleanup.sh never takes them along.
 apt-get install -y -qq --no-install-recommends "cuda-nvcc-$CUDA" "cuda-cudart-dev-$CUDA" "libcublas-dev-$CUDA" \
-  "cuda-cudart-$CUDA" "libcublas-$CUDA" >/dev/null
+  "cuda-cudart-$CUDA" "libcublas-$CUDA" libnccl2 libgomp1 >/dev/null
 ln -sfn "/usr/local/cuda-${CUDA/-/.}" /usr/local/cuda
+
+if [ -s /tmp/suveryn-llama.tar.gz ]; then
+  echo "== llama.cpp, built beforehand for the image (prebuild-llama.sh); suveryn-provision checks its commit"
+  install -d /opt/suveryn/llama.cpp
+  tar -xzf /tmp/suveryn-llama.tar.gz -C /opt/suveryn/llama.cpp --no-same-owner
+fi
+rm -f /tmp/suveryn-llama.tar.gz
 
 echo "== suveryn-provision image"
 python3 /opt/suveryn/appliance/provision/suveryn-provision image
