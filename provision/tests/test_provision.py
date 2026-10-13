@@ -105,3 +105,23 @@ def test_the_reader_gets_its_variables_through_env_keep_not_preserve_env():
     assert "--preserve-env" not in p.READER_WRAPPER and "SETENV" not in p.READER_WRAPPER
     needed = {"HF_HOME", "SUVERYN_EXTRACT_WORK_DIR", "SUVERYN_OCR_JOBS"}  # suveryn-core's child_env keeps these
     assert needed <= set(p.READER_ENV.split())
+
+
+def test_a_failure_shows_the_lines_that_name_what_failed():
+    """apt's last 600 characters left out which package's set-up failed (found in an image build)."""
+    out = "\n".join(["Setting up foo (1.0) ..."] * 200 + ["dpkg: error processing package postgresql-16 (--configure):",
+                     " installed post-installation script subprocess returned error exit status 1",
+                     "Errors were encountered while processing:", " postgresql-16"] + ["noise"] * 50)
+    shown = p.error_lines(out)
+    assert "dpkg: error processing package postgresql-16" in shown and "Errors were encountered" in shown
+    assert p.error_lines("all fine, nothing to see") == "all fine, nothing to see"
+
+
+def test_the_sandbox_boundary_check_flags_every_way_out():
+    held = {"uid": 997, "euid": 997, "inet_socket": "EPERM", "inet6_socket": "EPERM", "netlink_socket": "EPERM",
+            "read_secret": "EACCES", "ptrace": "EPERM", "setuid_root": "EPERM", "write_root": "EACCES",
+            "unshare": "EPERM", "no_new_privs": "1", "seccomp": "2", "core_limit": 0}
+    assert p.sandbox_boundary(held, 997) == []
+    leaks = {**held, "uid": 0, "inet_socket": "allowed", "read_secret": "allowed", "seccomp": "0"}
+    found = " ".join(p.sandbox_boundary(leaks, 997))
+    assert "uid 0" in found and "inet_socket" in found and "secrets" in found and "seccomp 0" in found
