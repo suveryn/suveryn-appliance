@@ -147,3 +147,15 @@ python3 -m pytest network-mode/tests
   are refused by name and by address; the office network stays reachable; the office adds and
   removes a destination; air-gapped and all; and the check passing, and failing when an outside
   address gets through or the rules aren't loaded; and no valid mode letting nothing out.
+
+**Where the namespace tests run.** `test_egress.py` (7 tests) and `test_nft_accepts_the_rules` (3)
+need their own network namespace with nftables in it. A VM or a privileged container allows that; an
+unprivileged container, such as the RunPod pod, doesn't. `conftest.py` checks once whether this
+machine allows it and otherwise **skips** those 10 tests with the reason (`pytest -rs` shows it). On
+a machine that is meant to run them, set `SUVERYN_REQUIRE_EGRESS_TESTS=1`: a missing requirement
+then **fails** them instead, so a skip can't hide a problem.
+
+```bash
+sudo python3 -m pytest -rs network-mode/tests                                  # anywhere
+sudo SUVERYN_REQUIRE_EGRESS_TESTS=1 python3 -m pytest network-mode/tests       # a VM or privileged container
+```
