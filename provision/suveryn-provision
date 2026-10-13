@@ -198,6 +198,12 @@ def write_env(path: Path, values: dict[str, str], owner: str, mode: int = 0o600,
     os.replace(tmp, path)
 
 
+def for_image() -> bool:
+    """Building for the appliance image: no GPU of the target in sight (the build VM has none, and a host
+    pre-building llama.cpp for the image has its own). SUVERYN_IMAGE_BUILD=1 says so explicitly."""
+    return os.environ.get("SUVERYN_IMAGE_BUILD") == "1" or not gpu_names()
+
+
 def systemd_running() -> bool:
     return Path("/run/systemd/system").is_dir()
 
@@ -365,7 +371,7 @@ def suveryn_core() -> None:
     note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
     # It loads each model once as a check: on the CPU when there is no GPU (an image is built without one).
     run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0",
-        **({} if gpu_names() else {"SUVERYN_RAG_DEVICE": "cpu"})}, cwd=CORE, capture=True)
+        **({"SUVERYN_RAG_DEVICE": "cpu"} if for_image() else {})}, cwd=CORE, capture=True)
     run("chmod", "-R", "a+rX", *[d for d in (HF_HOME, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
     note(f"embedding and Docling models in {HF_HOME}")
 
@@ -385,7 +391,7 @@ def llama_server() -> None:
         # 24-48 GB office card can be: Ampere (8.6: RTX A5000/A6000, 3090), Ada (8.9: RTX 4090, L40S),
         # Hopper (9.0); plus 8.0 (A100).
         # Its CPU code likewise: native here, generic in an image (built on an emulated CPU, run on the office's).
-        on_target = bool(gpu_names())
+        on_target = not for_image()
         archs = "native" if on_target else "80;86;89;90"
         run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", f"-DCMAKE_CUDA_ARCHITECTURES={archs}",
             f"-DGGML_NATIVE={'ON' if on_target else 'OFF'}",
@@ -1088,6 +1094,7 @@ def main() -> None:
     f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
     office_args(f, False)
     f.add_argument("--config", type=Path, help="first-boot.env: PUBLIC_URL, NETWORK_MODE, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
+    sub.add_parser("llama-server", help="build llama-server only (with SUVERYN_IMAGE_BUILD=1: as the image needs it)")
     sub.add_parser("verify", help="check every service, end to end")
     s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
     s.add_argument("action", choices=["start", "stop", "status"])
@@ -1101,6 +1108,9 @@ def main() -> None:
         sys.exit(0 if verify(None) else 1)
     if a.command == "image":
         image()
+        return
+    if a.command == "llama-server":
+        llama_server()
         return
     if a.command == "first-boot":
         if FIRST_BOOT_DONE.exists():
