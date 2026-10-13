@@ -1,0 +1,18 @@
+# First start: everything unique to this box and office (suveryn-provision first-boot), from
+# first-boot.env on the EFI partition. Runs once; afterwards the services start on their own.
+[Unit]
+Description=sūveryn: first start (names, secrets, models, services)
+After=network-online.target postgresql.service suveryn-grow-root.service
+Wants=network-online.target
+ConditionPathExists=!/var/lib/suveryn/.first-boot-done
+ConditionPathExists=/boot/efi/suveryn/first-boot.env
+
+[Service]
+Type=oneshot
+ExecStart=/opt/suveryn/appliance/image/first-boot.sh
+TimeoutStartSec=infinity
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

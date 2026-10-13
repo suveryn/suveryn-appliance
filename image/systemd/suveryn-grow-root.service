@@ -1,0 +1,12 @@
+# First start: grow the root partition and file system to the disk the image was flashed onto.
+[Unit]
+Description=sūveryn: grow the root file system to the disk
+Before=suveryn-first-boot.service
+ConditionPathExists=!/var/lib/suveryn/.root-grown
+
+[Service]
+Type=oneshot
+ExecStart=/opt/suveryn/appliance/image/grow-root.sh
+
+[Install]
+WantedBy=multi-user.target
