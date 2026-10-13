@@ -6,7 +6,7 @@ step before an OS image: run it directly on a test box; the image will run it at
 
 ```bash
 sudo provision/suveryn-provision install --public-url https://suveryn.office.example \
-     --network-mode air-gapped --site on-premise [--models-from /media/suveryn-models]
+     --network-mode connected [--outbound approved|all] --site on-premise [--models-from /media/suveryn-models]
 sudo provision/suveryn-provision verify            # again later, any time
 sudo provision/suveryn-provision services start    # start | stop | status
 ```
@@ -24,13 +24,15 @@ Secrets are generated on the machine and never printed.
 | Keycloak 26.8 | The pinned release (sha256 checked); the sūveryn theme ([`keycloak/theme`](../keycloak/theme/README.md)); the production realm ([`keycloak/realm`](../keycloak/realm/README.md): sslRequired all, 180-day events, exact redirect URLs, a new client secret), imported once and the realm file deleted | `127.0.0.1:8180/idp`, management `127.0.0.1:9000` |
 | The reader sandbox | [`reader-sandbox`](../reader-sandbox/README.md): user `suveryn-reader`, its inbox and work folder, the wrapper, and sudo for the gateway to start it as the reader. The gateway's `SUVERYN_EXTRACT_WRAPPER` points at it; `SUVERYN_EXTRACT_UNSANDBOXED` is never set | `/opt/suveryn/bin/suveryn-reader-sandbox`, `/var/lib/suveryn/{inbox,reader}` |
 | suveryn-core's gateway | systemd unit, user `suveryn` | `127.0.0.1:8000` |
-| Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` (asked on a console when omitted) | `/etc/suveryn/network-mode.env` |
+| Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` and `--outbound` (asked on a console when omitted). On the appliance (not on a test pod) also its enforcement: ufw for what comes in, the `suveryn-egress` rules and the `suveryn-dns` resolver for what goes out, and `/etc/resolv.conf` pointing at that resolver | `/etc/suveryn/network-mode.env`, `approved-destinations`, `dnsmasq.conf` |
 | The chat UI | Built from suveryn-core with a pinned Node (`npm ci`, every package by hash) | `/opt/suveryn/ui` |
 | TLS and the reverse proxy | [`reverse-proxy`](../reverse-proxy/README.md): nginx on one https origin for the UI, the gateway and Keycloak, strict security headers; the office's certificate (`--tls-cert`, `--tls-key`) or one from a local CA made on the machine | `:443` (and `:80`, redirecting), `/etc/suveryn/tls` |
 
 Configuration lives in `/etc/suveryn`: `gateway.env`, `keycloak.env` and `gateway-oidc.env` (each
-0600, owned by the service that reads it), `llama-presets.ini` and `network-mode.env`. The systemd
-units are in [`systemd/`](systemd): `suveryn-llm`, `keycloak`, `suveryn-gateway`.
+0600, owned by the service that reads it), `llama-presets.ini`, `network-mode.env`,
+`approved-destinations` and `dnsmasq.conf`. The systemd units are in [`systemd/`](systemd):
+`suveryn-llm`, `keycloak`, `suveryn-gateway`, and on the appliance `suveryn-egress` and `suveryn-dns`
+(the network mode).
 
 ## The GPU licence check
 
@@ -73,7 +75,9 @@ still open decision 3 in the development context).
 - **Sign-in and an upload end to end over https**: a temporary Keycloak user signs in through the
   login page as a browser would, uploads the fictional PDF to `/v1/documents`, sees it read, deletes
   it and signs out; the user is then removed.
-- **The network mode** is set.
+- **The network mode** is set, and on the appliance the **outgoing-traffic check** passes
+  (`suveryn-network-mode check`: the appliance's own rules are loaded, and addresses that are never
+  approved can't be reached).
 
 ## Without systemd
 
