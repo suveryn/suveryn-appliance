@@ -10,13 +10,13 @@ The rules are also loaded into a real firewall and resolver in test_egress.py (r
 import importlib.machinery
 import importlib.util
 import os
-import shutil
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from conftest import require_namespaces
 
 TOOL = Path(__file__).resolve().parent.parent / "suveryn-network-mode"
 BUILTIN = TOOL.parent / "builtin-destinations"
@@ -226,10 +226,10 @@ def test_the_resolver_fills_the_sets_only_with_approved_destinations_only():
         assert "nftset" not in netmode.dnsmasq_conf(mode, outbound, ["suveryn.com"])
 
 
-@pytest.mark.skipif(not shutil.which("nft") or not shutil.which("unshare") or os.geteuid() != 0,
-                    reason="checks the rules with nft in a throwaway network namespace (root)")
 @pytest.mark.parametrize("mode, outbound", [("connected", "approved"), ("air-gapped", "none"), ("connected", "all")])
 def test_nft_accepts_the_rules(mode, outbound):
+    """Loads the rules with nft in a throwaway network namespace (skipped where that isn't allowed, conftest.py)."""
+    require_namespaces("unshare", "nft")
     rules = load({"SUVERYN_DNS_USER": "nobody"}).nft_ruleset(mode, outbound)
     r = subprocess.run(["unshare", "-n", "nft", "-f", "-"], input=rules, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
