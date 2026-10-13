@@ -50,7 +50,7 @@ From the reviewed login mockup and the Sūveryn Design System:
 
 The badge is the website hero's badge from [suveryn-website](https://github.com/suveryn/suveryn-website) `index.html`: the Lucide wifi-off icon (9×9, stroke-width 2.4), 10px/600 teal text, the teal wash and border, 20px radius and `3px 8px` padding, with text and icon in the brand's corrected teal-ink (`#007F78`; the website's `#0F8A82` measures 4.1:1 on the badge's wash).
 
-It states a fact, so it is **off** unless the theme property `suverynShowAirGappedBadge` is `true` (`src/suveryn/login/theme.properties`). **Nothing sets it yet.** The installation's network mode is now recorded at provisioning in `/etc/suveryn/network-mode.env` ([`network-mode`](../../network-mode/README.md)); the next step is to set this property from it, only when the mode is `air-gapped`. Until then the badge never shows. Never set it to `true` by hand on an installation that can reach the internet.
+It states a fact, so it shows **only when the installation's network mode is `air-gapped`** ([`network-mode`](../../network-mode/README.md)). Keycloak's unit loads `/etc/suveryn/network-mode.env`, and `theme.properties` reads the mode from that environment (`suverynNetworkMode=${env.SUVERYN_NETWORK_MODE:unknown}`, checked against Keycloak 26.8). When the file is missing or the value is anything else the property is `unknown` and the badge stays off. After changing the mode, restart Keycloak.
 
 ## Languages
 

@@ -31,7 +31,7 @@ network:
 NETPLAN
 chmod 600 /etc/netplan/01-suveryn.yaml
 
-echo "== Firewall (ufw): nothing in until first boot sets the office's rules"
+echo "== Firewall (ufw): nothing in until first boot sets the office's rules; outgoing per network mode from first boot (suveryn-egress)"
 ufw --force reset >/dev/null
 ufw default deny incoming >/dev/null
 ufw default deny routed >/dev/null

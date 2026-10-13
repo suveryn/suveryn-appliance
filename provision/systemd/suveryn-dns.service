@@ -1,0 +1,20 @@
+# The appliance's own resolver (network-mode/README.md): every lookup goes to the office's DNS servers
+# (/run/systemd/resolve/resolv.conf), and the addresses of approved destinations go into the outgoing
+# rules' sets as they are answered. Starts as root to bind 127.0.0.1:53, then runs as suveryn-dns,
+# keeping only the capability it needs to add to those sets.
+[Unit]
+Description=sūveryn resolver (approved destinations)
+After=network.target systemd-resolved.service suveryn-egress.service
+Requires=suveryn-egress.service
+Before=nss-lookup.target
+Wants=nss-lookup.target
+
+[Service]
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/suveryn/dnsmasq.conf
+Restart=on-failure
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

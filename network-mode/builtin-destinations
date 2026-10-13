@@ -1,0 +1,17 @@
+# The appliance's own approved destinations in connected mode ("approved destinations only"). Ships
+# with the image and can't be removed on the appliance; the office adds its own with
+# suveryn-network-mode allow <domain>. One domain per line; a domain also covers its subdomains.
+
+# Sūveryn Labs: the portal, updates and model bundles.
+suveryn.com
+
+# Model downloads (suveryn-core models/manifest.json): Hugging Face and the hosts its downloads redirect to.
+huggingface.co
+hf.co
+
+# Ubuntu's security updates, until signed update bundles replace them (tracker #40).
+security.ubuntu.com
+archive.ubuntu.com
+
+# Time, when the office has no time server of its own.
+ntp.ubuntu.com

@@ -43,7 +43,8 @@ is FAT32 and so writable from any computer, at `suveryn/first-boot.env`:
 
 ```bash
 PUBLIC_URL=https://suveryn.office.example
-NETWORK_MODE=air-gapped          # connected | outbound-blocked | air-gapped
+NETWORK_MODE=air-gapped          # connected | air-gapped
+OUTBOUND=approved                # connected only: approved (the default) | all
 SITE=on-premise                  # required with a GeForce card: on-premise | datacenter (refused) | test
 MODELS_FROM=/media/suveryn-models
 TLS_CERT=/boot/efi/suveryn/server.pem   # optional: the office's certificate (full chain) and key;
@@ -63,16 +64,20 @@ On failure it says so on the screen and runs again at the next start, until it s
 settings in `first-boot.env` stop it. It runs once (`/var/lib/suveryn/.first-boot-done`); after
 that the services start on their own at every boot.
 
-### The three network modes
+### The two network modes
 
-| | connected | outbound-blocked | air-gapped |
+| | connected, approved destinations (default) | connected, all outgoing traffic | air-gapped |
 |---|---|---|---|
-| LLM files | Downloaded, checked against the manifest's sha256 | From media: a USB disk labelled `SUVERYN-MODELS` (mounted read-only), checked the same way | Same as outbound-blocked |
-| Outbound traffic (ufw) | Allowed | Only to the office's own network (LDAP/AD, DNS, NTP, a local mirror) | Same as outbound-blocked |
-| Ubuntu security updates | Automatic (unattended-upgrades) | Off: a signed update bundle on media (not built yet) | Same as outbound-blocked |
+| LLM files | Downloaded, checked against the manifest's sha256 | Same | From media: a USB disk labelled `SUVERYN-MODELS` (mounted read-only), checked the same way |
+| Outgoing traffic | The office's network, and the approved destinations (sūveryn, Hugging Face, Ubuntu's security updates, time, the office's connectors) | Anything | The office's own network only |
+| Ubuntu security updates | Automatic (unattended-upgrades) | Same | Off: a signed update bundle on media (#40, not built yet) |
 | Subscription manifest (Enterprise) | Verified locally when it exists; it is never fetched (development context §8; not built yet) | Same | Same |
 
-Everything else is the same in all three modes. The embedding and Docling models are in the image,
+ufw lets in only 80 and 443 in every mode. What goes out is enforced by the network mode's own
+nftables table and resolver (`suveryn-egress`, `suveryn-dns`), loaded before the network comes up
+at every boot; `verify` runs the outgoing-traffic check. See [`network-mode`](../network-mode/README.md).
+
+Everything else is the same in all modes. The embedding and Docling models are in the image,
 and the realm is built from the image's own suveryn-core checkout, so first boot needs no internet
 access except, when connected, for the LLM files.
 
@@ -81,7 +86,8 @@ access except, when connected, for the LLM files.
 - **Minimal installation:** `ubuntu-server-minimal`. Snap, ModemManager, iSCSI, multipath, apport and
   the Ubuntu Pro client are removed; the CUDA compiler, build tools, Node and every cache go out after
   the build.
-- **One door:** ufw allows only 80 (redirects to https) and 443 in. PostgreSQL, Keycloak, llama-server
+- **One door in, a short list out:** ufw allows only 80 (redirects to https) and 443 in; the network
+  mode decides what goes out (above). PostgreSQL, Keycloak, llama-server
   and the gateway listen on loopback only. Nothing answers on 80/443 until first boot has written the
   office's site.
 - **No SSH server and no login:** the build user and the SSH server are removed last, and root is

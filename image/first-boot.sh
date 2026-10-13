@@ -13,7 +13,7 @@ for f in "$ESP"/*.pem "$ESP"/*.crt "$ESP"/*.key; do
   [ -e "$f" ] && install -m 0600 "$f" "/etc/suveryn/first-boot/$(basename "$f")"
 done
 sed -i "s#=$ESP/#=/etc/suveryn/first-boot/#" /etc/suveryn/first-boot/first-boot.env
-# Model files on a USB disk labelled SUVERYN-MODELS (outbound-blocked or air-gapped installations).
+# Model files on a USB disk labelled SUVERYN-MODELS (air-gapped installations).
 if [ -e /dev/disk/by-label/SUVERYN-MODELS ]; then
   install -d /media/suveryn-models
   mount -o ro,nosuid,nodev,noexec /dev/disk/by-label/SUVERYN-MODELS /media/suveryn-models
