@@ -25,6 +25,8 @@ Secrets are generated on the machine and never printed.
 | The reader sandbox | [`reader-sandbox`](../reader-sandbox/README.md): user `suveryn-reader`, its inbox and work folder, the wrapper, and sudo for the gateway to start it as the reader. The gateway's `SUVERYN_EXTRACT_WRAPPER` points at it; `SUVERYN_EXTRACT_UNSANDBOXED` is never set | `/opt/suveryn/bin/suveryn-reader-sandbox`, `/var/lib/suveryn/{inbox,reader}` |
 | suveryn-core's gateway | systemd unit, user `suveryn` | `127.0.0.1:8000` |
 | Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` (asked on a console when omitted) | `/etc/suveryn/network-mode.env` |
+| The chat UI | Built from suveryn-core with a pinned Node (`npm ci`, every package by hash) | `/opt/suveryn/ui` |
+| TLS and the reverse proxy | [`reverse-proxy`](../reverse-proxy/README.md): nginx on one https origin for the UI, the gateway and Keycloak, strict security headers; the office's certificate (`--tls-cert`, `--tls-key`) or one from a local CA made on the machine | `:443` (and `:80`, redirecting), `/etc/suveryn/tls` |
 
 Configuration lives in `/etc/suveryn`: `gateway.env`, `keycloak.env` and `gateway-oidc.env` (each
 0600, owned by the service that reads it), `llama-presets.ini` and `network-mode.env`. The systemd
@@ -63,12 +65,15 @@ still open decision 3 in the development context).
   uploaded as the gateway's user, through the gateway's own document service, its inbox and the
   sandboxed reader, and must come back read (one page), after which it is deleted. It runs on the
   CPU so the running services keep the GPU; the sandbox path is the same.
-- **The gateway**: `/health` reports documents and history ready.
+- **The gateway**: `/health` reports documents, history and sign-in ready (it reaches Keycloak at
+  the public https URL, through the proxy).
+- **The proxy** ([`reverse-proxy`](../reverse-proxy/README.md)): TLS 1.2/1.3 with a certificate valid
+  for the name and TLS 1.1 refused; http redirects to https; the security headers on the UI, the
+  API and Keycloak; `/docs`, `/redoc` and `/openapi.json` answer 404.
+- **Sign-in and an upload end to end over https**: a temporary Keycloak user signs in through the
+  login page as a browser would, uploads the fictional PDF to `/v1/documents`, sees it read, deletes
+  it and signs out; the user is then removed.
 - **The network mode** is set.
-
-Sign-in itself (`auth` in `/health`) needs the appliance's TLS reverse proxy: the gateway reaches
-Keycloak only through its public https URL. The proxy is not part of this script yet, so `verify`
-reports it rather than counting it as a failure.
 
 ## Without systemd
 
