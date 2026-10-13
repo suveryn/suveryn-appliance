@@ -55,7 +55,7 @@ Defaults>suveryn-reader env_keep += "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OC
 `--preserve-env=…` without the `SETENV` tag, and `SETENV` would let the gateway pass the reader any
 variable, so neither is used.
 
-This sudo route is not tested yet: the dev pod's gateway runs as root. What is tested is the wrapper started directly as `suveryn-reader` (`tests/`), which is what sudo does; whether sudo passes every variable the reader needs (CUDA, model cache) must be checked on the appliance image.
+This sudo route is tested by `suveryn-provision verify` ([`provision`](../provision/README.md)), on a machine provisioned with a gateway running as its own user: a PDF is read through it, and `tests/probe.py`, started exactly as the gateway starts the reader, must find itself running as `suveryn-reader` without network sockets, unable to read the gateway's secrets, without ptrace or a way to root, under seccomp and no_new_privs. That test found that sudo refused `--preserve-env` (hence `env_keep` above).
 
 The code the reader runs (suveryn-core's virtual environment), the model cache (`HF_HOME`) and the
 GPU devices must be readable by `suveryn-reader`; nothing under a 0700 home folder.
