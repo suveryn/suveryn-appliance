@@ -9,7 +9,8 @@ Two network namespaces stand in for the appliance and the world outside it:
                               203.0.113.30  connector.test      (approved by the office during a test)
 
 The tool's own ``apply`` loads the rules and writes the resolver's configuration; dnsmasq then runs
-with it, as on the appliance. Needs Linux, root, ``ip``, ``nft`` and ``dnsmasq``; skipped otherwise:
+with it, as on the appliance. Needs Linux, root, ``ip``, ``nft``, ``dnsmasq`` and a machine that allows
+network namespaces (not an unprivileged container); skipped otherwise, with the reason (conftest.py):
 
     sudo python3 -m pytest network-mode/tests/test_egress.py
 """
@@ -24,6 +25,7 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import require_namespaces
 
 TOOL = Path(__file__).resolve().parent.parent / "suveryn-network-mode"
 APP, NET = "suv-test-app", "suv-test-net"
@@ -53,9 +55,6 @@ for target in sys.argv[1:]:
 print(json.dumps(out))
 """
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "linux" or os.geteuid() != 0 or not all(shutil.which(t) for t in ("ip", "nft", "dnsmasq")),
-    reason="needs Linux, root, ip, nft and dnsmasq")
 
 
 def sh(*args, check=True, **kw):
@@ -64,6 +63,8 @@ def sh(*args, check=True, **kw):
 
 @pytest.fixture(scope="module")
 def network(tmp_path_factory):
+    # Skipped, with the reason, where network namespaces aren't allowed (conftest.py).
+    require_namespaces("ip", "nft", "dnsmasq")
     tmp = tmp_path_factory.mktemp("egress")
     for ns in (APP, NET):
         sh("ip", "netns", "del", ns, check=False)
