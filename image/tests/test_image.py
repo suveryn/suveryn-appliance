@@ -48,24 +48,31 @@ def test_pins():
     assert re.search(r"CUDA_KEYRING_SHA256=[0-9a-f]{64}", (HERE / "scripts" / "build.sh").read_text())
 
 
-@pytest.mark.parametrize("mode", ["connected", "outbound-blocked", "air-gapped"])
-def test_firewall_lets_in_only_the_web_and_keeps_offline_modes_offline(mode):
-    rules = [" ".join(r) for r in p.firewall_rules(mode)]
+def test_firewall_lets_in_only_the_web():
+    """ufw is for what comes in; what goes out is the network mode's own table (network-mode/tests)."""
+    rules = [" ".join(r) for r in p.firewall_rules()]
     assert rules[:3] == ["--force reset", "default deny incoming", "default deny routed"]
     assert [r for r in rules if r.startswith("allow in")] == ["allow in 80/tcp", "allow in 443/tcp"]
-    if mode == "connected":
-        assert "default allow outgoing" in rules
-    else:
-        assert "default deny outgoing" in rules and "default allow outgoing" not in rules
-        assert all(r.split()[-1] in p.PRIVATE_NETS for r in rules if r.startswith("allow out"))
+    assert "default allow outgoing" in rules and not [r for r in rules if r.startswith("allow out")]
     assert rules[-1] == "--force enable"
+
+
+def test_the_network_modes_units_load_the_rules_before_the_network():
+    egress = (HERE.parent / "provision" / "systemd" / "suveryn-egress.service").read_text()
+    assert "Before=network-pre.target" in egress and "WantedBy=sysinit.target" in egress
+    assert "ExecStart=/opt/suveryn/bin/suveryn-network-mode apply" in egress
+    dns = (HERE.parent / "provision" / "systemd" / "suveryn-dns.service").read_text()
+    assert "Requires=suveryn-egress.service" in dns and "--conf-file=/etc/suveryn/dnsmasq.conf" in dns
+    assert p.EGRESS_UNITS == ["suveryn-egress", "suveryn-dns"]
+    assert "nameserver 127.0.0.1" in p.RESOLV_TEXT
 
 
 def test_first_boot_settings_are_the_known_ones_only(tmp_path):
     cfg = tmp_path / "first-boot.env"
-    cfg.write_text("PUBLIC_URL=https://suveryn.office.example\nNETWORK_MODE=air-gapped\nSITE=on-premise\n"
-                   "MODELS_FROM=/media/suveryn-models\n")
-    assert p.first_boot_config(cfg)["NETWORK_MODE"] == "air-gapped"
+    cfg.write_text("PUBLIC_URL=https://suveryn.office.example\nNETWORK_MODE=connected\nOUTBOUND=approved\n"
+                   "SITE=on-premise\nMODELS_FROM=/media/suveryn-models\n")
+    assert p.first_boot_config(cfg)["NETWORK_MODE"] == "connected"
+    assert p.first_boot_config(cfg)["OUTBOUND"] == "approved"
     cfg.write_text("PUBLIC_URL=https://x.example\nSUVERYN_EXTRACT_UNSANDBOXED=1\n")
     with pytest.raises(SystemExit):
         p.first_boot_config(cfg)  # a typo or a smuggled setting stops the first boot

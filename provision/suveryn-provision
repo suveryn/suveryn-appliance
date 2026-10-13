@@ -12,7 +12,10 @@ nothing):
 1. **GPU licence check.** A GeForce card may only run on the office's own premises (NVIDIA's driver
    licence forbids datacenter use). ``--site`` must say where this machine is; the answer is printed
    and a GeForce card with ``--site datacenter`` stops the run.
-2. **Network mode** (``network-mode/``): ``/etc/suveryn/network-mode.env``.
+2. **Network mode** (``network-mode/``): ``/etc/suveryn/network-mode.env``, connected (approved
+   destinations only, or all outgoing traffic) or air-gapped. On the appliance the mode is enforced:
+   ufw lets in only the web ports, and ``suveryn-egress`` (nftables) with the appliance's own
+   resolver ``suveryn-dns`` (dnsmasq) decides what goes out.
 3. **Packages** from Ubuntu 24.04: PostgreSQL 16 with pgvector, Java 21 (Keycloak), Tesseract and
    Ghostscript (OCR), python3-seccomp (reader sandbox), and the tools to build llama.cpp.
 4. **Users**: ``suveryn`` (gateway), ``suveryn-llm`` (model server), ``keycloak``; the reader's
@@ -87,6 +90,9 @@ MODELS = VAR / "models"
 HF_HOME = VAR / "hf"
 UV = OPT / "bin" / "uv"
 UNITS = ["suveryn-llm", "keycloak", "suveryn-gateway"]
+# The network mode's units: the outgoing rules, then the resolver that fills the approved sets. Appliance only.
+EGRESS_UNITS = ["suveryn-egress", "suveryn-dns"]
+NETWORK_MODE_TOOL = OPT / "bin" / "suveryn-network-mode"
 RUNUSER = "/usr/sbin/runuser"
 TLS = ETC / "tls"
 UI = OPT / "ui"
@@ -94,7 +100,7 @@ NODE = OPT / "node"
 LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
 PACKAGES = [
-    "ufw", "unattended-upgrades",
+    "ufw", "nftables", "dnsmasq-base", "unattended-upgrades",
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
     "python3-seccomp", "nginx", "openssl", "sudo",
@@ -250,23 +256,39 @@ def gpu_verdict(names: list[str], site: str | None) -> tuple[bool, str]:
 
 
 # ---------------------------------------------------------------------------- 2. network mode
-def network_mode(mode: str | None) -> None:
+def install_network_mode_tool() -> None:
+    """The tool and its built-in destinations side by side in /opt/suveryn/network-mode, on PATH as a link."""
+    dest = OPT / "network-mode"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("suveryn-network-mode", "builtin-destinations"):
+        shutil.copy2(REPO / "network-mode" / name, dest / name)
+    os.chmod(dest / "suveryn-network-mode", 0o755)
+    os.chmod(dest / "builtin-destinations", 0o644)
+    NETWORK_MODE_TOOL.unlink(missing_ok=True)
+    NETWORK_MODE_TOOL.symlink_to(dest / "suveryn-network-mode")
+
+
+def network_mode(mode: str | None, outbound: str | None = None) -> None:
     step("Network mode")
-    tool = OPT / "bin" / "suveryn-network-mode"
-    shutil.copy2(REPO / "network-mode" / "suveryn-network-mode", tool)
-    os.chmod(tool, 0o755)
+    install_network_mode_tool()
     if mode is None and sys.stdin.isatty():
         print("   Which network mode is this installation in, once in use?\n"
-              "     connected | outbound-blocked | air-gapped")
+              "     connected | air-gapped")
         mode = input("   mode: ").strip()
+        if mode == "connected" and outbound is None:
+            print("   Outgoing connections: approved (approved destinations only, recommended) | all")
+            outbound = input("   outgoing [approved]: ").strip() or "approved"
     if mode is None:
-        current = subprocess.run([tool, "get"], capture_output=True, text=True).stdout.strip()
+        current = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
         if current == "unknown":
-            fail("no network mode: pass --network-mode connected|outbound-blocked|air-gapped")
+            fail("no network mode: pass --network-mode connected|air-gapped")
         note(f"kept: {current}")
         return
-    run(tool, "set", mode)
-    note(f"set: {mode} ({ETC / 'network-mode.env'})")
+    if outbound and mode != "connected":
+        fail(f"--outbound applies to connected only, not {mode}")
+    run(NETWORK_MODE_TOOL, "set", mode, *(["--outbound", outbound] if outbound else []))
+    out = subprocess.run([NETWORK_MODE_TOOL, "get", "--outbound"], capture_output=True, text=True).stdout.strip()
+    note(f"set: {mode}, outgoing: {out} ({ETC / 'network-mode.env'})")
 
 
 # ---------------------------------------------------------------------------- 3-4. packages and users
@@ -299,6 +321,7 @@ def users() -> None:
     ensure_user("suveryn")
     ensure_user("suveryn-llm")
     ensure_user("keycloak", KEYCLOAK)
+    ensure_user("suveryn-dns")  # the appliance's resolver (network mode), after it drops root
     for d, owner, mode in ((ETC, "root", 0o755), (OPT / "bin", "root", 0o755), (VAR, "root", 0o755),
                            (VAR / "work", "suveryn", 0o700), (MODELS, "root", 0o755), (HF_HOME, "root", 0o755),
                            (LOGS, "root", 0o755)):
@@ -306,7 +329,8 @@ def users() -> None:
         pw = pwd.getpwnam(owner)
         os.chown(d, pw.pw_uid, pw.pw_gid)
         os.chmod(d, mode)
-    note("suveryn (gateway), suveryn-llm (model server), keycloak; /etc/suveryn, /opt/suveryn, /var/lib/suveryn")
+    note("suveryn (gateway), suveryn-llm (model server), keycloak, suveryn-dns (resolver); /etc/suveryn, /opt/suveryn, "
+         "/var/lib/suveryn")
 
 
 # ---------------------------------------------------------------------------- 5. PostgreSQL
@@ -655,27 +679,43 @@ def start_nginx() -> None:
         run("nginx")
 
 
-PRIVATE_NETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "fe80::/10"]
+def firewall_rules() -> list[list[str]]:
+    """ufw: in, only the web ports. Outgoing traffic is the network mode's: suveryn-egress (nftables)
+    decides it, in a table of its own, so ufw lets out what that table lets out."""
+    return [["--force", "reset"], ["default", "deny", "incoming"], ["default", "deny", "routed"],
+            ["default", "allow", "outgoing"], ["allow", "in", "80/tcp"], ["allow", "in", "443/tcp"],
+            ["--force", "enable"]]
 
 
-def firewall_rules(mode: str) -> list[list[str]]:
-    """ufw commands for the mode: in, only the web ports; out, everything when connected, else only the
-    office's own network (LDAP, DNS, NTP, a local mirror), so nothing leaves it by mistake."""
-    rules = [["--force", "reset"], ["default", "deny", "incoming"], ["default", "deny", "routed"],
-             ["allow", "in", "80/tcp"], ["allow", "in", "443/tcp"]]
-    if mode == "connected":
-        rules.append(["default", "allow", "outgoing"])
-    else:
-        rules.append(["default", "deny", "outgoing"])
-        rules += [["allow", "out", "to", net] for net in PRIVATE_NETS]
-    return rules + [["--force", "enable"]]
+RESOLV_CONF = Path("/etc/resolv.conf")
+UPSTREAM_RESOLV = Path("/run/systemd/resolve/resolv.conf")
 
 
-def firewall(mode: str) -> None:
-    step("Firewall")
-    for rule in firewall_rules(mode):
+def firewall() -> None:
+    step("Firewall and outgoing traffic")
+    for rule in firewall_rules():
         run("ufw", *rule, capture=True)
-    note("in: 80 and 443 only; out: " + ("anywhere" if mode == "connected" else "the office's own network only"))
+    note("in: 80 and 443 only")
+    if not UPSTREAM_RESOLV.exists():
+        fail(f"{UPSTREAM_RESOLV} is missing: the appliance's resolver needs systemd-resolved for the office's DNS servers")
+    for unit in EGRESS_UNITS:
+        shutil.copyfile(REPO / "provision" / "systemd" / f"{unit}.service", Path("/etc/systemd/system") / f"{unit}.service")
+    run("systemctl", "daemon-reload")
+    run("systemctl", "enable", *EGRESS_UNITS)
+    run("systemctl", "restart", "suveryn-egress")  # loads the rules and writes the resolver's configuration
+    run("systemctl", "restart", "suveryn-dns")
+    # Every program on the appliance resolves through its own resolver, so approved names fill the sets.
+    if RESOLV_CONF.is_symlink() or RESOLV_CONF.read_text() != RESOLV_TEXT:
+        RESOLV_CONF.unlink(missing_ok=True)
+        RESOLV_CONF.write_text(RESOLV_TEXT)
+    out = subprocess.run([NETWORK_MODE_TOOL, "show"], capture_output=True, text=True).stdout.strip()
+    for line in out.splitlines():
+        note(line)
+
+
+RESOLV_TEXT = ("# Written by suveryn-provision: the appliance's own resolver (suveryn-dns), which applies the network\n"
+               "# mode's approved destinations. The office's DNS servers are in /run/systemd/resolve/resolv.conf.\n"
+               "nameserver 127.0.0.1\noptions edns0 trust-ad\n")
 
 
 def updates(mode: str) -> None:
@@ -907,8 +947,18 @@ def verify(public_url: str | None) -> bool:
     host = (public_url or gw.get("SUVERYN_PUBLIC_URL", "")).split("://", 1)[-1].rstrip("/")
     for name, passed, detail in verify_proxy(host, kc.get("KC_BOOTSTRAP_ADMIN_PASSWORD", "")):
         result(name, passed, detail)
-    mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
+    mode = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
     result("Network mode", mode != "unknown", mode)
+    if systemd_running() and Path("/etc/systemd/system/suveryn-egress.service").exists():
+        r = subprocess.run([NETWORK_MODE_TOOL, "check", "--json"], capture_output=True, text=True)
+        try:
+            c = json.loads(r.stdout)
+            result("Outgoing traffic", c["passed"], c["summary"] + (f": {', '.join(c['outside_reached'])}"
+                                                                    if not c["passed"] and c["outside_reached"] else ""))
+        except (ValueError, KeyError):
+            result("Outgoing traffic", False, (r.stderr or r.stdout).strip()[-300:])
+    else:
+        note("Outgoing traffic: not checked (no appliance firewall here: a test machine)")
     return ok
 
 
@@ -1110,10 +1160,10 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
         fail("stopped at the GPU licence check")
     if not a.public_url or not a.public_url.startswith("https://"):
         fail("--public-url must be https (the realm requires TLS everywhere)")
-    network_mode(a.network_mode)
-    mode = subprocess.run([OPT / "bin" / "suveryn-network-mode", "get"], capture_output=True, text=True).stdout.strip()
+    network_mode(a.network_mode, a.outbound)
+    mode = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
     if not staging:  # the appliance itself; a test pod (install) has no firewall of its own
-        firewall(mode)
+        firewall()
         updates(mode)
     db_url, keycloak_pw = postgres()
     llms = llm_models(a.models_from, mode, staging)
@@ -1134,7 +1184,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
 def first_boot_config(path: Path) -> dict[str, str]:
     """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
     values = read_env(path)
-    unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY"}
+    unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY"}
     if unknown:
         fail(f"unknown setting in {path}: {', '.join(sorted(unknown))}")
     return values
@@ -1146,8 +1196,10 @@ def main() -> None:
 
     def office_args(p: argparse.ArgumentParser, required: bool) -> None:
         p.add_argument("--public-url", required=required, help="the https URL people will open sūveryn at")
-        p.add_argument("--network-mode", choices=["connected", "outbound-blocked", "air-gapped"],
+        p.add_argument("--network-mode", choices=["connected", "air-gapped"],
                        help="the installation's network mode once in use (asked when omitted on a console)")
+        p.add_argument("--outbound", choices=["approved", "all"],
+                       help="connected only: approved destinations only (the default) or all outgoing traffic")
         p.add_argument("--site", choices=["on-premise", "datacenter", "test"],
                        help="where this machine runs; required with a GeForce card")
         p.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
@@ -1158,7 +1210,8 @@ def main() -> None:
     sub.add_parser("image", help="build-time steps: everything the same for every office (needs network)")
     f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
     office_args(f, False)
-    f.add_argument("--config", type=Path, help="first-boot.env: PUBLIC_URL, NETWORK_MODE, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
+    f.add_argument("--config", type=Path,
+                   help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
     sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
     sub.add_parser("verify", help="check every service, end to end")
     s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
@@ -1190,6 +1243,7 @@ def main() -> None:
             c = first_boot_config(a.config)
             a.public_url = a.public_url or c.get("PUBLIC_URL")
             a.network_mode = a.network_mode or c.get("NETWORK_MODE")
+            a.outbound = a.outbound or c.get("OUTBOUND")
             a.site = a.site or c.get("SITE")
             for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
                 if not getattr(a, attr) and c.get(key):
