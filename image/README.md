@@ -12,14 +12,17 @@ machine, provisioned and hardened there, and that disk file is the image.
 cd image
 packer init .
 PKR_VAR_build_password=$(openssl rand -base64 24) packer build .              # with KVM
-PKR_VAR_build_password=$(openssl rand -base64 24) packer build -var accelerator=tcg .   # without (slow)
+sudo ./prebuild.sh /var/tmp/suveryn-prebuilt.tar.gz   # without KVM: build the heavy parts on this host first
+PKR_VAR_build_password=$(openssl rand -base64 24) packer build -var accelerator=tcg -var prebuilt=/var/tmp/suveryn-prebuilt.tar.gz .
 ```
 
 The result is `/var/tmp/suveryn-image/suveryn-appliance.img.zst` (raw, UEFI, GPT) and `SHA256SUMS` beside it (`-var output_dir=…` to change; never inside this repository, which is uploaded into the build).
 
 Needs: Linux with QEMU (`qemu-system-x86`, `qemu-utils`), OVMF, `zstd`, Packer 1.16.1, network access,
-and about 100 GB free. With KVM the build takes about an hour. Without it (`accelerator=tcg`, e.g. a
-RunPod pod) everything runs in software emulation, which takes many hours.
+and about 100 GB free. With KVM the build takes about an hour. Without it (`accelerator=tcg`, e.g. a RunPod pod) everything runs in software
+emulation: the CUDA compiler takes many hours there, and Java's compiler (Keycloak's build) crashes. `prebuild.sh` builds
+llama-server, Keycloak and the chat UI on the host instead (Ubuntu 24.04 with CUDA 12.8, the same pins); the image keeps
+each part only when it matches what it should be built from.
 
 ## What happens when
 

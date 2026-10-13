@@ -35,10 +35,10 @@ variable "build_password" {
   sensitive   = true
   description = "the temporary build user's password; the user is deleted before the image is finished"
 }
-variable "llama_prebuilt" {
+variable "prebuilt" {
   type        = string
   default     = ""
-  description = "llama.cpp built beforehand for the image (prebuild-llama.sh); empty: built inside the image, slow without KVM"
+  description = "llama-server, Keycloak and the chat UI built beforehand for the image (prebuild.sh); empty: built inside the image, which needs KVM"
 }
 variable "output_dir" {
   type        = string
@@ -105,11 +105,11 @@ build {
     inline = ["tar -C '${local.appliance}' --exclude=.git --exclude='./image/output' --exclude='./keycloak/theme/build' --exclude='__pycache__' -czf '${var.output_dir}-appliance.tar.gz' ."]
   }
   provisioner "shell-local" {
-    inline = [var.llama_prebuilt == "" ? "rm -f '${var.output_dir}-llama.tar.gz' && touch '${var.output_dir}-llama.tar.gz'" : "cp '${var.llama_prebuilt}' '${var.output_dir}-llama.tar.gz'"]
+    inline = [var.prebuilt == "" ? "rm -f '${var.output_dir}-prebuilt.tar.gz' && touch '${var.output_dir}-prebuilt.tar.gz'" : "cp '${var.prebuilt}' '${var.output_dir}-prebuilt.tar.gz'"]
   }
   provisioner "file" {
-    source      = "${var.output_dir}-llama.tar.gz"
-    destination = "/tmp/suveryn-llama.tar.gz"
+    source      = "${var.output_dir}-prebuilt.tar.gz"
+    destination = "/tmp/suveryn-prebuilt.tar.gz"
     generated   = true
   }
   provisioner "file" {

@@ -449,10 +449,26 @@ def presets(llms: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------- 8. Keycloak, theme and realm
+def keycloak_built_as() -> str:
+    """What a finished Keycloak build in /opt/keycloak must be: this version, with the theme from the pinned brand commit."""
+    brand = json.loads((REPO / "keycloak" / "theme" / "brand-lock.json").read_text()).get("commit", "?")
+    return f"keycloak {VERSIONS['keycloak']['version']}; theme from suveryn-brand@{brand}\n"
+
+
+def ui_built_as() -> str:
+    return f"suveryn-core@{VERSIONS['suveryn_core']['commit']} with node {VERSIONS['node']['version']}\n"
+
+
 def keycloak_software() -> None:
     """Keycloak, its theme and its build: the same for every office (image)."""
     step(f"Keycloak {VERSIONS['keycloak']['version']} and the theme")
     v = VERSIONS["keycloak"]
+    built = KEYCLOAK / ".suveryn-built"
+    if built.exists() and built.read_text() == keycloak_built_as():
+        # Built beforehand for the image (image/prebuild.sh): Java's compiler crashes in an emulated build machine.
+        run("chown", "-R", "keycloak:keycloak", KEYCLOAK)  # unpacked as root
+        note(f"kept: {built.read_text().strip()} (built beforehand)")
+        return
     if not (KEYCLOAK / "bin" / "kc.sh").exists():
         archive = VAR / "downloads" / Path(v["url"]).name
         download(v["url"], archive, v["sha256"])
@@ -467,6 +483,7 @@ def keycloak_software() -> None:
     shutil.copy2(REPO / "keycloak" / "theme" / "build" / "suveryn-keycloak-theme.jar", KEYCLOAK / "providers")
     run("chown", "-R", "keycloak:keycloak", KEYCLOAK)
     run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", capture=True)
+    built.write_text(keycloak_built_as())
     note("Keycloak built with the sūveryn theme")
 
 
@@ -531,6 +548,10 @@ def reader_sandbox() -> dict[str, str]:
 def chat_ui() -> None:
     step("Chat UI")
     v = VERSIONS["node"]
+    built = UI / ".suveryn-built"
+    if built.exists() and built.read_text() == ui_built_as():
+        note(f"kept: {built.read_text().strip()} (built beforehand)")
+        return
     if not (NODE / "bin" / "node").exists():
         archive = VAR / "downloads" / Path(v["url"]).name
         download(v["url"], archive, v["sha256"])
@@ -544,6 +565,7 @@ def chat_ui() -> None:
     run("npm", "run", "build", cwd=src, env=env, capture=True)
     shutil.rmtree(UI, ignore_errors=True)
     shutil.copytree(src / "dist", UI)
+    built.write_text(ui_built_as())
     run("chmod", "-R", "a+rX", UI)
     note(f"built with Node {v['version']} into {UI}")
 
@@ -1137,7 +1159,7 @@ def main() -> None:
     f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
     office_args(f, False)
     f.add_argument("--config", type=Path, help="first-boot.env: PUBLIC_URL, NETWORK_MODE, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
-    sub.add_parser("llama-server", help="build llama-server only (with SUVERYN_IMAGE_BUILD=1: as the image needs it)")
+    sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
     sub.add_parser("verify", help="check every service, end to end")
     s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
     s.add_argument("action", choices=["start", "stop", "status"])
@@ -1152,8 +1174,13 @@ def main() -> None:
     if a.command == "image":
         image()
         return
-    if a.command == "llama-server":
+    if a.command == "prebuild":
+        os.environ["SUVERYN_IMAGE_BUILD"] = "1"
+        users()
+        suveryn_core()
         llama_server()
+        keycloak_software()
+        chat_ui()
         return
     if a.command == "first-boot":
         if FIRST_BOOT_DONE.exists():

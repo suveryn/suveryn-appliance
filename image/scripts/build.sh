@@ -37,12 +37,11 @@ apt-get install -y -qq --no-install-recommends "cuda-nvcc-$CUDA" "cuda-cudart-de
   "cuda-cudart-$CUDA" "libcublas-$CUDA" libnccl2 libgomp1 >/dev/null
 ln -sfn "/usr/local/cuda-${CUDA/-/.}" /usr/local/cuda
 
-if [ -s /tmp/suveryn-llama.tar.gz ]; then
-  echo "== llama.cpp, built beforehand for the image (prebuild-llama.sh); suveryn-provision checks its commit"
-  install -d /opt/suveryn/llama.cpp
-  tar -xzf /tmp/suveryn-llama.tar.gz -C /opt/suveryn/llama.cpp --no-same-owner
+if [ -s /tmp/suveryn-prebuilt.tar.gz ]; then
+  echo "== llama-server, Keycloak and the chat UI, built beforehand (prebuild.sh); suveryn-provision checks each"
+  tar -xzf /tmp/suveryn-prebuilt.tar.gz -C / --no-same-owner
 fi
-rm -f /tmp/suveryn-llama.tar.gz
+rm -f /tmp/suveryn-prebuilt.tar.gz
 
 echo "== suveryn-provision image"
 python3 /opt/suveryn/appliance/provision/suveryn-provision image
