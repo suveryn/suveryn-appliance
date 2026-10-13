@@ -48,12 +48,18 @@ def test_never_private_ai():
         assert "Private AI" not in path.read_text(encoding="utf-8"), path
 
 
-def test_air_gapped_badge_is_off_by_default_and_only_shown_when_enabled():
-    assert props(SRC / "login" / "theme.properties")["suverynShowAirGappedBadge"] == "false"
+def test_air_gapped_badge_shows_only_when_the_network_mode_is_air_gapped():
+    """The mode comes from Keycloak's environment (its unit loads /etc/suveryn/network-mode.env); a missing
+    value reads as unknown, never as air-gapped. Checked against Keycloak 26.8: theme properties take
+    ${env.NAME:default}."""
+    assert props(SRC / "login" / "theme.properties")["suverynNetworkMode"] == "${env.SUVERYN_NETWORK_MODE:unknown}"
     template = (SRC / "login" / "template.ftl").read_text()
-    guarded = re.search(r'<#if \(properties\.suverynShowAirGappedBadge!"false"\) == "true">(.*?)</#if>', template, re.S)
+    guarded = re.search(r'<#if \(properties\.suverynNetworkMode!"unknown"\) == "air-gapped">(.*?)</#if>', template, re.S)
     assert guarded and "suv-badge-airgapped" in guarded.group(1)
     assert template.count("suv-badge-airgapped") == 1  # nowhere outside the guard
+    assert "suverynShowAirGappedBadge" not in template
+    unit = (SRC.parents[2].parent / "provision" / "systemd" / "keycloak.service").read_text()
+    assert "EnvironmentFile=-/etc/suveryn/network-mode.env" in unit
 
 
 def test_badge_matches_the_website_component():
