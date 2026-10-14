@@ -31,7 +31,7 @@ from pathlib import Path
 
 LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
 STEPS = 6
-CHECK, WARN, ARROW = "√", "!", "▸"  # the console font (Uni2-Terminus) has √ but no ✓
+CHECK, WARN, ARROW = "√", "!", "▸"  # the console font (Terminus) has √ but no ✓
 RECOMMENDED_MEMORY_GB = 64
 MIN_GPU_GB = 24
 DHCP_WAIT = 30
@@ -1097,6 +1097,12 @@ class App:
     def fields(self):
         return self.screen.fields()
 
+    def top_left(self) -> str:
+        return t("installer")
+
+    def top_right(self) -> str:
+        return f"{self.version} · {t('step_of', n=self.screen.step, total=STEPS)} "
+
     def draw(self):
         scr, ink = self.scr, self.ink
         scr.erase()
@@ -1109,8 +1115,8 @@ class App:
                     pass
         put(0, 0, " " * cols, "bar")
         put(0, 1, "Sūveryn", "strong")
-        put(0, 9, t("installer"), "dim")
-        right = f"{self.version} · {t('step_of', n=self.screen.step, total=STEPS)} "
+        put(0, 9, self.top_left(), "dim")
+        right = self.top_right()
         put(0, cols - len(right), right, "dim")
         width = min(cols - 4, 92)
         c = Canvas(width - 6)

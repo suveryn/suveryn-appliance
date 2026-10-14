@@ -87,7 +87,8 @@ parts that `apply` writes and loads:
 
 1. **`suveryn-egress`** (systemd, before the network comes up): an nftables table, `inet
    suveryn_egress`, on outgoing traffic. It lets out: loopback; connections already established; the
-   office's own network; the resolver's DNS queries (as user `suveryn-dns`); and, with approved
+   office's own network; mDNS on the office's link (224.0.0.251 and ff02::fb, port 5353, for
+   `<name>.local`); the resolver's DNS queries (as user `suveryn-dns`); and, with approved
    destinations only, web (80, 443) and time (123) traffic to addresses in two sets, `approved4` and
    `approved6`. Everything else is refused at once (logged, at most 10 a minute, prefix
    `suveryn-egress refused:`). With `--outbound all` the table isn't loaded.

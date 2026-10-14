@@ -4,181 +4,1084 @@
     "nl": "-",
     "fr": "-"
   },
-
-  "installer": {"en": "installer", "nl": "installatie", "fr": "installation"},
-  "step_of": {"en": "Step {n} of {total}", "nl": "Stap {n} van {total}", "fr": "Étape {n} sur {total}"},
-  "help_title": {"en": "Help", "nl": "Hulp", "fr": "Aide"},
-  "help_leave": {"en": "To leave the installer, remove the stick and press Ctrl+Alt+Del.", "nl": "Om de installatie te verlaten: verwijder de USB-stick en druk op Ctrl+Alt+Del.", "fr": "Pour quitter l'installation : retirez la clé USB et appuyez sur Ctrl+Alt+Del."},
-  "help_close": {"en": "Esc closes this help.", "nl": "Esc sluit deze hulp.", "fr": "Échap ferme cette aide."},
-
-  "key_select": {"en": "Select", "nl": "Kiezen", "fr": "Choisir"},
-  "key_move": {"en": "Move", "nl": "Verplaatsen", "fr": "Déplacer"},
-  "key_next_field": {"en": "Next field", "nl": "Volgend veld", "fr": "Champ suivant"},
-  "key_continue": {"en": "Continue", "nl": "Verder", "fr": "Continuer"},
-  "key_back": {"en": "Back", "nl": "Terug", "fr": "Retour"},
-  "key_help": {"en": "Help", "nl": "Hulp", "fr": "Aide"},
-  "key_install": {"en": "Install", "nl": "Installeren", "fr": "Installer"},
-  "key_restart": {"en": "Restart", "nl": "Herstarten", "fr": "Redémarrer"},
-  "key_esc": {"en": "Esc", "nl": "Esc", "fr": "Échap"},
-  "key_space": {"en": "Space", "nl": "Spatie", "fr": "Espace"},
-  "key_enter": {"en": "Enter", "nl": "Enter", "fr": "Entrée"},
-
-  "button_next": {"en": "< Next >", "nl": "< Volgende >", "fr": "< Suivant >"},
-  "button_back": {"en": "< Back >", "nl": "< Terug >", "fr": "< Retour >"},
-  "button_install": {"en": "< Install >", "nl": "< Installeren >", "fr": "< Installer >"},
-  "button_restart": {"en": "< Restart >", "nl": "< Herstarten >", "fr": "< Redémarrer >"},
-  "button_retry_dhcp": {"en": "< Retry DHCP >", "nl": "< DHCP opnieuw >", "fr": "< Réessayer DHCP >"},
-  "button_back_summary": {"en": "< Back to the summary >", "nl": "< Terug naar het overzicht >", "fr": "< Retour au récapitulatif >"},
-
-  "type_to_search": {"en": "Type to search: ", "nl": "Typ om te zoeken: ", "fr": "Tapez pour chercher : "},
-  "nothing_matches": {"en": "nothing matches", "nl": "geen resultaten", "fr": "aucun résultat"},
-
-  "c1_title": {"en": "Language, keyboard and time zone", "nl": "Taal, toetsenbord en tijdzone", "fr": "Langue, clavier et fuseau horaire"},
-  "c1_intro": {"en": "This turns this machine into a sūveryn appliance. Afterwards, you finish setup from a browser on another computer.", "nl": "Hiermee wordt deze machine een sūveryn-appliance. Daarna rondt u de installatie af in een browser op een andere computer.", "fr": "Cette machine devient ainsi une appliance sūveryn. Vous terminez ensuite la configuration depuis un navigateur, sur un autre ordinateur."},
-  "c1_language": {"en": "Language", "nl": "Taal", "fr": "Langue"},
-  "c1_keyboard": {"en": "Keyboard", "nl": "Toetsenbord", "fr": "Clavier"},
-  "c1_test": {"en": "Test it", "nl": "Uitproberen", "fr": "Essayer"},
-  "c1_test_placeholder": {"en": "type here to check the layout", "nl": "typ hier om de indeling te controleren", "fr": "tapez ici pour vérifier la disposition"},
-  "c1_test_hint": {"en": "Check a few letters: a, z, q, w, m and @.", "nl": "Controleer enkele tekens: a, z, q, w, m en @.", "fr": "Vérifiez quelques caractères : a, z, q, w, m et @."},
-  "c1_timezone": {"en": "Time zone", "nl": "Tijdzone", "fr": "Fuseau horaire"},
-  "c1_help": {"en": "Language: the language of these screens, the web setup and the appliance.\nKeyboard: the layout of the keyboard attached to this machine. Use the test field to check it.\nTime zone: where the appliance is.", "nl": "Taal: de taal van deze schermen, van de installatie in de browser en van de appliance.\nToetsenbord: de indeling van het toetsenbord dat op deze machine is aangesloten. Controleer ze in het testveld.\nTijdzone: waar de appliance staat.", "fr": "Langue : la langue de ces écrans, de la configuration dans le navigateur et de l'appliance.\nClavier : la disposition du clavier branché sur cette machine. Vérifiez-la dans le champ d'essai.\nFuseau horaire : l'endroit où se trouve l'appliance."},
-
-  "kb_be": {"en": "Belgian (AZERTY)", "nl": "Belgisch (AZERTY)", "fr": "Belge (AZERTY)"},
-  "kb_fr": {"en": "French (AZERTY)", "nl": "Frans (AZERTY)", "fr": "Français (AZERTY)"},
-  "kb_nl": {"en": "Dutch", "nl": "Nederlands", "fr": "Néerlandais"},
-  "kb_us": {"en": "English (US)", "nl": "Engels (VS)", "fr": "Anglais (États-Unis)"},
-  "kb_us:intl": {"en": "English (US, international)", "nl": "Engels (VS, internationaal)", "fr": "Anglais (États-Unis, international)"},
-  "kb_gb": {"en": "English (UK)", "nl": "Engels (VK)", "fr": "Anglais (Royaume-Uni)"},
-  "kb_de": {"en": "German", "nl": "Duits", "fr": "Allemand"},
-  "kb_ch:fr": {"en": "Swiss French", "nl": "Zwitsers-Frans", "fr": "Suisse romand"},
-  "kb_ch": {"en": "Swiss German", "nl": "Zwitsers-Duits", "fr": "Suisse alémanique"},
-  "kb_lu": {"en": "Luxembourgish", "nl": "Luxemburgs", "fr": "Luxembourgeois"},
-
-  "c2_title": {"en": "Hardware and target disk", "nl": "Hardware en doelschijf", "fr": "Matériel et disque cible"},
-  "c2_help": {"en": "The appliance needs an NVIDIA graphics card for the language models, and a TPM 2.0 chip that unlocks the encrypted disk at every start. Everything on the disk you choose is erased.", "nl": "De appliance heeft een grafische kaart van NVIDIA nodig voor de taalmodellen, en een TPM 2.0-chip die de versleutelde schijf bij elke start ontgrendelt. Alles op de gekozen schijf wordt gewist.", "fr": "L'appliance a besoin d'une carte graphique NVIDIA pour les modèles de langage, et d'une puce TPM 2.0 qui déverrouille le disque chiffré à chaque démarrage. Tout ce qui se trouve sur le disque choisi est effacé."},
-  "c2_check": {"en": "Hardware check", "nl": "Controle van de hardware", "fr": "Vérification du matériel"},
-  "c2_graphics": {"en": "Graphics", "nl": "Grafische kaart", "fr": "Carte graphique"},
-  "c2_geforce": {"en": "GeForce cards are licensed for on-premise office use only.", "nl": "GeForce-kaarten zijn enkel gelicentieerd voor gebruik op locatie, in het kantoor.", "fr": "Les cartes GeForce sont sous licence uniquement pour un usage sur site, au bureau."},
-  "c2_gpu_memory_low": {"en": "Recommended: {gb} GB. Larger models won't fit.", "nl": "Aanbevolen: {gb} GB. Grotere modellen passen niet.", "fr": "Recommandé : {gb} Go. Les modèles plus grands ne tiennent pas."},
-  "c2_no_gpu": {"en": "no NVIDIA graphics card found", "nl": "geen grafische kaart van NVIDIA gevonden", "fr": "aucune carte graphique NVIDIA trouvée"},
-  "c2_processor": {"en": "Processor", "nl": "Processor", "fr": "Processeur"},
-  "c2_cores": {"en": "{n} cores", "nl": "{n} kernen", "fr": "{n} cœurs"},
-  "c2_security": {"en": "Security", "nl": "Beveiliging", "fr": "Sécurité"},
-  "c2_tpm_ok": {"en": "TPM 2.0 · unlocks the encrypted disk", "nl": "TPM 2.0 · ontgrendelt de versleutelde schijf", "fr": "TPM 2.0 · déverrouille le disque chiffré"},
-  "c2_no_tpm": {"en": "no TPM 2.0 found", "nl": "geen TPM 2.0 gevonden", "fr": "aucune puce TPM 2.0 trouvée"},
-  "c2_memory": {"en": "Memory", "nl": "Geheugen", "fr": "Mémoire"},
-  "c2_memory_low": {"en": "{gb} GB. Recommended: {rec} GB.", "nl": "{gb} GB. Aanbevolen: {rec} GB.", "fr": "{gb} Go. Recommandé : {rec} Go."},
-  "c2_memory_note": {"en": "You can continue. Long documents and several users at once will be slower.", "nl": "U kunt verdergaan. Lange documenten en meerdere gebruikers tegelijk zullen trager zijn.", "fr": "Vous pouvez continuer. Les longs documents et plusieurs utilisateurs à la fois seront plus lents."},
-  "c2_install_to": {"en": "Install to", "nl": "Installeren op", "fr": "Installer sur"},
-  "c2_disk": {"en": "disk", "nl": "schijf", "fr": "disque"},
-  "c2_too_small": {"en": "too small", "nl": "te klein", "fr": "trop petit"},
-  "c2_stick": {"en": "Sūveryn installer", "nl": "Sūveryn-installatie", "fr": "Installation Sūveryn"},
-  "c2_medium": {"en": "installation medium", "nl": "installatiemedium", "fr": "support d'installation"},
-  "c2_erased": {"en": "Everything on the selected disk will be erased. The disk is then encrypted.", "nl": "Alles op de gekozen schijf wordt gewist. Daarna wordt de schijf versleuteld.", "fr": "Tout ce qui se trouve sur le disque choisi sera effacé. Le disque est ensuite chiffré."},
-  "c2_block_gpu": {"en": "No NVIDIA graphics card found: the language models need one.", "nl": "Geen grafische kaart van NVIDIA gevonden: de taalmodellen hebben er een nodig.", "fr": "Aucune carte graphique NVIDIA trouvée : les modèles de langage en ont besoin."},
-  "c2_block_tpm": {"en": "No TPM 2.0 found: switch it on in the firmware settings (often TPM, PTT or fTPM).", "nl": "Geen TPM 2.0 gevonden: schakel hem in bij de firmware-instellingen (vaak TPM, PTT of fTPM).", "fr": "Aucune puce TPM 2.0 trouvée : activez-la dans les réglages du firmware (souvent TPM, PTT ou fTPM)."},
-  "c2_block_disk": {"en": "No disk to install onto: it needs at least {size}.", "nl": "Geen schijf om op te installeren: er is minstens {size} nodig.", "fr": "Aucun disque pour l'installation : il faut au moins {size}."},
-
-  "c3_title": {"en": "Language models", "nl": "Taalmodellen", "fr": "Modèles de langage"},
-  "c3_help": {"en": "Models come from the stick's suveryn-bundles partition. Each one is checked against Sūveryn Labs' signature and every file's checksum; a model that fails is skipped. Several can be installed; people choose one per conversation.", "nl": "De modellen komen van de partitie suveryn-bundles op de USB-stick. Elk model wordt gecontroleerd aan de hand van de handtekening van Sūveryn Labs en de controlesom van elk bestand; een model dat niet klopt, wordt overgeslagen. U kunt er meerdere installeren; gebruikers kiezen er één per gesprek.", "fr": "Les modèles proviennent de la partition suveryn-bundles de la clé USB. Chacun est vérifié au moyen de la signature de Sūveryn Labs et de la somme de contrôle de chaque fichier ; un modèle qui échoue est ignoré. Plusieurs peuvent être installés ; les utilisateurs en choisissent un par conversation."},
-  "c3_checking": {"en": "Checking the language models on this stick", "nl": "De taalmodellen op deze USB-stick worden gecontroleerd", "fr": "Vérification des modèles de langage sur cette clé USB"},
-  "c3_checking_note": {"en": "Each model is checked against its signature and every file's checksum. This takes about a minute per model. {s} s", "nl": "Elk model wordt gecontroleerd aan de hand van zijn handtekening en de controlesom van elk bestand. Dit duurt ongeveer een minuut per model. {s} s", "fr": "Chaque modèle est vérifié au moyen de sa signature et de la somme de contrôle de chaque fichier. Cela prend environ une minute par modèle. {s} s"},
-  "c3_found": {"en": "Found on this installation medium", "nl": "Gevonden op dit installatiemedium", "fr": "Trouvés sur ce support d'installation"},
-  "c3_partition": {"en": "Partition suveryn-bundles on {disk}", "nl": "Partitie suveryn-bundles op {disk}", "fr": "Partition suveryn-bundles sur {disk}"},
-  "c3_signed": {"en": "Signed by Sūveryn Labs · bundle key ", "nl": "Ondertekend door Sūveryn Labs · bundelsleutel ", "fr": "Signé par Sūveryn Labs · clé de paquet "},
-  "c3_key_matches": {"en": "matches a key built into this release", "nl": "komt overeen met een sleutel in deze release", "fr": "correspond à une clé intégrée à cette version"},
-  "c3_none_valid": {"en": "No valid model on this stick.", "nl": "Geen geldig model op deze USB-stick.", "fr": "Aucun modèle valide sur cette clé USB."},
-  "c3_default": {"en": "default", "nl": "standaard", "fr": "par défaut"},
-  "c3_optional": {"en": "optional", "nl": "optioneel", "fr": "facultatif"},
-  "c3_fits": {"en": "fits", "nl": "past", "fr": "tient"},
-  "c3_too_big": {"en": "too big", "nl": "te groot", "fr": "trop grand"},
-  "c3_skipped": {"en": "skipped", "nl": "overgeslagen", "fr": "ignoré"},
-  "c3_changed": {"en": "Changed or damaged since it was signed.", "nl": "Gewijzigd of beschadigd sinds de ondertekening.", "fr": "Modifié ou endommagé depuis sa signature."},
-  "c3_bad_signature": {"en": "Signature not valid.", "nl": "Handtekening ongeldig.", "fr": "Signature non valide."},
-  "c3_not_installed": {"en": "Not installed. Ask your partner for a new copy.", "nl": "Niet geïnstalleerd. Vraag uw partner om een nieuw exemplaar.", "fr": "Non installé. Demandez une nouvelle copie à votre partenaire."},
-  "c3_graphics": {"en": "Graphics", "nl": "Grafische kaart", "fr": "Carte graphique"},
-  "c3_graphics_note": {"en": "{gb} GB · one model active at a time, switching takes a few seconds", "nl": "{gb} GB · één model tegelijk actief, wisselen duurt enkele seconden", "fr": "{gb} Go · un modèle actif à la fois, changer prend quelques secondes"},
-  "c3_disk": {"en": "Disk", "nl": "Schijf", "fr": "Disque"},
-  "c3_disk_one": {"en": "1 model · {used} of {size} on {disk}", "nl": "1 model · {used} van {size} op {disk}", "fr": "1 modèle · {used} sur {size} · {disk}"},
-  "c3_disk_many": {"en": "{n} models · {used} of {size} on {disk}", "nl": "{n} modellen · {used} van {size} op {disk}", "fr": "{n} modèles · {used} sur {size} · {disk}"},
-  "c3_still_checking": {"en": "Still checking the models on the stick. A moment, please.", "nl": "De modellen op de USB-stick worden nog gecontroleerd. Even geduld, alstublieft.", "fr": "Les modèles de la clé USB sont encore en cours de vérification. Un instant, s'il vous plaît."},
-  "c3_choose_one": {"en": "Choose at least one model (Space ticks it).", "nl": "Kies minstens één model (Spatie vinkt het aan).", "fr": "Choisissez au moins un modèle (Espace le coche)."},
-  "c3_dont_fit": {"en": "The chosen models don't fit on the disk. Untick one.", "nl": "De gekozen modellen passen niet op de schijf. Vink er een uit.", "fr": "Les modèles choisis ne tiennent pas sur le disque. Décochez-en un."},
-
-  "c4_title": {"en": "Network", "nl": "Netwerk", "fr": "Réseau"},
-  "c4_help": {"en": "The name is how people reach the appliance: https://<name>.local. With DHCP the office's network gives the address; ask for a reservation so it stays the same. Without DHCP, enter a fixed address with its prefix, e.g. 192.168.1.50/24.", "nl": "Via de naam bereiken gebruikers de appliance: https://<naam>.local. Met DHCP krijgt de appliance een adres van het kantoornetwerk; vraag een reservering zodat het hetzelfde blijft. Zonder DHCP vult u een vast adres met prefix in, bijvoorbeeld 192.168.1.50/24.", "fr": "Le nom permet d'atteindre l'appliance : https://<nom>.local. Avec DHCP, le réseau du bureau attribue l'adresse ; demandez une réservation pour qu'elle reste la même. Sans DHCP, saisissez une adresse fixe avec son préfixe, par exemple 192.168.1.50/24."},
-  "c4_interface": {"en": "Interface", "nl": "Netwerkpoort", "fr": "Interface"},
-  "c4_connected": {"en": "connected", "nl": "verbonden", "fr": "connecté"},
-  "c4_no_cable": {"en": "no cable", "nl": "geen kabel", "fr": "pas de câble"},
-  "c4_name": {"en": "Name", "nl": "Naam", "fr": "Nom"},
-  "c4_name_placeholder": {"en": "e.g. notary-brussels-01", "nl": "bv. notaris-brussel-01", "fr": "p. ex. notaire-bruxelles-01"},
-  "c4_name_hint": {"en": "Reachable as {name}.local. Letters, digits and hyphens.", "nl": "Bereikbaar als {name}.local. Letters, cijfers en koppeltekens.", "fr": "Accessible via {name}.local. Lettres, chiffres et traits d'union."},
-  "c4_name_word": {"en": "name", "nl": "naam", "fr": "nom"},
-  "c4_address": {"en": "Address", "nl": "Adres", "fr": "Adresse"},
-  "c4_dhcp": {"en": "Automatic (DHCP)", "nl": "Automatisch (DHCP)", "fr": "Automatique (DHCP)"},
-  "c4_fixed": {"en": "Fixed address", "nl": "Vast adres", "fr": "Adresse fixe"},
-  "c4_received": {"en": "Received {address}", "nl": "Ontvangen: {address}", "fr": "Reçue : {address}"},
-  "c4_gateway_is": {"en": "gateway {gw}", "nl": "gateway {gw}", "fr": "passerelle {gw}"},
-  "c4_waiting": {"en": "Waiting for an address from DHCP… {s} s", "nl": "Wachten op een adres van DHCP… {s} s", "fr": "En attente d'une adresse DHCP… {s} s"},
-  "c4_reserve": {"en": "Ask your network administrator to reserve this address for the appliance, so it stays the same after a restart.", "nl": "Vraag uw netwerkbeheerder dit adres voor de appliance te reserveren, zodat het na een herstart hetzelfde blijft.", "fr": "Demandez à votre administrateur réseau de réserver cette adresse pour l'appliance, afin qu'elle reste la même après un redémarrage."},
-  "c4_no_lease": {"en": "No address received from DHCP after {s} seconds.", "nl": "Na {s} seconden geen adres ontvangen van DHCP.", "fr": "Aucune adresse reçue par DHCP après {s} secondes."},
-  "c4_check_cable": {"en": "Check the cable, or enter a fixed address below.", "nl": "Controleer de kabel, of vul hieronder een vast adres in.", "fr": "Vérifiez le câble, ou saisissez une adresse fixe ci-dessous."},
-  "c4_ip": {"en": "IP address", "nl": "IP-adres", "fr": "Adresse IP"},
-  "c4_gateway": {"en": "Gateway", "nl": "Gateway", "fr": "Passerelle"},
-  "c4_dns": {"en": "DNS server", "nl": "DNS-server", "fr": "Serveur DNS"},
-  "c4_free_address": {"en": "Ask your network administrator for a free address in your office network.", "nl": "Vraag uw netwerkbeheerder om een vrij adres in het kantoornetwerk.", "fr": "Demandez à votre administrateur réseau une adresse libre dans le réseau du bureau."},
-  "c4_bad_name": {"en": "The name can be letters, digits and hyphens (at most 63), not starting or ending with a hyphen.", "nl": "De naam mag bestaan uit letters, cijfers en koppeltekens (hoogstens 63), en niet beginnen of eindigen met een koppelteken.", "fr": "Le nom peut contenir des lettres, des chiffres et des traits d'union (63 au plus), sans commencer ni finir par un trait d'union."},
-  "c4_no_port": {"en": "No Ethernet port found.", "nl": "Geen ethernetpoort gevonden.", "fr": "Aucun port Ethernet trouvé."},
-  "c4_need_prefix": {"en": "Enter the address with its network prefix, e.g. 192.168.1.50/24.", "nl": "Vul het adres in met de netwerkprefix, bijvoorbeeld 192.168.1.50/24.", "fr": "Saisissez l'adresse avec son préfixe réseau, par exemple 192.168.1.50/24."},
-  "c4_gateway_outside": {"en": "The gateway {gw} isn't in {net}.", "nl": "De gateway {gw} ligt niet in {net}.", "fr": "La passerelle {gw} n'est pas dans {net}."},
-  "c4_need_dns": {"en": "A fixed address needs a DNS server.", "nl": "Een vast adres heeft een DNS-server nodig.", "fr": "Une adresse fixe nécessite un serveur DNS."},
-  "c4_bad_address": {"en": "This address can't be used: {detail}.", "nl": "Dit adres kan niet worden gebruikt: {detail}.", "fr": "Cette adresse ne peut pas être utilisée : {detail}."},
-
-  "c5_title": {"en": "Ready to install", "nl": "Klaar om te installeren", "fr": "Prêt pour l'installation"},
-  "c5_help": {"en": "Check the answers. Installing erases the disk; type {word} (capitals) to confirm.", "nl": "Controleer de antwoorden. De installatie wist de schijf; typ {word} (hoofdletters) om te bevestigen.", "fr": "Vérifiez les réponses. L'installation efface le disque ; tapez {word} (en majuscules) pour confirmer."},
-  "c5_keyboard": {"en": "Keyboard", "nl": "Toetsenbord", "fr": "Clavier"},
-  "c5_timezone": {"en": "Time zone", "nl": "Tijdzone", "fr": "Fuseau horaire"},
-  "c5_disk": {"en": "Disk", "nl": "Schijf", "fr": "Disque"},
-  "c5_encryption": {"en": "Encryption", "nl": "Versleuteling", "fr": "Chiffrement"},
-  "c5_encryption_value": {"en": "LUKS2 · unlocks with this machine's TPM", "nl": "LUKS2 · ontgrendelt met de TPM van deze machine", "fr": "LUKS2 · se déverrouille avec la puce TPM de cette machine"},
-  "c5_name": {"en": "Name", "nl": "Naam", "fr": "Nom"},
-  "c5_address": {"en": "Address", "nl": "Adres", "fr": "Adresse"},
-  "c5_fixed": {"en": "fixed", "nl": "vast", "fr": "fixe"},
-  "c5_models": {"en": "Models", "nl": "Modellen", "fr": "Modèles"},
-  "c5_none": {"en": "none", "nl": "geen", "fr": "aucun"},
-  "c5_memory": {"en": "Memory", "nl": "Geheugen", "fr": "Mémoire"},
-  "c5_memory_low": {"en": "{gb} GB, below the recommended {rec} GB", "nl": "{gb} GB, minder dan de aanbevolen {rec} GB", "fr": "{gb} Go, en dessous des {rec} Go recommandés"},
-  "c5_erased": {"en": "All data on {disk} will be permanently erased.", "nl": "Alle gegevens op {disk} worden definitief gewist.", "fr": "Toutes les données de {disk} seront définitivement effacées."},
-  "c5_type_word": {"en": "Type {word} to confirm", "nl": "Typ {word} om te bevestigen", "fr": "Tapez {word} pour confirmer"},
-  "c5_word_wrong": {"en": "Type {word} in capitals to confirm.", "nl": "Typ {word} in hoofdletters om te bevestigen.", "fr": "Tapez {word} en majuscules pour confirmer."},
-  "erase_word": {"en": "ERASE", "nl": "WISSEN", "fr": "EFFACER"},
-
-  "c6_title": {"en": "Installing the sūveryn appliance", "nl": "De sūveryn-appliance wordt geïnstalleerd", "fr": "Installation de l'appliance sūveryn"},
-  "c6_keys_off": {"en": "Installation in progress. Keys are disabled.", "nl": "Installatie bezig. De toetsen zijn uitgeschakeld.", "fr": "Installation en cours. Les touches sont désactivées."},
-  "c6_check_models": {"en": "Checking the language models against their signatures", "nl": "De taalmodellen worden gecontroleerd aan de hand van hun handtekening", "fr": "Vérification des modèles de langage au moyen de leur signature"},
-  "c6_partition": {"en": "Partitioning {disk} and copying system files", "nl": "{disk} wordt gepartitioneerd en de systeembestanden worden gekopieerd", "fr": "Partitionnement de {disk} et copie des fichiers système"},
-  "c6_encrypt": {"en": "Encrypting the disk (LUKS2, a new key for this machine)", "nl": "De schijf wordt versleuteld (LUKS2, een nieuwe sleutel voor deze machine)", "fr": "Chiffrement du disque (LUKS2, une nouvelle clé pour cette machine)"},
-  "c6_copy_models": {"en": "Copying language models", "nl": "De taalmodellen worden gekopieerd", "fr": "Copie des modèles de langage"},
-  "c6_settings": {"en": "Applying the name and network settings", "nl": "De naam en de netwerkinstellingen worden toegepast", "fr": "Application du nom et des réglages réseau"},
-  "c6_tpm": {"en": "Linking the disk key to this machine's TPM", "nl": "De schijfsleutel wordt gekoppeld aan de TPM van deze machine", "fr": "Liaison de la clé du disque à la puce TPM de cette machine"},
-  "c6_boot": {"en": "Installing the boot loader", "nl": "De bootloader wordt geïnstalleerd", "fr": "Installation du chargeur d'amorçage"},
-  "c6_n_of": {"en": "{n} of {total}", "nl": "{n} van {total}", "fr": "{n} sur {total}"},
-  "c6_failed": {"en": "The installation failed.", "nl": "De installatie is mislukt.", "fr": "L'installation a échoué."},
-  "c6_failed_note": {"en": "Nothing on the stick changed. The disk {disk} may be partly written; installing again erases it anew.", "nl": "Op de USB-stick is niets gewijzigd. De schijf {disk} kan gedeeltelijk beschreven zijn; een nieuwe installatie wist ze opnieuw.", "fr": "Rien n'a changé sur la clé USB. Le disque {disk} peut être partiellement écrit ; une nouvelle installation l'efface à nouveau."},
-  "c6_no_result": {"en": "the installer gave no result", "nl": "de installatie gaf geen resultaat", "fr": "l'installation n'a donné aucun résultat"},
-  "c6_duration": {"en": "This takes about ten minutes. Do not turn off the machine.", "nl": "Dit duurt ongeveer tien minuten. Zet de machine niet uit.", "fr": "Cela prend environ dix minutes. N'éteignez pas la machine."},
-  "c6_then": {"en": "Then you write down the disk recovery key, and the machine restarts.", "nl": "Daarna schrijft u de herstelsleutel van de schijf op, en herstart de machine.", "fr": "Vous notez ensuite la clé de récupération du disque, puis la machine redémarre."},
-  "c6_identity": {"en": "This appliance's ID and signing key are made at its first start.", "nl": "Het ID en de ondertekeningssleutel van deze appliance worden bij de eerste start aangemaakt.", "fr": "L'identifiant et la clé de signature de cette appliance sont créés à son premier démarrage."},
-  "c6_back_summary": {"en": "Back to the summary", "nl": "Terug naar het overzicht", "fr": "Retour au récapitulatif"},
-
-  "c7_title": {"en": "Write down the disk recovery key", "nl": "Schrijf de herstelsleutel van de schijf op", "fr": "Notez la clé de récupération du disque"},
-  "c7_help": {"en": "The recovery key opens the encrypted disk when the TPM can't: after a BIOS or firmware update, a Secure Boot change, or on another machine. Keep it on paper, away from the appliance.", "nl": "De herstelsleutel opent de versleutelde schijf wanneer de TPM dat niet kan: na een update van het BIOS of de firmware, een wijziging aan Secure Boot, of op een andere machine. Bewaar ze op papier, niet bij de appliance.", "fr": "La clé de récupération ouvre le disque chiffré lorsque la puce TPM ne le peut pas : après une mise à jour du BIOS ou du firmware, une modification de Secure Boot, ou sur une autre machine. Conservez-la sur papier, loin de l'appliance."},
-  "c7_remove_medium": {"en": "Remove the installation medium before restarting.", "nl": "Verwijder het installatiemedium voor u herstart.", "fr": "Retirez le support d'installation avant de redémarrer."},
-  "c7_encrypted": {"en": "The disk is encrypted and linked to this machine's TPM. It unlocks by itself at every start.", "nl": "De schijf is versleuteld en gekoppeld aan de TPM van deze machine. Ze ontgrendelt vanzelf bij elke start.", "fr": "Le disque est chiffré et lié à la puce TPM de cette machine. Il se déverrouille seul à chaque démarrage."},
-  "c7_only_if": {"en": "You need this key only if it can't: after a BIOS or firmware update, a Secure Boot change, or when the disk is moved to another machine.", "nl": "U hebt deze sleutel enkel nodig als dat niet lukt: na een update van het BIOS of de firmware, een wijziging aan Secure Boot, of wanneer de schijf naar een andere machine wordt verplaatst.", "fr": "Vous n'avez besoin de cette clé que s'il n'y parvient pas : après une mise à jour du BIOS ou du firmware, une modification de Secure Boot, ou si le disque est déplacé vers une autre machine."},
-  "c7_once": {"en": "This is the only time it is shown. It is not stored on this machine.", "nl": "Ze wordt slechts één keer getoond. Ze wordt niet op deze machine bewaard.", "fr": "Elle n'est affichée qu'une seule fois. Elle n'est pas conservée sur cette machine."},
-  "c7_paper": {"en": "Write it on paper and keep it with the office's other important documents, not with the appliance.", "nl": "Schrijf ze op papier en bewaar ze bij de andere belangrijke documenten van het kantoor, niet bij de appliance.", "fr": "Notez-la sur papier et conservez-la avec les autres documents importants du bureau, pas avec l'appliance."},
-  "c7_confirm": {"en": "Type the first group to confirm", "nl": "Typ de eerste groep om te bevestigen", "fr": "Tapez le premier groupe pour confirmer"},
-  "c7_matches": {"en": "matches", "nl": "klopt", "fr": "correct"},
-  "c7_wrong": {"en": "Type the first group of the key, as shown, to confirm you wrote it down.", "nl": "Typ de eerste groep van de sleutel zoals getoond, om te bevestigen dat u ze hebt opgeschreven.", "fr": "Tapez le premier groupe de la clé tel qu'affiché, pour confirmer que vous l'avez notée."}
+  "installer": {
+    "en": "installer",
+    "nl": "installatie",
+    "fr": "installation"
+  },
+  "step_of": {
+    "en": "Step {n} of {total}",
+    "nl": "Stap {n} van {total}",
+    "fr": "Étape {n} sur {total}"
+  },
+  "help_title": {
+    "en": "Help",
+    "nl": "Hulp",
+    "fr": "Aide"
+  },
+  "help_leave": {
+    "en": "To leave the installer, remove the stick and press Ctrl+Alt+Del.",
+    "nl": "Om de installatie te verlaten: verwijder de USB-stick en druk op Ctrl+Alt+Del.",
+    "fr": "Pour quitter l'installation : retirez la clé USB et appuyez sur Ctrl+Alt+Del."
+  },
+  "help_close": {
+    "en": "Esc closes this help.",
+    "nl": "Esc sluit deze hulp.",
+    "fr": "Échap ferme cette aide."
+  },
+  "key_select": {
+    "en": "Select",
+    "nl": "Kiezen",
+    "fr": "Choisir"
+  },
+  "key_move": {
+    "en": "Move",
+    "nl": "Verplaatsen",
+    "fr": "Déplacer"
+  },
+  "key_next_field": {
+    "en": "Next field",
+    "nl": "Volgend veld",
+    "fr": "Champ suivant"
+  },
+  "key_continue": {
+    "en": "Continue",
+    "nl": "Verder",
+    "fr": "Continuer"
+  },
+  "key_back": {
+    "en": "Back",
+    "nl": "Terug",
+    "fr": "Retour"
+  },
+  "key_help": {
+    "en": "Help",
+    "nl": "Hulp",
+    "fr": "Aide"
+  },
+  "key_install": {
+    "en": "Install",
+    "nl": "Installeren",
+    "fr": "Installer"
+  },
+  "key_restart": {
+    "en": "Restart",
+    "nl": "Herstarten",
+    "fr": "Redémarrer"
+  },
+  "key_esc": {
+    "en": "Esc",
+    "nl": "Esc",
+    "fr": "Échap"
+  },
+  "key_space": {
+    "en": "Space",
+    "nl": "Spatie",
+    "fr": "Espace"
+  },
+  "key_enter": {
+    "en": "Enter",
+    "nl": "Enter",
+    "fr": "Entrée"
+  },
+  "button_next": {
+    "en": "< Next >",
+    "nl": "< Volgende >",
+    "fr": "< Suivant >"
+  },
+  "button_back": {
+    "en": "< Back >",
+    "nl": "< Terug >",
+    "fr": "< Retour >"
+  },
+  "button_install": {
+    "en": "< Install >",
+    "nl": "< Installeren >",
+    "fr": "< Installer >"
+  },
+  "button_restart": {
+    "en": "< Restart >",
+    "nl": "< Herstarten >",
+    "fr": "< Redémarrer >"
+  },
+  "button_retry_dhcp": {
+    "en": "< Retry DHCP >",
+    "nl": "< DHCP opnieuw >",
+    "fr": "< Réessayer DHCP >"
+  },
+  "button_back_summary": {
+    "en": "< Back to the summary >",
+    "nl": "< Terug naar het overzicht >",
+    "fr": "< Retour au récapitulatif >"
+  },
+  "type_to_search": {
+    "en": "Type to search: ",
+    "nl": "Typ om te zoeken: ",
+    "fr": "Tapez pour chercher : "
+  },
+  "nothing_matches": {
+    "en": "nothing matches",
+    "nl": "geen resultaten",
+    "fr": "aucun résultat"
+  },
+  "c1_title": {
+    "en": "Language, keyboard and time zone",
+    "nl": "Taal, toetsenbord en tijdzone",
+    "fr": "Langue, clavier et fuseau horaire"
+  },
+  "c1_intro": {
+    "en": "This turns this machine into a sūveryn appliance. Afterwards, you finish setup from a browser on another computer.",
+    "nl": "Hiermee wordt deze machine een sūveryn-appliance. Daarna rondt u de installatie af in een browser op een andere computer.",
+    "fr": "Cette machine devient ainsi une appliance sūveryn. Vous terminez ensuite la configuration depuis un navigateur, sur un autre ordinateur."
+  },
+  "c1_language": {
+    "en": "Language",
+    "nl": "Taal",
+    "fr": "Langue"
+  },
+  "c1_keyboard": {
+    "en": "Keyboard",
+    "nl": "Toetsenbord",
+    "fr": "Clavier"
+  },
+  "c1_test": {
+    "en": "Test it",
+    "nl": "Uitproberen",
+    "fr": "Essayer"
+  },
+  "c1_test_placeholder": {
+    "en": "type here to check the layout",
+    "nl": "typ hier om de indeling te controleren",
+    "fr": "tapez ici pour vérifier la disposition"
+  },
+  "c1_test_hint": {
+    "en": "Check a few letters: a, z, q, w, m and @.",
+    "nl": "Controleer enkele tekens: a, z, q, w, m en @.",
+    "fr": "Vérifiez quelques caractères : a, z, q, w, m et @."
+  },
+  "c1_timezone": {
+    "en": "Time zone",
+    "nl": "Tijdzone",
+    "fr": "Fuseau horaire"
+  },
+  "c1_help": {
+    "en": "Language: the language of these screens, the web setup and the appliance.\nKeyboard: the layout of the keyboard attached to this machine. Use the test field to check it.\nTime zone: where the appliance is.",
+    "nl": "Taal: de taal van deze schermen, van de installatie in de browser en van de appliance.\nToetsenbord: de indeling van het toetsenbord dat op deze machine is aangesloten. Controleer ze in het testveld.\nTijdzone: waar de appliance staat.",
+    "fr": "Langue : la langue de ces écrans, de la configuration dans le navigateur et de l'appliance.\nClavier : la disposition du clavier branché sur cette machine. Vérifiez-la dans le champ d'essai.\nFuseau horaire : l'endroit où se trouve l'appliance."
+  },
+  "kb_be": {
+    "en": "Belgian (AZERTY)",
+    "nl": "Belgisch (AZERTY)",
+    "fr": "Belge (AZERTY)"
+  },
+  "kb_fr": {
+    "en": "French (AZERTY)",
+    "nl": "Frans (AZERTY)",
+    "fr": "Français (AZERTY)"
+  },
+  "kb_nl": {
+    "en": "Dutch",
+    "nl": "Nederlands",
+    "fr": "Néerlandais"
+  },
+  "kb_us": {
+    "en": "English (US)",
+    "nl": "Engels (VS)",
+    "fr": "Anglais (États-Unis)"
+  },
+  "kb_us:intl": {
+    "en": "English (US, international)",
+    "nl": "Engels (VS, internationaal)",
+    "fr": "Anglais (États-Unis, international)"
+  },
+  "kb_gb": {
+    "en": "English (UK)",
+    "nl": "Engels (VK)",
+    "fr": "Anglais (Royaume-Uni)"
+  },
+  "kb_de": {
+    "en": "German",
+    "nl": "Duits",
+    "fr": "Allemand"
+  },
+  "kb_ch:fr": {
+    "en": "Swiss French",
+    "nl": "Zwitsers-Frans",
+    "fr": "Suisse romand"
+  },
+  "kb_ch": {
+    "en": "Swiss German",
+    "nl": "Zwitsers-Duits",
+    "fr": "Suisse alémanique"
+  },
+  "kb_lu": {
+    "en": "Luxembourgish",
+    "nl": "Luxemburgs",
+    "fr": "Luxembourgeois"
+  },
+  "c2_title": {
+    "en": "Hardware and target disk",
+    "nl": "Hardware en doelschijf",
+    "fr": "Matériel et disque cible"
+  },
+  "c2_help": {
+    "en": "The appliance needs an NVIDIA graphics card for the language models, and a TPM 2.0 chip that unlocks the encrypted disk at every start. Everything on the disk you choose is erased.",
+    "nl": "De appliance heeft een grafische kaart van NVIDIA nodig voor de taalmodellen, en een TPM 2.0-chip die de versleutelde schijf bij elke start ontgrendelt. Alles op de gekozen schijf wordt gewist.",
+    "fr": "L'appliance a besoin d'une carte graphique NVIDIA pour les modèles de langage, et d'une puce TPM 2.0 qui déverrouille le disque chiffré à chaque démarrage. Tout ce qui se trouve sur le disque choisi est effacé."
+  },
+  "c2_check": {
+    "en": "Hardware check",
+    "nl": "Controle van de hardware",
+    "fr": "Vérification du matériel"
+  },
+  "c2_graphics": {
+    "en": "Graphics",
+    "nl": "Grafische kaart",
+    "fr": "Carte graphique"
+  },
+  "c2_geforce": {
+    "en": "GeForce cards are licensed for on-premise office use only.",
+    "nl": "GeForce-kaarten zijn enkel gelicentieerd voor gebruik op locatie, in het kantoor.",
+    "fr": "Les cartes GeForce sont sous licence uniquement pour un usage sur site, au bureau."
+  },
+  "c2_gpu_memory_low": {
+    "en": "Recommended: {gb} GB. Larger models won't fit.",
+    "nl": "Aanbevolen: {gb} GB. Grotere modellen passen niet.",
+    "fr": "Recommandé : {gb} Go. Les modèles plus grands ne tiennent pas."
+  },
+  "c2_no_gpu": {
+    "en": "no NVIDIA graphics card found",
+    "nl": "geen grafische kaart van NVIDIA gevonden",
+    "fr": "aucune carte graphique NVIDIA trouvée"
+  },
+  "c2_processor": {
+    "en": "Processor",
+    "nl": "Processor",
+    "fr": "Processeur"
+  },
+  "c2_cores": {
+    "en": "{n} cores",
+    "nl": "{n} kernen",
+    "fr": "{n} cœurs"
+  },
+  "c2_security": {
+    "en": "Security",
+    "nl": "Beveiliging",
+    "fr": "Sécurité"
+  },
+  "c2_tpm_ok": {
+    "en": "TPM 2.0 · unlocks the encrypted disk",
+    "nl": "TPM 2.0 · ontgrendelt de versleutelde schijf",
+    "fr": "TPM 2.0 · déverrouille le disque chiffré"
+  },
+  "c2_no_tpm": {
+    "en": "no TPM 2.0 found",
+    "nl": "geen TPM 2.0 gevonden",
+    "fr": "aucune puce TPM 2.0 trouvée"
+  },
+  "c2_memory": {
+    "en": "Memory",
+    "nl": "Geheugen",
+    "fr": "Mémoire"
+  },
+  "c2_memory_low": {
+    "en": "{gb} GB. Recommended: {rec} GB.",
+    "nl": "{gb} GB. Aanbevolen: {rec} GB.",
+    "fr": "{gb} Go. Recommandé : {rec} Go."
+  },
+  "c2_memory_note": {
+    "en": "You can continue. Long documents and several users at once will be slower.",
+    "nl": "U kunt verdergaan. Lange documenten en meerdere gebruikers tegelijk zullen trager zijn.",
+    "fr": "Vous pouvez continuer. Les longs documents et plusieurs utilisateurs à la fois seront plus lents."
+  },
+  "c2_install_to": {
+    "en": "Install to",
+    "nl": "Installeren op",
+    "fr": "Installer sur"
+  },
+  "c2_disk": {
+    "en": "disk",
+    "nl": "schijf",
+    "fr": "disque"
+  },
+  "c2_too_small": {
+    "en": "too small",
+    "nl": "te klein",
+    "fr": "trop petit"
+  },
+  "c2_stick": {
+    "en": "Sūveryn installer",
+    "nl": "Sūveryn-installatie",
+    "fr": "Installation Sūveryn"
+  },
+  "c2_medium": {
+    "en": "installation medium",
+    "nl": "installatiemedium",
+    "fr": "support d'installation"
+  },
+  "c2_erased": {
+    "en": "Everything on the selected disk will be erased. The disk is then encrypted.",
+    "nl": "Alles op de gekozen schijf wordt gewist. Daarna wordt de schijf versleuteld.",
+    "fr": "Tout ce qui se trouve sur le disque choisi sera effacé. Le disque est ensuite chiffré."
+  },
+  "c2_block_gpu": {
+    "en": "No NVIDIA graphics card found: the language models need one.",
+    "nl": "Geen grafische kaart van NVIDIA gevonden: de taalmodellen hebben er een nodig.",
+    "fr": "Aucune carte graphique NVIDIA trouvée : les modèles de langage en ont besoin."
+  },
+  "c2_block_tpm": {
+    "en": "No TPM 2.0 found: switch it on in the firmware settings (often TPM, PTT or fTPM).",
+    "nl": "Geen TPM 2.0 gevonden: schakel hem in bij de firmware-instellingen (vaak TPM, PTT of fTPM).",
+    "fr": "Aucune puce TPM 2.0 trouvée : activez-la dans les réglages du firmware (souvent TPM, PTT ou fTPM)."
+  },
+  "c2_block_disk": {
+    "en": "No disk to install onto: it needs at least {size}.",
+    "nl": "Geen schijf om op te installeren: er is minstens {size} nodig.",
+    "fr": "Aucun disque pour l'installation : il faut au moins {size}."
+  },
+  "c3_title": {
+    "en": "Language models",
+    "nl": "Taalmodellen",
+    "fr": "Modèles de langage"
+  },
+  "c3_help": {
+    "en": "Models come from the stick's suveryn-bundles partition. Each one is checked against Sūveryn Labs' signature and every file's checksum; a model that fails is skipped. Several can be installed; people choose one per conversation.",
+    "nl": "De modellen komen van de partitie suveryn-bundles op de USB-stick. Elk model wordt gecontroleerd aan de hand van de handtekening van Sūveryn Labs en de controlesom van elk bestand; een model dat niet klopt, wordt overgeslagen. U kunt er meerdere installeren; gebruikers kiezen er één per gesprek.",
+    "fr": "Les modèles proviennent de la partition suveryn-bundles de la clé USB. Chacun est vérifié au moyen de la signature de Sūveryn Labs et de la somme de contrôle de chaque fichier ; un modèle qui échoue est ignoré. Plusieurs peuvent être installés ; les utilisateurs en choisissent un par conversation."
+  },
+  "c3_checking": {
+    "en": "Checking the language models on this stick",
+    "nl": "De taalmodellen op deze USB-stick worden gecontroleerd",
+    "fr": "Vérification des modèles de langage sur cette clé USB"
+  },
+  "c3_checking_note": {
+    "en": "Each model is checked against its signature and every file's checksum. This takes about a minute per model. {s} s",
+    "nl": "Elk model wordt gecontroleerd aan de hand van zijn handtekening en de controlesom van elk bestand. Dit duurt ongeveer een minuut per model. {s} s",
+    "fr": "Chaque modèle est vérifié au moyen de sa signature et de la somme de contrôle de chaque fichier. Cela prend environ une minute par modèle. {s} s"
+  },
+  "c3_found": {
+    "en": "Found on this installation medium",
+    "nl": "Gevonden op dit installatiemedium",
+    "fr": "Trouvés sur ce support d'installation"
+  },
+  "c3_partition": {
+    "en": "Partition suveryn-bundles on {disk}",
+    "nl": "Partitie suveryn-bundles op {disk}",
+    "fr": "Partition suveryn-bundles sur {disk}"
+  },
+  "c3_signed": {
+    "en": "Signed by Sūveryn Labs · bundle key ",
+    "nl": "Ondertekend door Sūveryn Labs · bundelsleutel ",
+    "fr": "Signé par Sūveryn Labs · clé de paquet "
+  },
+  "c3_key_matches": {
+    "en": "matches a key built into this release",
+    "nl": "komt overeen met een sleutel in deze release",
+    "fr": "correspond à une clé intégrée à cette version"
+  },
+  "c3_none_valid": {
+    "en": "No valid model on this stick.",
+    "nl": "Geen geldig model op deze USB-stick.",
+    "fr": "Aucun modèle valide sur cette clé USB."
+  },
+  "c3_default": {
+    "en": "default",
+    "nl": "standaard",
+    "fr": "par défaut"
+  },
+  "c3_optional": {
+    "en": "optional",
+    "nl": "optioneel",
+    "fr": "facultatif"
+  },
+  "c3_fits": {
+    "en": "fits",
+    "nl": "past",
+    "fr": "tient"
+  },
+  "c3_too_big": {
+    "en": "too big",
+    "nl": "te groot",
+    "fr": "trop grand"
+  },
+  "c3_skipped": {
+    "en": "skipped",
+    "nl": "overgeslagen",
+    "fr": "ignoré"
+  },
+  "c3_changed": {
+    "en": "Changed or damaged since it was signed.",
+    "nl": "Gewijzigd of beschadigd sinds de ondertekening.",
+    "fr": "Modifié ou endommagé depuis sa signature."
+  },
+  "c3_bad_signature": {
+    "en": "Signature not valid.",
+    "nl": "Handtekening ongeldig.",
+    "fr": "Signature non valide."
+  },
+  "c3_not_installed": {
+    "en": "Not installed. Ask your partner for a new copy.",
+    "nl": "Niet geïnstalleerd. Vraag uw partner om een nieuw exemplaar.",
+    "fr": "Non installé. Demandez une nouvelle copie à votre partenaire."
+  },
+  "c3_graphics": {
+    "en": "Graphics",
+    "nl": "Grafische kaart",
+    "fr": "Carte graphique"
+  },
+  "c3_graphics_note": {
+    "en": "{gb} GB · one model active at a time, switching takes a few seconds",
+    "nl": "{gb} GB · één model tegelijk actief, wisselen duurt enkele seconden",
+    "fr": "{gb} Go · un modèle actif à la fois, changer prend quelques secondes"
+  },
+  "c3_disk": {
+    "en": "Disk",
+    "nl": "Schijf",
+    "fr": "Disque"
+  },
+  "c3_disk_one": {
+    "en": "1 model · {used} of {size} on {disk}",
+    "nl": "1 model · {used} van {size} op {disk}",
+    "fr": "1 modèle · {used} sur {size} · {disk}"
+  },
+  "c3_disk_many": {
+    "en": "{n} models · {used} of {size} on {disk}",
+    "nl": "{n} modellen · {used} van {size} op {disk}",
+    "fr": "{n} modèles · {used} sur {size} · {disk}"
+  },
+  "c3_still_checking": {
+    "en": "Still checking the models on the stick. A moment, please.",
+    "nl": "De modellen op de USB-stick worden nog gecontroleerd. Even geduld, alstublieft.",
+    "fr": "Les modèles de la clé USB sont encore en cours de vérification. Un instant, s'il vous plaît."
+  },
+  "c3_choose_one": {
+    "en": "Choose at least one model (Space ticks it).",
+    "nl": "Kies minstens één model (Spatie vinkt het aan).",
+    "fr": "Choisissez au moins un modèle (Espace le coche)."
+  },
+  "c3_dont_fit": {
+    "en": "The chosen models don't fit on the disk. Untick one.",
+    "nl": "De gekozen modellen passen niet op de schijf. Vink er een uit.",
+    "fr": "Les modèles choisis ne tiennent pas sur le disque. Décochez-en un."
+  },
+  "c4_title": {
+    "en": "Network",
+    "nl": "Netwerk",
+    "fr": "Réseau"
+  },
+  "c4_help": {
+    "en": "The name is how people reach the appliance: https://<name>.local. With DHCP the office's network gives the address; ask for a reservation so it stays the same. Without DHCP, enter a fixed address with its prefix, e.g. 192.168.1.50/24.",
+    "nl": "Via de naam bereiken gebruikers de appliance: https://<naam>.local. Met DHCP krijgt de appliance een adres van het kantoornetwerk; vraag een reservering zodat het hetzelfde blijft. Zonder DHCP vult u een vast adres met prefix in, bijvoorbeeld 192.168.1.50/24.",
+    "fr": "Le nom permet d'atteindre l'appliance : https://<nom>.local. Avec DHCP, le réseau du bureau attribue l'adresse ; demandez une réservation pour qu'elle reste la même. Sans DHCP, saisissez une adresse fixe avec son préfixe, par exemple 192.168.1.50/24."
+  },
+  "c4_interface": {
+    "en": "Interface",
+    "nl": "Netwerkpoort",
+    "fr": "Interface"
+  },
+  "c4_connected": {
+    "en": "connected",
+    "nl": "verbonden",
+    "fr": "connecté"
+  },
+  "c4_no_cable": {
+    "en": "no cable",
+    "nl": "geen kabel",
+    "fr": "pas de câble"
+  },
+  "c4_name": {
+    "en": "Name",
+    "nl": "Naam",
+    "fr": "Nom"
+  },
+  "c4_name_placeholder": {
+    "en": "e.g. notary-brussels-01",
+    "nl": "bv. notaris-brussel-01",
+    "fr": "p. ex. notaire-bruxelles-01"
+  },
+  "c4_name_hint": {
+    "en": "Reachable as {name}.local. Letters, digits and hyphens.",
+    "nl": "Bereikbaar als {name}.local. Letters, cijfers en koppeltekens.",
+    "fr": "Accessible via {name}.local. Lettres, chiffres et traits d'union."
+  },
+  "c4_name_word": {
+    "en": "name",
+    "nl": "naam",
+    "fr": "nom"
+  },
+  "c4_address": {
+    "en": "Address",
+    "nl": "Adres",
+    "fr": "Adresse"
+  },
+  "c4_dhcp": {
+    "en": "Automatic (DHCP)",
+    "nl": "Automatisch (DHCP)",
+    "fr": "Automatique (DHCP)"
+  },
+  "c4_fixed": {
+    "en": "Fixed address",
+    "nl": "Vast adres",
+    "fr": "Adresse fixe"
+  },
+  "c4_received": {
+    "en": "Received {address}",
+    "nl": "Ontvangen: {address}",
+    "fr": "Reçue : {address}"
+  },
+  "c4_gateway_is": {
+    "en": "gateway {gw}",
+    "nl": "gateway {gw}",
+    "fr": "passerelle {gw}"
+  },
+  "c4_waiting": {
+    "en": "Waiting for an address from DHCP… {s} s",
+    "nl": "Wachten op een adres van DHCP… {s} s",
+    "fr": "En attente d'une adresse DHCP… {s} s"
+  },
+  "c4_reserve": {
+    "en": "Ask your network administrator to reserve this address for the appliance, so it stays the same after a restart.",
+    "nl": "Vraag uw netwerkbeheerder dit adres voor de appliance te reserveren, zodat het na een herstart hetzelfde blijft.",
+    "fr": "Demandez à votre administrateur réseau de réserver cette adresse pour l'appliance, afin qu'elle reste la même après un redémarrage."
+  },
+  "c4_no_lease": {
+    "en": "No address received from DHCP after {s} seconds.",
+    "nl": "Na {s} seconden geen adres ontvangen van DHCP.",
+    "fr": "Aucune adresse reçue par DHCP après {s} secondes."
+  },
+  "c4_check_cable": {
+    "en": "Check the cable, or enter a fixed address below.",
+    "nl": "Controleer de kabel, of vul hieronder een vast adres in.",
+    "fr": "Vérifiez le câble, ou saisissez une adresse fixe ci-dessous."
+  },
+  "c4_ip": {
+    "en": "IP address",
+    "nl": "IP-adres",
+    "fr": "Adresse IP"
+  },
+  "c4_gateway": {
+    "en": "Gateway",
+    "nl": "Gateway",
+    "fr": "Passerelle"
+  },
+  "c4_dns": {
+    "en": "DNS server",
+    "nl": "DNS-server",
+    "fr": "Serveur DNS"
+  },
+  "c4_free_address": {
+    "en": "Ask your network administrator for a free address in your office network.",
+    "nl": "Vraag uw netwerkbeheerder om een vrij adres in het kantoornetwerk.",
+    "fr": "Demandez à votre administrateur réseau une adresse libre dans le réseau du bureau."
+  },
+  "c4_bad_name": {
+    "en": "The name can be letters, digits and hyphens (at most 63), not starting or ending with a hyphen.",
+    "nl": "De naam mag bestaan uit letters, cijfers en koppeltekens (hoogstens 63), en niet beginnen of eindigen met een koppelteken.",
+    "fr": "Le nom peut contenir des lettres, des chiffres et des traits d'union (63 au plus), sans commencer ni finir par un trait d'union."
+  },
+  "c4_no_port": {
+    "en": "No Ethernet port found.",
+    "nl": "Geen ethernetpoort gevonden.",
+    "fr": "Aucun port Ethernet trouvé."
+  },
+  "c4_need_prefix": {
+    "en": "Enter the address with its network prefix, e.g. 192.168.1.50/24.",
+    "nl": "Vul het adres in met de netwerkprefix, bijvoorbeeld 192.168.1.50/24.",
+    "fr": "Saisissez l'adresse avec son préfixe réseau, par exemple 192.168.1.50/24."
+  },
+  "c4_gateway_outside": {
+    "en": "The gateway {gw} isn't in {net}.",
+    "nl": "De gateway {gw} ligt niet in {net}.",
+    "fr": "La passerelle {gw} n'est pas dans {net}."
+  },
+  "c4_need_dns": {
+    "en": "A fixed address needs a DNS server.",
+    "nl": "Een vast adres heeft een DNS-server nodig.",
+    "fr": "Une adresse fixe nécessite un serveur DNS."
+  },
+  "c4_bad_address": {
+    "en": "This address can't be used: {detail}.",
+    "nl": "Dit adres kan niet worden gebruikt: {detail}.",
+    "fr": "Cette adresse ne peut pas être utilisée : {detail}."
+  },
+  "c5_title": {
+    "en": "Ready to install",
+    "nl": "Klaar om te installeren",
+    "fr": "Prêt pour l'installation"
+  },
+  "c5_help": {
+    "en": "Check the answers. Installing erases the disk; type {word} (capitals) to confirm.",
+    "nl": "Controleer de antwoorden. De installatie wist de schijf; typ {word} (hoofdletters) om te bevestigen.",
+    "fr": "Vérifiez les réponses. L'installation efface le disque ; tapez {word} (en majuscules) pour confirmer."
+  },
+  "c5_keyboard": {
+    "en": "Keyboard",
+    "nl": "Toetsenbord",
+    "fr": "Clavier"
+  },
+  "c5_timezone": {
+    "en": "Time zone",
+    "nl": "Tijdzone",
+    "fr": "Fuseau horaire"
+  },
+  "c5_disk": {
+    "en": "Disk",
+    "nl": "Schijf",
+    "fr": "Disque"
+  },
+  "c5_encryption": {
+    "en": "Encryption",
+    "nl": "Versleuteling",
+    "fr": "Chiffrement"
+  },
+  "c5_encryption_value": {
+    "en": "LUKS2 · unlocks with this machine's TPM",
+    "nl": "LUKS2 · ontgrendelt met de TPM van deze machine",
+    "fr": "LUKS2 · se déverrouille avec la puce TPM de cette machine"
+  },
+  "c5_name": {
+    "en": "Name",
+    "nl": "Naam",
+    "fr": "Nom"
+  },
+  "c5_address": {
+    "en": "Address",
+    "nl": "Adres",
+    "fr": "Adresse"
+  },
+  "c5_fixed": {
+    "en": "fixed",
+    "nl": "vast",
+    "fr": "fixe"
+  },
+  "c5_models": {
+    "en": "Models",
+    "nl": "Modellen",
+    "fr": "Modèles"
+  },
+  "c5_none": {
+    "en": "none",
+    "nl": "geen",
+    "fr": "aucun"
+  },
+  "c5_memory": {
+    "en": "Memory",
+    "nl": "Geheugen",
+    "fr": "Mémoire"
+  },
+  "c5_memory_low": {
+    "en": "{gb} GB, below the recommended {rec} GB",
+    "nl": "{gb} GB, minder dan de aanbevolen {rec} GB",
+    "fr": "{gb} Go, en dessous des {rec} Go recommandés"
+  },
+  "c5_erased": {
+    "en": "All data on {disk} will be permanently erased.",
+    "nl": "Alle gegevens op {disk} worden definitief gewist.",
+    "fr": "Toutes les données de {disk} seront définitivement effacées."
+  },
+  "c5_type_word": {
+    "en": "Type {word} to confirm",
+    "nl": "Typ {word} om te bevestigen",
+    "fr": "Tapez {word} pour confirmer"
+  },
+  "c5_word_wrong": {
+    "en": "Type {word} in capitals to confirm.",
+    "nl": "Typ {word} in hoofdletters om te bevestigen.",
+    "fr": "Tapez {word} en majuscules pour confirmer."
+  },
+  "erase_word": {
+    "en": "ERASE",
+    "nl": "WISSEN",
+    "fr": "EFFACER"
+  },
+  "c6_title": {
+    "en": "Installing the sūveryn appliance",
+    "nl": "De sūveryn-appliance wordt geïnstalleerd",
+    "fr": "Installation de l'appliance sūveryn"
+  },
+  "c6_keys_off": {
+    "en": "Installation in progress. Keys are disabled.",
+    "nl": "Installatie bezig. De toetsen zijn uitgeschakeld.",
+    "fr": "Installation en cours. Les touches sont désactivées."
+  },
+  "c6_check_models": {
+    "en": "Checking the language models against their signatures",
+    "nl": "De taalmodellen worden gecontroleerd aan de hand van hun handtekening",
+    "fr": "Vérification des modèles de langage au moyen de leur signature"
+  },
+  "c6_partition": {
+    "en": "Partitioning {disk} and copying system files",
+    "nl": "{disk} wordt gepartitioneerd en de systeembestanden worden gekopieerd",
+    "fr": "Partitionnement de {disk} et copie des fichiers système"
+  },
+  "c6_encrypt": {
+    "en": "Encrypting the disk (LUKS2, a new key for this machine)",
+    "nl": "De schijf wordt versleuteld (LUKS2, een nieuwe sleutel voor deze machine)",
+    "fr": "Chiffrement du disque (LUKS2, une nouvelle clé pour cette machine)"
+  },
+  "c6_copy_models": {
+    "en": "Copying language models",
+    "nl": "De taalmodellen worden gekopieerd",
+    "fr": "Copie des modèles de langage"
+  },
+  "c6_settings": {
+    "en": "Applying the name and network settings",
+    "nl": "De naam en de netwerkinstellingen worden toegepast",
+    "fr": "Application du nom et des réglages réseau"
+  },
+  "c6_tpm": {
+    "en": "Linking the disk key to this machine's TPM",
+    "nl": "De schijfsleutel wordt gekoppeld aan de TPM van deze machine",
+    "fr": "Liaison de la clé du disque à la puce TPM de cette machine"
+  },
+  "c6_boot": {
+    "en": "Installing the boot loader",
+    "nl": "De bootloader wordt geïnstalleerd",
+    "fr": "Installation du chargeur d'amorçage"
+  },
+  "c6_n_of": {
+    "en": "{n} of {total}",
+    "nl": "{n} van {total}",
+    "fr": "{n} sur {total}"
+  },
+  "c6_failed": {
+    "en": "The installation failed.",
+    "nl": "De installatie is mislukt.",
+    "fr": "L'installation a échoué."
+  },
+  "c6_failed_note": {
+    "en": "Nothing on the stick changed. The disk {disk} may be partly written; installing again erases it anew.",
+    "nl": "Op de USB-stick is niets gewijzigd. De schijf {disk} kan gedeeltelijk beschreven zijn; een nieuwe installatie wist ze opnieuw.",
+    "fr": "Rien n'a changé sur la clé USB. Le disque {disk} peut être partiellement écrit ; une nouvelle installation l'efface à nouveau."
+  },
+  "c6_no_result": {
+    "en": "the installer gave no result",
+    "nl": "de installatie gaf geen resultaat",
+    "fr": "l'installation n'a donné aucun résultat"
+  },
+  "c6_duration": {
+    "en": "This takes about ten minutes. Do not turn off the machine.",
+    "nl": "Dit duurt ongeveer tien minuten. Zet de machine niet uit.",
+    "fr": "Cela prend environ dix minutes. N'éteignez pas la machine."
+  },
+  "c6_then": {
+    "en": "Then you write down the disk recovery key, and the machine restarts.",
+    "nl": "Daarna schrijft u de herstelsleutel van de schijf op, en herstart de machine.",
+    "fr": "Vous notez ensuite la clé de récupération du disque, puis la machine redémarre."
+  },
+  "c6_identity": {
+    "en": "This appliance's ID and signing key are made at its first start.",
+    "nl": "Het ID en de ondertekeningssleutel van deze appliance worden bij de eerste start aangemaakt.",
+    "fr": "L'identifiant et la clé de signature de cette appliance sont créés à son premier démarrage."
+  },
+  "c6_back_summary": {
+    "en": "Back to the summary",
+    "nl": "Terug naar het overzicht",
+    "fr": "Retour au récapitulatif"
+  },
+  "c7_title": {
+    "en": "Write down the disk recovery key",
+    "nl": "Schrijf de herstelsleutel van de schijf op",
+    "fr": "Notez la clé de récupération du disque"
+  },
+  "c7_help": {
+    "en": "The recovery key opens the encrypted disk when the TPM can't: after a BIOS or firmware update, a Secure Boot change, or on another machine. Keep it on paper, away from the appliance.",
+    "nl": "De herstelsleutel opent de versleutelde schijf wanneer de TPM dat niet kan: na een update van het BIOS of de firmware, een wijziging aan Secure Boot, of op een andere machine. Bewaar ze op papier, niet bij de appliance.",
+    "fr": "La clé de récupération ouvre le disque chiffré lorsque la puce TPM ne le peut pas : après une mise à jour du BIOS ou du firmware, une modification de Secure Boot, ou sur une autre machine. Conservez-la sur papier, loin de l'appliance."
+  },
+  "c7_remove_medium": {
+    "en": "Remove the installation medium before restarting.",
+    "nl": "Verwijder het installatiemedium voor u herstart.",
+    "fr": "Retirez le support d'installation avant de redémarrer."
+  },
+  "c7_encrypted": {
+    "en": "The disk is encrypted and linked to this machine's TPM. It unlocks by itself at every start.",
+    "nl": "De schijf is versleuteld en gekoppeld aan de TPM van deze machine. Ze ontgrendelt vanzelf bij elke start.",
+    "fr": "Le disque est chiffré et lié à la puce TPM de cette machine. Il se déverrouille seul à chaque démarrage."
+  },
+  "c7_only_if": {
+    "en": "You need this key only if it can't: after a BIOS or firmware update, a Secure Boot change, or when the disk is moved to another machine.",
+    "nl": "U hebt deze sleutel enkel nodig als dat niet lukt: na een update van het BIOS of de firmware, een wijziging aan Secure Boot, of wanneer de schijf naar een andere machine wordt verplaatst.",
+    "fr": "Vous n'avez besoin de cette clé que s'il n'y parvient pas : après une mise à jour du BIOS ou du firmware, une modification de Secure Boot, ou si le disque est déplacé vers une autre machine."
+  },
+  "c7_once": {
+    "en": "This is the only time it is shown. It is not stored on this machine.",
+    "nl": "Ze wordt slechts één keer getoond. Ze wordt niet op deze machine bewaard.",
+    "fr": "Elle n'est affichée qu'une seule fois. Elle n'est pas conservée sur cette machine."
+  },
+  "c7_paper": {
+    "en": "Write it on paper and keep it with the office's other important documents, not with the appliance.",
+    "nl": "Schrijf ze op papier en bewaar ze bij de andere belangrijke documenten van het kantoor, niet bij de appliance.",
+    "fr": "Notez-la sur papier et conservez-la avec les autres documents importants du bureau, pas avec l'appliance."
+  },
+  "c7_confirm": {
+    "en": "Type the first group to confirm",
+    "nl": "Typ de eerste groep om te bevestigen",
+    "fr": "Tapez le premier groupe pour confirmer"
+  },
+  "c7_matches": {
+    "en": "matches",
+    "nl": "klopt",
+    "fr": "correct"
+  },
+  "c7_wrong": {
+    "en": "Type the first group of the key, as shown, to confirm you wrote it down.",
+    "nl": "Typ de eerste groep van de sleutel zoals getoond, om te bevestigen dat u ze hebt opgeschreven.",
+    "fr": "Tapez le premier groupe de la clé tel qu'affiché, pour confirmer que vous l'avez notée."
+  },
+  "c8_waiting": {
+    "en": "Installation is complete. Setup is waiting for you.",
+    "nl": "De installatie is voltooid. De configuratie wacht op u.",
+    "fr": "L'installation est terminée. La configuration vous attend."
+  },
+  "c8_running": {
+    "en": "The appliance is running.",
+    "nl": "De appliance draait.",
+    "fr": "L'appliance fonctionne."
+  },
+  "c8_open_addresses": {
+    "en": "On another computer on this network, open one of these addresses in a browser:",
+    "nl": "Open op een andere computer in dit netwerk een van deze adressen in een browser:",
+    "fr": "Sur un autre ordinateur de ce réseau, ouvrez l'une de ces adresses dans un navigateur :"
+  },
+  "c8_sign_in": {
+    "en": "Sign in from a browser on another computer on this network:",
+    "nl": "Meld u aan vanuit een browser op een andere computer in dit netwerk:",
+    "fr": "Connectez-vous depuis un navigateur sur un autre ordinateur de ce réseau :"
+  },
+  "c8_cert_warning": {
+    "en": "Your browser warns about the certificate once. To be sure you reached this machine, check that the browser shows this fingerprint:",
+    "nl": "Uw browser waarschuwt één keer voor het certificaat. Controleer of de browser deze vingerafdruk toont, zo weet u zeker dat u deze machine bereikt:",
+    "fr": "Votre navigateur signale le certificat une fois. Pour être sûr d'avoir atteint cette machine, vérifiez que le navigateur affiche cette empreinte :"
+  },
+  "c8_setup_closed": {
+    "en": "Setup is complete and no longer accepts connections.",
+    "nl": "De configuratie is voltooid en aanvaardt geen verbindingen meer.",
+    "fr": "La configuration est terminée et n'accepte plus de connexions."
+  },
+  "c8_network": {
+    "en": "Network",
+    "nl": "Netwerk",
+    "fr": "Réseau"
+  },
+  "c8_no_address": {
+    "en": "no address yet",
+    "nl": "nog geen adres",
+    "fr": "pas encore d'adresse"
+  },
+  "c8_connected": {
+    "en": "connected",
+    "nl": "verbonden",
+    "fr": "connecté"
+  },
+  "c8_no_cable": {
+    "en": "no cable",
+    "nl": "geen kabel",
+    "fr": "pas de câble"
+  },
+  "c8_fixed": {
+    "en": "fixed",
+    "nl": "vast",
+    "fr": "fixe"
+  },
+  "c8_disk": {
+    "en": "Disk",
+    "nl": "Schijf",
+    "fr": "Disque"
+  },
+  "c8_disk_tpm": {
+    "en": "encrypted · unlocked by TPM",
+    "nl": "versleuteld · ontgrendeld door de TPM",
+    "fr": "chiffré · déverrouillé par la puce TPM"
+  },
+  "c8_disk_key": {
+    "en": "encrypted · unlocked with the recovery key",
+    "nl": "versleuteld · ontgrendeld met de herstelsleutel",
+    "fr": "chiffré · déverrouillé avec la clé de récupération"
+  },
+  "c8_disk_key_again": {
+    "en": "encrypted · unlocked with the recovery key, linked to the TPM again",
+    "nl": "versleuteld · ontgrendeld met de herstelsleutel, opnieuw gekoppeld aan de TPM",
+    "fr": "chiffré · déverrouillé avec la clé de récupération, de nouveau lié à la puce TPM"
+  },
+  "c8_setup": {
+    "en": "Setup",
+    "nl": "Configuratie",
+    "fr": "Configuration"
+  },
+  "c8_setup_open": {
+    "en": "open to this network until setup is finished",
+    "nl": "open voor dit netwerk tot de configuratie voltooid is",
+    "fr": "ouverte à ce réseau jusqu'à la fin de la configuration"
+  },
+  "c8_setup_done": {
+    "en": "finished and closed",
+    "nl": "voltooid en gesloten",
+    "fr": "terminée et fermée"
+  },
+  "c8_id": {
+    "en": "Appliance ID",
+    "nl": "Appliance-ID",
+    "fr": "ID de l'appliance"
+  },
+  "c8_id_pending": {
+    "en": "being made…",
+    "nl": "wordt aangemaakt…",
+    "fr": "en cours de création…"
+  },
+  "c8_support": {
+    "en": "Support",
+    "nl": "Ondersteuning",
+    "fr": "Support"
+  },
+  "c8_no_manifest": {
+    "en": "no valid manifest · banner for everyone in {days} days",
+    "nl": "geen geldig manifest · melding voor iedereen over {days} dagen",
+    "fr": "aucun manifeste valide · bannière pour tous dans {days} jours"
+  },
+  "c8_no_manifest_now": {
+    "en": "no valid manifest · banner shown to everyone",
+    "nl": "geen geldig manifest · melding voor iedereen",
+    "fr": "aucun manifeste valide · bannière affichée pour tous"
+  },
+  "c8_time": {
+    "en": "Time",
+    "nl": "Tijd",
+    "fr": "Heure"
+  },
+  "c8_menu_details": {
+    "en": "Show network details",
+    "nl": "Netwerkgegevens tonen",
+    "fr": "Afficher les détails du réseau"
+  },
+  "c8_menu_change": {
+    "en": "Change network settings",
+    "nl": "Netwerkinstellingen wijzigen",
+    "fr": "Modifier les réglages réseau"
+  },
+  "c8_menu_qr": {
+    "en": "Show the registration QR code",
+    "nl": "De QR-code voor registratie tonen",
+    "fr": "Afficher le code QR d'enregistrement"
+  },
+  "c8_menu_restart": {
+    "en": "Restart",
+    "nl": "Herstarten",
+    "fr": "Redémarrer"
+  },
+  "c8_menu_shutdown": {
+    "en": "Shut down",
+    "nl": "Uitschakelen",
+    "fr": "Éteindre"
+  },
+  "c8_choose": {
+    "en": "Choose an option: ",
+    "nl": "Kies een optie: ",
+    "fr": "Choisissez une option : "
+  },
+  "c8_details_title": {
+    "en": "Network details",
+    "nl": "Netwerkgegevens",
+    "fr": "Détails du réseau"
+  },
+  "c8_mac": {
+    "en": "MAC address",
+    "nl": "MAC-adres",
+    "fr": "Adresse MAC"
+  },
+  "c8_addresses": {
+    "en": "Addresses",
+    "nl": "Adressen",
+    "fr": "Adresses"
+  },
+  "c8_gateway": {
+    "en": "Gateway",
+    "nl": "Gateway",
+    "fr": "Passerelle"
+  },
+  "c8_dns": {
+    "en": "DNS servers",
+    "nl": "DNS-servers",
+    "fr": "Serveurs DNS"
+  },
+  "c8_mdns": {
+    "en": "Name on the network",
+    "nl": "Naam in het netwerk",
+    "fr": "Nom sur le réseau"
+  },
+  "c8_settings": {
+    "en": "Settings",
+    "nl": "Instellingen",
+    "fr": "Réglages"
+  },
+  "c8_any_key": {
+    "en": "Press any key to go back.",
+    "nl": "Druk op een toets om terug te gaan.",
+    "fr": "Appuyez sur une touche pour revenir."
+  },
+  "c8_qr_title": {
+    "en": "Registration",
+    "nl": "Registratie",
+    "fr": "Enregistrement"
+  },
+  "c8_qr_text": {
+    "en": "Scan this code with a phone to register this appliance in the sūveryn portal. No app is needed.",
+    "nl": "Scan deze code met een telefoon om deze appliance te registreren in het sūveryn-portaal. U hebt geen app nodig.",
+    "fr": "Scannez ce code avec un téléphone pour enregistrer cette appliance dans le portail sūveryn. Aucune application n'est nécessaire."
+  },
+  "c8_qr_none": {
+    "en": "The appliance's ID isn't ready yet. Try again in a minute.",
+    "nl": "Het ID van de appliance is nog niet klaar. Probeer het over een minuut opnieuw.",
+    "fr": "L'identifiant de l'appliance n'est pas encore prêt. Réessayez dans une minute."
+  },
+  "c8_fingerprint": {
+    "en": "Key fingerprint",
+    "nl": "Vingerafdruk van de sleutel",
+    "fr": "Empreinte de la clé"
+  },
+  "c8_confirm_restart": {
+    "en": "Restart the appliance? People who are working lose their connection for a few minutes. Enter restarts, Esc goes back.",
+    "nl": "De appliance herstarten? Wie aan het werk is, verliest enkele minuten de verbinding. Enter herstart, Esc gaat terug.",
+    "fr": "Redémarrer l'appliance ? Les personnes qui travaillent perdent la connexion pendant quelques minutes. Entrée redémarre, Échap revient."
+  },
+  "c8_confirm_shutdown": {
+    "en": "Shut down the appliance? Nobody can use it until it is switched on again. Enter shuts down, Esc goes back.",
+    "nl": "De appliance uitschakelen? Niemand kan ze gebruiken tot ze weer wordt aangezet. Enter schakelt uit, Esc gaat terug.",
+    "fr": "Éteindre l'appliance ? Personne ne peut l'utiliser avant qu'elle soit rallumée. Entrée éteint, Échap revient."
+  },
+  "c8_change_title": {
+    "en": "Change network settings",
+    "nl": "Netwerkinstellingen wijzigen",
+    "fr": "Modifier les réglages réseau"
+  },
+  "c8_applied": {
+    "en": "The new network settings are applied.",
+    "nl": "De nieuwe netwerkinstellingen zijn toegepast.",
+    "fr": "Les nouveaux réglages réseau sont appliqués."
+  },
+  "c8_apply_failed": {
+    "en": "The network settings couldn't be applied: {detail}",
+    "nl": "De netwerkinstellingen konden niet worden toegepast: {detail}",
+    "fr": "Les réglages réseau n'ont pas pu être appliqués : {detail}"
+  },
+  "button_apply": {
+    "en": "< Apply >",
+    "nl": "< Toepassen >",
+    "fr": "< Appliquer >"
+  },
+  "weekdays": {
+    "en": "Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday",
+    "nl": "maandag,dinsdag,woensdag,donderdag,vrijdag,zaterdag,zondag",
+    "fr": "lundi,mardi,mercredi,jeudi,vendredi,samedi,dimanche"
+  },
+  "months": {
+    "en": "January,February,March,April,May,June,July,August,September,October,November,December",
+    "nl": "januari,februari,maart,april,mei,juni,juli,augustus,september,oktober,november,december",
+    "fr": "janvier,février,mars,avril,mai,juin,juillet,août,septembre,octobre,novembre,décembre"
+  },
+  "date": {
+    "en": "{weekday} {day} {month} {year}, {time}",
+    "nl": "{weekday} {day} {month} {year}, {time}",
+    "fr": "{weekday} {day} {month} {year}, {time}"
+  }
 }

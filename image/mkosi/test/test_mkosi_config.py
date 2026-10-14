@@ -170,8 +170,8 @@ def test_the_appliance_initrd_holds_only_what_reaches_the_disk():
 
 
 def test_the_data_partition_opens_with_the_tpm_or_five_typed_keys():
-    """In our own initrd (mkosi.images/initrd): the TPM, then 5 typed attempts (the TPM counts as one try)."""
-    assert ('/usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,tries=6'
+    """In our own initrd (mkosi.images/initrd): the TPM, then the unlock screen's 5 typed attempts."""
+    assert ('/usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,headless=true'
             in BOOT_MODE)
     assert "tpm2.target" in BOOT_MODE_UNIT.read_text()
     conf = (MKOSI / "mkosi.conf").read_text()
@@ -272,13 +272,47 @@ def test_the_console_installer_runs_on_the_stick_only():
 
 
 def test_the_console_looks_like_the_design():
-    """The brand's dark theme as the console's 16 colours, and a font with ū (Uni2 Terminus)."""
+    """The brand's dark theme as the console's 16 colours, and a font with ū and the QR code's half blocks (Terminus)."""
     rows = [[int(v) for v in line.split(",")] for line in
             (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "console-colours").read_text().split()]
     assert len(rows) == 3 and all(len(r) == 16 for r in rows)
     colour = lambda i: "#%02X%02X%02X" % (rows[0][i], rows[1][i], rows[2][i])  # noqa: E731
     assert (colour(0), colour(1), colour(6), colour(7), colour(15)) == ("#0B0D10", "#FA5B35", "#3AD4CA", "#A4A6A7", "#F3F4F5")
     setup = (MKOSI / "mkosi.extra" / "etc" / "default" / "console-setup").read_text()
-    assert 'CODESET="Uni2"' in setup and 'FONTFACE="Terminus"' in setup
+    assert 'CODESET="Vietnamese"' in setup and 'FONTFACE="Terminus"' in setup
     for pkg in ("kbd", "console-setup-linux", "keyboard-configuration"):
         assert re.search(rf"^\s+{pkg}$", (MKOSI / "mkosi.conf").read_text(), re.M), pkg
+    # Applied directly at every start: the package's own script saves into the read-only /etc and fails.
+    dropin = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "console-setup.service.d" /
+              "50-suveryn.conf").read_text()
+    assert "ExecStart=\nExecStart=/bin/setupcon --force\n" in dropin and "--save" not in dropin.split("[Service]")[1]
+
+
+def test_the_unlock_screen_is_in_the_initrd():
+    """C8b: the TPM first without asking, then unlock-screen: 5 attempts, the TPM enrolled again (PCR 7)."""
+    initrd = MKOSI / "mkosi.images" / "initrd" / "extra" / "usr" / "lib" / "suveryn"
+    assert "tpm2-device=auto,headless=true" in BOOT_MODE and '/usr/lib/suveryn/unlock-screen "/dev/$data"' in BOOT_MODE
+    screen = (initrd / "unlock-screen").read_text()
+    assert (initrd / "unlock-screen").stat().st_mode & 0o111
+    assert "TRIES=5" in screen and "headless=true" in screen
+    # The old slot wiped on its own first: with the enrolment, cryptenroll skips an "already enrolled" PCR set.
+    assert re.search(r'--wipe-slot=tpm2 "\$DATA" [^\n]*&&\n\s+systemd-cryptenroll --unlock-key-file="\$KEY" '
+                     r'--tpm2-device=auto --tpm2-pcrs=7 --tpm2-pcrlock= \\\n\s+"\$DATA"', screen)
+    assert (initrd / "console-colours").read_text() == (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" /
+                                                       "console-colours").read_text()
+    conf = (MKOSI / "mkosi.images" / "initrd" / "mkosi.conf").read_text()
+    assert re.search(r"^\s+kbd$", conf, re.M) and re.search(r"^\s+console-setup-linux$", conf, re.M)
+
+
+def test_the_console_runs_on_the_installed_appliance_only():
+    unit = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-console.service").read_text()
+    assert "ConditionPathExists=!/run/suveryn/installer-mode" in unit and "TTYPath=/dev/tty1" in unit
+    assert "suveryn-console.service" in POSTINST and re.search(r"^\s+qrencode$", (MKOSI / "mkosi.conf").read_text(), re.M)
+
+
+def test_mdns_answers_for_the_name():
+    resolved = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "resolved.conf.d" / "50-suveryn-mdns.conf").read_text()
+    assert "MulticastDNS=yes" in resolved
+    assert "MulticastDNS=yes" in (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "network" /
+                                  "80-suveryn-dhcp.network").read_text()
+    assert '"MulticastDNS=yes"' in (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "install").read_text()
