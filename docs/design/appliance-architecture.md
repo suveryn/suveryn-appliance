@@ -69,6 +69,7 @@ in it are links into the data partition, because they belong to this office:
 | `/etc/suveryn` | `/var/lib/suveryn/etc` | The network mode, approved destinations, service settings and secrets |
 | `/etc/nginx/sites-enabled/suveryn` | `/var/lib/suveryn/nginx/suveryn` | The office's site (its name) |
 | `/etc/hostname`, `/etc/hosts` | `/var/lib/suveryn/host/…` | The appliance's name (set in the installer) |
+| `/etc/localtime` | `/var/lib/suveryn/host/localtime` | The time zone (set in the installer, C1) |
 | `/etc/machine-id` | `/var/lib/suveryn/host/machine-id`, mounted over it in the initrd (systemd won't follow a link for this one) | Unique per appliance |
 | `/etc/systemd/network/` office part | `/var/lib/suveryn/network` | Fixed address or DHCP (#37, C4) |
 
@@ -105,10 +106,10 @@ The USB stick holds the **same** system and boot file as an installed appliance,
 
 | # | USB partition | Contents |
 |---|---|---|
-| 1 | EFI system partition | The boot file, set to start in installer mode |
+| 1 | EFI system partition | The same boot file. The stick has no data partition, and that is what starts installer mode (`suveryn-boot-mode` in the initrd: `/var` in memory) |
 | 2 | System | Identical to an installed slot |
 | 3 | System verity | Its fingerprints |
-| 4 | `SUVERYN-BUNDLES` (exFAT, the rest of the stick) | Signed model bundles (#36) |
+| 4 | `suveryn-bundles` (exFAT, label `SUVBUNDLES`; the rest of the stick) | Signed model bundles (#36) |
 
 One release produces one system, used both to install and to run: nothing to keep in step between
 an "installer distribution" and the product. In installer mode the console installer (#37, C1 to C7)

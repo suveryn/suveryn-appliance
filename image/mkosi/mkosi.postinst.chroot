@@ -8,10 +8,11 @@ link() { rm -rf "$2"; mkdir -p "$(dirname "$2")"; ln -s "$1" "$2"; }
 link /var/lib/suveryn/etc              /etc/suveryn
 link /var/lib/suveryn/host/hostname    /etc/hostname
 link /var/lib/suveryn/host/hosts       /etc/hosts
+link /var/lib/suveryn/host/localtime   /etc/localtime
 link /var/lib/suveryn/network          /etc/systemd/network
 link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
-# The machine-id is mounted over this empty file from the data partition (fstab).
+# The machine-id is mounted over this empty file from /var in the initrd (suveryn-boot-mode).
 rm -f /etc/machine-id && : > /etc/machine-id
 mkdir -p /usr/lib/suveryn && : > /usr/lib/suveryn/empty-machine-id
 

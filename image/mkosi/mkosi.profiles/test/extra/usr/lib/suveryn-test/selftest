@@ -3,11 +3,13 @@
 # line to the serial console (image/mkosi/test/run-vm-tests reads them), then powers off.
 #
 # Mode, from the credential suveryn.test (QEMU: -smbios type=11,value=io.systemd.credential:suveryn.test=…):
-#   install       the installer's disk step onto the second disk (/dev/vdb), then check what it made
-#   tpm-replaced  check the running system; the identity, sealed to the old TPM, must be unusable
-#   bundles       check the running system, then the test bundles on the second disk (/dev/vdb, #36):
-#                 the good one is installed, the changed and the untrusted ones are refused
-#   (none)        check the running system
+#   install          started from the installer stick (/dev/vda): check installer mode, then install
+#                    onto the empty second disk (/dev/vdb) with the stick's good test bundle, and check
+#                    what that made; a bad name and a changed bundle are refused first, writing nothing
+#   stick-beside     started from the stick, with an installed appliance as the second disk: installer
+#                    mode, and that appliance's data partition is never opened
+#   tpm-replaced     check the running system; the identity, sealed to the old TPM, must be unusable
+#   (none)           check the running system (the installed appliance)
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
 fails=0
@@ -23,29 +25,66 @@ finish() {
 }
 mode=$(cat /run/credentials/@system/suveryn.test 2>/dev/null)
 
+root_on_boot_disk() {  # slot A (the verified root) comes from the disk the firmware started from
+  check "root from the boot disk"      bash -c 'd=$(ls /sys/block/$(basename "$(readlink -f /dev/mapper/root)")/slaves | head -1); disk=/dev/$(basename "$(readlink -f /sys/class/block/$d/..)"); echo "$d on $disk"; test "$disk" = "$(cat /run/suveryn/boot-disk)"'
+}
+
+installer_checks() {
+  root_on_boot_disk
+  check "installer mode: /var in memory" bash -c 'test "$(cat /run/suveryn/boot-mode)" = installer && test "$(findmnt -no FSTYPE /var)" = tmpfs && echo "boot disk $(cat /run/suveryn/boot-disk)"'
+  check "no data partition opened"     bash -c '! cryptsetup status suveryn-data >/dev/null 2>&1 && ! ls /dev/mapper | grep -q suveryn'
+  check "no identity on the stick"     test ! -e /var/lib/suveryn/identity
+}
+
+if [ "$mode" = stick-beside ]; then
+  installer_checks
+  check "started from the stick"       test "$(cat /run/suveryn/boot-disk)" = /dev/vda
+  finish
+fi
+
 if [ "$mode" = install ]; then
+  installer_checks
+  check "stick's bundles checked"      python3 -c '
+import json, subprocess
+m = {x["folder"]: x for x in json.loads(subprocess.run(["/usr/lib/suveryn/install", "--list-models", "--json"],
+                                                       capture_output=True, text=True, check=True).stdout)}
+assert m["good"]["valid"] and m["good"]["name"] == "test-model", m
+assert not m["changed"]["valid"] and "SHA-256" in m["changed"]["error"], m
+assert not m["untrusted"]["valid"] and "trust" in m["untrusted"]["error"], m
+print("good valid; changed and untrusted refused")'
   # The stick's partition table: the primary GPT (first 34 sectors) and the backup (last 33).
   gpt() { s=$(blockdev --getsz /dev/vda) && { dd if=/dev/vda bs=512 count=34 status=none; dd if=/dev/vda bs=512 skip=$((s-33)) status=none; } | sha256sum | cut -c1-16; }
   gpt > /run/stick-before.gpt
-  if result=$(/usr/lib/suveryn/install-disk --json /dev/vdb 2>/run/install-disk.err); then
-  sed "s/^/SUVERYN-SELFTEST progress /" /run/install-disk.err > "$out"
-    say "ok   install-disk onto /dev/vdb"
+  empty() { test -z "$(dd if=/dev/vdb bs=1M count=1 status=none | tr -d '\0' | head -c1)"; }
+  refused() {  # refused <install arguments…>: exit 2, its message, and the disk still empty
+    /usr/lib/suveryn/install --disk /dev/vdb "$@" > /run/refused.out 2>&1; r=$?
+    tail -1 /run/refused.out; [ "$r" -eq 2 ] && empty
+  }
+  check "a bad name is refused, nothing written"       refused --name 'Not_A-Name-'
+  check "a changed bundle is refused, nothing written" refused --name test-appliance --model changed
+  if result=$(/usr/lib/suveryn/install --disk /dev/vdb --name test-appliance --timezone Europe/Brussels --model good --json 2>/run/install.err); then
+    sed "s/^/SUVERYN-SELFTEST progress /" /run/install.err > "$out"
+    say "ok   install onto /dev/vdb"
     say "recovery-key $(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["recovery_key"])')"
-    slots=$(echo "$result" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["key_slots"]))')
-    check "data partition: TPM and recovery key only" test "$slots" = "recovery tpm2"
-    data=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data_partition"])')
+    field() { echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
+    check "data partition: TPM and recovery key only" test "$(field '" ".join(d["key_slots"])')" = "recovery tpm2"
+    data=$(field 'd["data_partition"]')
     check "data partition is LUKS2" sh -c "cryptsetup luksDump $data | grep -q '^Version:.*2'"
     check "TPM bound to PCR 7"     sh -c "cryptsetup luksDump $data | grep -A8 systemd-tpm2 | grep -Eq 'tpm2-(hash-)?pcrs: *7\$'"
     check "slot A copied exactly" bash -c 'h=$(sed -n "s/.*roothash=\([0-9a-f]*\).*/\1/p" /proc/cmdline); veritysetup verify /dev/vdb2 /dev/vdb3 "$h" && echo "verifies against ${h:0:16}…"'
+    check "the model is installed" test "$(field '",".join(m["name"] for m in d["models"])')" = test-model
+    check "boot entry for the disk" bash -c "test \"$(field 'd["boot_entry"]')\" = 'added, first in the boot order' && efibootmgr | grep -q suveryn && efibootmgr | sed -n 's/^BootOrder: //p'"
     check "the stick is untouched" bash -c "b=\$(cat /run/stick-before.gpt); a=\$($(declare -f gpt); gpt); [ \${#b} -eq 16 ] && [ \"\$a\" = \"\$b\" ] && echo \"partition table \$a\""
   else
-    sed "s/^/SUVERYN-SELFTEST error /" /run/install-disk.err > "$out"
-    say "FAIL install-disk onto /dev/vdb"
+    sed "s/^/SUVERYN-SELFTEST error /" /run/install.err > "$out"
+    say "FAIL install onto /dev/vdb"
     fails=$((fails+1))
   fi
   finish
 fi
 
+root_on_boot_disk
+check "installed mode, own disk"      bash -c 'test "$(cat /run/suveryn/boot-mode)" = installed && d=$(cat /run/suveryn/data-partition) && case "$d" in "$(cat /run/suveryn/boot-disk)"*) echo "data $d on boot disk $(cat /run/suveryn/boot-disk)";; *) exit 1;; esac'
 check "root from the verity device"   test "$(findmnt -no SOURCE /)" = /dev/mapper/root
 check "root mounted read-only"        sh -c 'findmnt -no OPTIONS / | grep -qw ro && echo "$(findmnt -no FSTYPE /)"'
 check "root can't be written"         sh -c '! touch /usr/suveryn-write-test 2>/dev/null'
@@ -96,17 +135,11 @@ assert re.fullmatch("[0-9a-f]{64}", s["pcr11"] or ""), s["pcr11"]
 assert s["identity"]["uuid"] == open("/var/lib/suveryn/identity/uuid").read().strip()
 img = s["image"]
 print("%s %s, slot %s, PCR 11 %s..." % (img["id"], img["version"], s["slot"], s["pcr11"][:16]))'
-# Signed bundles (#36), from the test bundle disk: verified and installed onto the data partition.
+# Signed bundles (#36): the one the installer put on the data partition.
 bundle=/usr/lib/suveryn/bundle; installed=/var/lib/suveryn/bundles/model/test-model/1.0
 check "two bundle keys trusted"       bash -c "test \$($bundle keys | wc -l) -eq 2 && $bundle keys | cut -c1-16 | tr '\n' ' '"
-if [ "$mode" = bundles ]; then
-  mkdir -p /run/bundles && mount -o ro /dev/vdb /run/bundles
-  check "a signed bundle verifies"    bash -c "$bundle verify /run/bundles/good 2>/dev/null | grep -q '^valid: model test-model 1.0'"
-  check "a changed file is refused"   bash -c "! $bundle verify /run/bundles/changed 2>/dev/null >/tmp/b; grep -q \"SHA-256 doesn't match\" /tmp/b && cat /tmp/b"
-  check "an unknown key is refused"   bash -c "! $bundle verify /run/bundles/untrusted 2>/dev/null >/tmp/b; grep -q \"doesn't trust\" /tmp/b && cat /tmp/b"
-  check "a bundle installs onto /var" bash -c "$bundle install /run/bundles/good 2>/dev/null | grep -q 'installed in $installed' && test -f $installed/weights.bin && ! test -e $installed/notes.txt"
-  umount /run/bundles
-fi
+check "the installer's settings"     bash -c 'test "$(hostname)" = test-appliance && test "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/Europe/Brussels && grep -q "^MACAddress=" /etc/systemd/network/10-suveryn.network && python3 -c "import json; d=json.load(open(\"/var/lib/suveryn/installed.json\")); assert d[\"name\"] == \"test-appliance\"" && echo "$(hostname), $(date +%Z)"'
+check "the installer's network file in use" bash -c 'i=$(ls /sys/class/net | grep -v "^lo$" | head -1); for n in $(seq 30); do f=$(networkctl status --no-pager "$i" 2>/dev/null | sed -n "s/^ *Network File: //p"); [ -n "$f" ] && break; sleep 1; done; echo "$i: $f"; test "$(readlink -f "$f")" = "$(readlink -f /etc/systemd/network/10-suveryn.network)"'
 check "installed bundle verifies"     bash -c "$bundle verify $installed 2>/dev/null | grep -q '^valid:' && echo \$(du -sh $installed | cut -f1)"
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
 finish

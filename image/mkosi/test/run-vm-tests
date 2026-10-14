@@ -1,23 +1,31 @@
 #!/usr/bin/python3
-"""Install the test system with the installer's disk step and boot it, in a virtual machine with a TPM.
+"""Make an installer stick of the test system, install from it and boot the result, in a virtual machine with a TPM.
 
-The design's rules for the read-only system (#39), the encrypted data partition (#34) and the
-appliance's identity and system state (#35), checked by the self-test inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest):
+The design's rules for the read-only system (#39), the encrypted data partition (#34), the appliance's
+identity and system state (#35), signed bundles (#36) and installer mode (#37), checked by the self-test
+inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest):
 
-1. install:        the test image as the "stick", an empty second disk and a virtual TPM; install-disk
-                   copies slot A, encrypts the data partition, enrols the TPM and a recovery key
-2. first boot:     the installed disk; the TPM unlocks the data partition (no prompt); the
-                   identity is made, sealed to the TPM, and signs; of three test bundles on a second
-                   disk the signed one is installed, a changed one and an untrusted one are refused;
+1. install:        a stick made with make-stick (the test image, and a bundles partition with three test
+                   bundles: a signed one, a changed one, one signed with an unknown key), an empty second
+                   disk and a virtual TPM. The stick starts in installer mode (/var in memory, nothing
+                   opened); the installer refuses a bad name and the changed bundle without writing
+                   anything, then installs: slot A copied, data partition encrypted, the name, time zone,
+                   network and the signed model written onto it, TPM and recovery key enrolled, a boot entry
+2. first boot:     the installed disk; the TPM unlocks the data partition (no prompt); the installer's
+                   settings and model are there; the identity is made, sealed to the TPM, and signs;
                    every rule passes
-3. second boot:    the same, with the same machine-id, identity and installed bundle
-4. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
+3. second boot:    the same, with the stick attached too: the appliance opens only its own disk's data
+                   partition; the same machine-id, identity and model
+4. stick beside:   the stick started on the machine with the installed disk: installer mode, and the
+                   appliance's data partition is never opened (no prompt either)
+5. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
                    the right one opens the data partition and every rule passes; the identity is
                    kept but can't sign (it was sealed to the old TPM)
-5. five wrong keys: a new TPM again; after five wrong keys the console stops asking
-6. a changed block in slot A: verity refuses it
+6. five wrong keys: a new TPM again; after five wrong keys the unlock gives up and nothing starts
+7. a changed block in slot A: verity refuses it
 
-Needs root, qemu-system-x86_64, OVMF, swtpm. Without KVM each boot takes two to three minutes.
+Needs root, qemu-system-x86_64, OVMF, swtpm, sfdisk, losetup, mkfs.vfat and mtools. Without KVM each boot
+takes two to five minutes.
 
     sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
 """
@@ -41,8 +49,7 @@ OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
 BOOT_TIMEOUT = int(os.environ.get("SUVERYN_VM_BOOT_TIMEOUT", "1200"))
 ACCEL = "kvm" if os.access("/dev/kvm", os.W_OK) else "tcg"
 PROMPT = re.compile(rb"(?i)(please enter|enter) (the )?(passphrase|recovery key)[^\n]*suveryn-data")
-STICK_PASSPHRASE = "suveryn-test-stick"
-GAVE_UP = re.compile(rb"Failed to start .{0,40}systemd-cryptsetup")
+GAVE_UP = re.compile(rb"Failed to start .{0,40}(systemd-cryptsetup|suveryn-boot-mode)")
 ANSWER_WINDOW = 20  # seconds a typed key may take to be checked (software emulation)
 # The initrd may draw the same prompt again within seconds, as its other jobs finish; what was typed
 # before that redraw is lost. So a key is typed only once the prompt has stood this long unchanged.
@@ -106,8 +113,8 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
            "-device", "tpm-crb,tpmdev=tpm0",
            "-nic", "user,model=virtio-net-pci", "-display", "none", "-no-reboot",
            "-chardev", f"socket,id=ser0,path={sersock},server=on,wait=on", "-serial", "chardev:ser0"]
-    for d in disks:
-        cmd += ["-drive", f"file={d},format=raw,if=virtio"]
+    for i, d in enumerate(disks):  # the firmware tries them in this order
+        cmd += ["-drive", f"file={d},format=raw,if=none,id=disk{i}", "-device", f"virtio-blk-pci,drive=disk{i},bootindex={i}"]
     if credential:
         cmd += ["-smbios", f"type=11,value=io.systemd.credential:{credential}"]
     qemu = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=open(work / f"{name}.qemu", "w"))
@@ -180,10 +187,10 @@ def selftest(output: str) -> dict:
             "unlocked_by": value("unlocked-by "), "identity": value("identity ") or None}
 
 
-def bundle_disk(work: Path) -> Path:
-    """A small FAT disk with three test bundles (#36), signed with the test keys (test/make-test-keys):
-    good (plus a file its manifest doesn't list), changed (one byte of good's weights flipped after
-    signing) and untrusted (signed with a key the test system doesn't know)."""
+def make_stick(work: Path, image: Path) -> Path:
+    """The installer stick (make-stick, vfat for the test) with three test bundles (#36), signed with the
+    test keys (test/make-test-keys): good (plus a file its manifest doesn't list), changed (one byte of
+    good's weights flipped after signing) and untrusted (signed with a key the test system doesn't know)."""
     src = work / "bundles"
     good = src / "good"
     good.mkdir(parents=True)
@@ -202,13 +209,10 @@ def bundle_disk(work: Path) -> Path:
     shutil.copytree(good, src / "untrusted")
     rel("test-key", work / "untrusted.key")
     rel("sign", src / "untrusted", "--key-file", work / "untrusted.key")
-    disk = work / "bundles.raw"
-    with open(disk, "wb") as f:
-        f.truncate(64 * 2**20)
-    subprocess.run(["mkfs.vfat", "-n", "SUVBUNDLES", str(disk)], check=True, capture_output=True)
-    subprocess.run(["mcopy", "-s", "-i", str(disk), str(good), str(src / "changed"), str(src / "untrusted"), "::"],
-                   check=True, capture_output=True)
-    return disk
+    stick = work / "stick.raw"
+    subprocess.run([sys.executable, str(MKOSI / "make-stick"), str(image), str(stick), "--size", "2G", "--fs", "vfat",
+                    "--bundles", str(good), str(src / "changed"), str(src / "untrusted")], check=True, capture_output=True)
+    return stick
 
 
 def main() -> int:
@@ -224,52 +228,30 @@ def main() -> int:
     work.mkdir(parents=True, exist_ok=True)
     note(f"image {image}, work folder {work}, acceleration: {ACCEL}")
 
-    stick, target = work / "stick.raw", work / "target.raw"
-    shutil.copyfile(image, stick)
-    # Until installer mode exists (#37: on the stick /var lives in memory), the test's stick gets an
-    # encrypted data partition of its own, opened with a test passphrase typed at the prompt.
-    with open(stick, "r+b") as f:
-        f.truncate(os.path.getsize(stick) + 2 * 2**30)
-    defs = work / "stick-repart.d"
-    defs.mkdir()
-    for name, body in (("00-esp", "Type=esp\nWeight=0"), ("10-root", "Type=root\nWeight=0"),
-                       ("11-root-verity", "Type=root-verity\nWeight=0"),
-                       ("30-data", "Type=linux-generic\nLabel=suveryn-data\nFormat=ext4\nEncrypt=key-file\n"
-                                   "MakeDirectories=/lib/suveryn/host\n"
-                                   "CopyFiles=/usr/lib/suveryn/empty-machine-id:/lib/suveryn/host/machine-id")):
-        (defs / f"{name}.conf").write_text(f"[Partition]\n{body}\n")
-    (work / "stick-key").write_text(STICK_PASSPHRASE)
-    source = work / "source" / "usr/lib/suveryn"
-    source.mkdir(parents=True)
-    (source / "empty-machine-id").touch()
-    subprocess.run(["systemd-repart", "--dry-run=no", "--offline=yes", f"--definitions={defs}",
-                    f"--key-file={work / 'stick-key'}",
-                    f"--copy-source={work / 'source'}", str(stick)], check=True, capture_output=True)
+    stick, target = make_stick(work, image), work / "target.raw"
     with open(target, "wb") as f:
         f.truncate(6 * 2**30)
     tpm = TPM(work / "tpm")
     shutil.copyfile(OVMF_VARS, work / "vars-install.fd")
     shutil.copyfile(OVMF_VARS, work / "vars.fd")
 
-    note("1. install onto the empty disk")
-    out, _ = boot(work, "install", [stick, target], tpm, work / "vars-install.fd", credential="suveryn.test=install",
-                  keys=[STICK_PASSPHRASE])
+    note("1. install from the stick onto the empty disk")
+    out, prompts = boot(work, "install", [stick, target], tpm, work / "vars-install.fd", credential="suveryn.test=install")
     r = selftest(out)
     key = r["recovery_key"]
-    if r["result"] == "PASS" and key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key):
-        ok("installed: slot A copied, data partition encrypted, TPM and recovery key enrolled")
+    if r["result"] == "PASS" and prompts == 0 and key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key):
+        ok("installer mode without a prompt; installed: slot A copied, data partition encrypted with the "
+           "settings and the signed model on it, TPM and recovery key enrolled")
     else:
         bad(f"install didn't pass (console: {work}/install.log)")
         print(f"\n{failed} FAILED (kept: {work})")
         return 1
 
     machine_ids, identities = [], []
-    bundles = bundle_disk(work)
     for n in (2, 3):
         note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it"
-             + ("; test bundles checked and one installed" if n == 2 else ""))
-        out, prompts = boot(work, f"boot{n - 1}", [target, bundles] if n == 2 else [target], tpm, work / "vars.fd",
-                            credential="suveryn.test=bundles" if n == 2 else None)
+             + ("; the stick attached too" if n == 3 else ""))
+        out, prompts = boot(work, f"boot{n - 1}", [target, stick] if n == 3 else [target], tpm, work / "vars.fd")
         r = selftest(out)
         machine_ids.append(r["machine_id"])
         identities.append(r["identity"])
@@ -286,7 +268,15 @@ def main() -> int:
     else:
         bad(f"the identity changed between boots, or is missing ({identities})")
 
-    note("4. TPM replaced: the recovery key opens the data partition")
+    note("4. the stick started on the machine with the installed disk")
+    out, prompts = boot(work, "beside", [stick, target], tpm, work / "vars.fd", credential="suveryn.test=stick-beside")
+    r = selftest(out)
+    if r["result"] == "PASS" and prompts == 0:
+        ok("installer mode; the installed disk's data partition wasn't opened, nothing asked")
+    else:
+        bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/beside.log)")
+
+    note("5. TPM replaced: the recovery key opens the data partition")
     out, prompts = boot(work, "recovery", [target], TPM(work / "tpm-new"), work / "vars.fd",
                         credential="suveryn.test=tpm-replaced", keys=[WRONG_KEY, key])
     r = selftest(out)
@@ -296,7 +286,7 @@ def main() -> int:
     else:
         bad(f"{prompts} prompt(s), result {r['result']} (console: {work}/recovery.log)")
 
-    note("5. wrong keys: after five the unlock gives up, and the data partition stays closed")
+    note("6. wrong keys: after five the unlock gives up, and the data partition stays closed")
     out, prompts = boot(work, "tries", [target], TPM(work / "tpm-other"), work / "vars.fd",
                         keys=[WRONG_KEY] * 6, stop_when_given_up=True)
     if boot.failed_after == 5 and "RESULT" not in out:
@@ -305,7 +295,7 @@ def main() -> int:
         bad(f"the unlock gave up after {boot.failed_after} prompt(s) of {prompts}; "
             f"result seen: {'RESULT' in out} (console: {work}/tries.log)")
 
-    note("6. a changed block in slot A")
+    note("7. a changed block in slot A")
     changed = work / "target-changed.raw"
     shutil.copyfile(target, changed)
     layout = subprocess.run(["sfdisk", "--json", str(changed)], capture_output=True, text=True, check=True).stdout

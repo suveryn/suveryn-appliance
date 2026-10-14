@@ -1,0 +1,126 @@
+#!/usr/bin/python3
+"""Make an installer stick: the release's disk image plus a partition with signed bundles (#36, #37).
+
+    sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX [--bundles DIR ...]
+    sudo image/mkosi/make-stick suveryn-test_0.0.0.raw stick.raw --size 4G --fs vfat --bundles DIR ...
+
+The stick is the same system as an installed appliance (design note, "The installer"): its EFI
+partition, slot A and verity, block for block from the image. A fourth partition named
+suveryn-bundles fills the rest of the stick (exFAT, label SUVBUNDLES: exFAT allows 11 characters)
+and holds the bundles,
+each in a folder of its own. The stick has no data partition: that is how the system knows it runs
+as the installer (suveryn-boot-mode, in the initrd).
+
+Everything on the target is erased. A file as target is made (or replaced) with --size; its
+bundles partition is attached as a loop device to format it. Needs root, sfdisk, losetup and mkfs.exfat
+(exfatprogs) or mkfs.vfat. vfat is for tests only: it can't hold files of 4 GiB or more.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+BUNDLES_NAME = "suveryn-bundles"
+LINUX_DATA = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+
+
+def run(*cmd: str, **kw) -> str:
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    if r.returncode != 0:
+        sys.exit(f"make-stick: {' '.join(cmd)}: {r.stderr.strip()}")
+    return r.stdout
+
+
+def settle() -> None:
+    if shutil.which("udevadm"):
+        run("udevadm", "settle")
+
+
+def size(text: str) -> int:
+    units = {"K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}
+    return int(text[:-1]) * units[text[-1].upper()] if text[-1].upper() in units else int(text)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("image", type=Path, help="the release's disk image (mkosi.output/…raw)")
+    ap.add_argument("stick", type=Path, help="the stick (/dev/sdX) or a file")
+    ap.add_argument("--bundles", type=Path, nargs="*", default=[], help="bundle folders to put on the stick")
+    ap.add_argument("--fs", choices=("exfat", "vfat"), default="exfat")
+    ap.add_argument("--size", help="for a file: its size (e.g. 4G)")
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        sys.exit("make-stick: run as root")
+    for b in a.bundles:
+        if not (b / "manifest.json").is_file() or not (b / "manifest.sig").is_file():
+            sys.exit(f"make-stick: {b} isn't a signed bundle (manifest.json and manifest.sig)")
+    is_device = a.stick.is_block_device()
+    if is_device:
+        tree = json.loads(run("lsblk", "--json", "-o", "NAME,MOUNTPOINT", str(a.stick)))
+        def mounted(nodes):
+            return any(n.get("mountpoint") or mounted(n.get("children", [])) for n in nodes)
+        if mounted(tree["blockdevices"]):
+            sys.exit(f"make-stick: {a.stick} has a mounted partition")
+    elif not a.size:
+        sys.exit("make-stick: a file as stick needs --size")
+
+    print(f"make-stick: writing {a.image.name} to {a.stick}", flush=True)
+    with open(a.image, "rb") as src, open(a.stick, "r+b" if is_device else "wb") as dst:
+        shutil.copyfileobj(src, dst, 16 * 2**20)
+        if not is_device:
+            dst.truncate(size(a.size))
+        dst.flush()
+        os.fsync(dst.fileno())
+    # The image's backup partition table sits at the image's end: move it to the stick's end, then
+    # add the bundles partition in the space between.
+    run("sfdisk", "--relocate", "gpt-bak-std", str(a.stick))
+    run("sfdisk", "--append", "--no-reread", str(a.stick), input=f"type={LINUX_DATA}, name={BUNDLES_NAME}\n")
+
+    loop = None
+    try:
+        if is_device:
+            run("partprobe", str(a.stick)) if shutil.which("partprobe") else run("blockdev", "--rereadpt", str(a.stick))
+            settle()
+            parts = json.loads(run("lsblk", "--json", "--paths", "-o", "NAME,PARTLABEL", str(a.stick)))
+            node = next(c["name"] for c in parts["blockdevices"][0]["children"] if c.get("partlabel") == BUNDLES_NAME)
+        else:
+            # The bundles partition alone, by its offset (no partition scan needed).
+            table = json.loads(run("sfdisk", "--json", str(a.stick)))["partitiontable"]
+            part = next(p for p in table["partitions"] if p.get("name") == BUNDLES_NAME)
+            sector = table.get("sectorsize", 512)
+            loop = run("losetup", "--find", "--show", f"--offset={part['start'] * sector}",
+                       f"--sizelimit={part['size'] * sector}", str(a.stick)).strip()
+            node = loop
+        print(f"make-stick: formatting {node} ({a.fs})", flush=True)
+        if a.fs == "exfat":
+            run("mkfs.exfat", "-L", "SUVBUNDLES", node)
+        else:
+            run("mkfs.vfat", "-n", "SUVBUNDLES", node)
+        if a.fs == "vfat":  # mtools: no mount needed (test machines without the file system)
+            for bdir in a.bundles:
+                print(f"make-stick: copying {bdir.name}", flush=True)
+                run("mcopy", "-s", "-i", node, str(bdir), "::")
+            return 0
+        with tempfile.TemporaryDirectory(prefix="suveryn-stick-") as mnt:
+            run("mount", node, mnt)
+            try:
+                for b in a.bundles:
+                    print(f"make-stick: copying {b.name}", flush=True)
+                    shutil.copytree(b, Path(mnt) / b.name, copy_function=shutil.copyfile)
+                run("sync")
+            finally:
+                run("umount", mnt)
+    finally:
+        if loop:
+            run("losetup", "--detach", loop)
+        print(f"make-stick: done: {a.stick} with {len(a.bundles)} bundle(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

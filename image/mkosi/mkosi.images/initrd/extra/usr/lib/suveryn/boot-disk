@@ -1,0 +1,40 @@
+#!/bin/bash
+# The disk the firmware started from (systemd-boot's LoaderDevicePartUUID), for the initrd (#37).
+#   boot-disk wait         wait (up to 90 s) until that disk is there and udev has seen it; print it
+#   boot-disk is-on PART   exit 0 when the partition PART (e.g. vda2) is on that disk (udev rule)
+set -euo pipefail
+# Messages go to the kernel log too: in the initrd that is what reaches the console.
+log() { echo "boot-disk: $*" >&2; echo "<4>suveryn boot-disk: $*" > /dev/kmsg 2>/dev/null || true; }
+trap 'log "failed at line $LINENO (exit $?)"' ERR
+EFIVAR=/sys/firmware/efi/efivars/LoaderDevicePartUUID-4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+esp_uuid() {
+  [ -r "$EFIVAR" ] || { log "the boot loader didn't say which disk it started from ($EFIVAR missing)"; exit 1; }
+  # efivarfs files can't seek: read them whole. 4 bytes of attributes, then UTF-16.
+  cat "$EFIVAR" | tail -c +5 | tr -d '\0' | tr 'A-F' 'a-f'
+}
+case "${1:-}" in
+  wait)
+    uuid=$(esp_uuid)
+    for ((i = 0; i < ${SUVERYN_BOOT_DISK_WAIT:-90}; i++)); do
+      [ -e "/dev/disk/by-partuuid/$uuid" ] && break
+      sleep 1
+    done
+    [ -e "/dev/disk/by-partuuid/$uuid" ] || { log "the boot disk (EFI partition $uuid) didn't appear"; exit 1; }
+    udevadm settle --timeout=30 || true
+    esp=$(readlink -f "/dev/disk/by-partuuid/$uuid")
+    disk=$(readlink -f "/sys/class/block/${esp##*/}/..")
+    log "booted from ${disk##*/} (EFI partition $uuid)"
+    echo "${disk##*/}"
+    ;;
+  is-on)
+    uuid=$(esp_uuid)
+    part=${2:?}
+    disk=$(readlink -f "/sys/class/block/$part/..")
+    for p in "$disk"/"${disk##*/}"*; do
+      [ -e "/dev/${p##*/}" ] || continue
+      [ "$(blkid -p -s PART_ENTRY_UUID -o value "/dev/${p##*/}" 2>/dev/null)" = "$uuid" ] && exit 0
+    done
+    exit 1
+    ;;
+  *) echo "usage: boot-disk wait | is-on PARTITION" >&2; exit 2 ;;
+esac
