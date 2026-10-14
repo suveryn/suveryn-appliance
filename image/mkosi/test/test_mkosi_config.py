@@ -99,10 +99,24 @@ def test_both_slots_verity_fits_a_32_gib_slot():
     assert a_verity["SizeMinBytes"] == b_verity["SizeMinBytes"]  # an update writes either slot
 
 
+BOOT_MODE = (MKOSI / "mkosi.images" / "initrd" / "extra" / "usr" / "lib" / "suveryn" / "boot-mode").read_text()
+BOOT_MODE_UNIT = MKOSI / "mkosi.images" / "initrd" / "extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-boot-mode.service"
+
+
 def test_var_is_the_data_partition_and_nothing_on_it_runs():
-    var = next(e for e in FSTAB if e[1] == "/var")
-    assert var[0] == "/dev/mapper/suveryn-data"
-    assert set(var[3].split(",")) >= {"noexec", "nosuid", "nodev", "x-initrd.mount"}
+    """Mounted in the initrd by suveryn-boot-mode: the data partition (installed) or memory (installer)."""
+    assert 'mount -t ext4 -o noexec,nosuid,nodev /dev/mapper/suveryn-data "$SYSROOT/var"' in BOOT_MODE
+    assert 'mount -t tmpfs -o mode=0755,noexec,nosuid,nodev' in BOOT_MODE
+    assert not [e for e in FSTAB if e[1] in ("/var", "/etc/machine-id")]  # only the initrd mounts them
+
+
+def test_only_the_boot_disk_is_looked_at():
+    """A stick never opens an installed appliance's data, and an appliance only its own disk's."""
+    assert "LoaderDevicePartUUID" in BOOT_MODE and '/sys/class/block/"$disk"/"$disk"*' in BOOT_MODE
+    assert "PARTLABEL" not in BOOT_MODE and "PARTLABEL" not in (MKOSI / "mkosi.extra" / "etc" / "crypttab").read_text()
+    unit = BOOT_MODE_UNIT.read_text()
+    assert "Before=initrd-fs.target" in unit and "After=initrd-root-fs.target" in unit
+    assert (BOOT_MODE_UNIT.parent / "initrd-fs.target.wants" / BOOT_MODE_UNIT.name).is_symlink()
 
 
 def test_tmp_in_memory_and_no_swap():
@@ -112,15 +126,14 @@ def test_tmp_in_memory_and_no_swap():
 
 def test_the_machine_id_is_mounted_from_the_data_partition_in_the_initrd():
     """systemd won't follow a link for /etc/machine-id; a bind mount set up in the initrd works."""
-    mid = next(e for e in FSTAB if e[1] == "/etc/machine-id")
-    assert mid[0] == "/var/lib/suveryn/host/machine-id" and set(mid[3].split(",")) >= {"bind", "x-initrd.mount"}
+    assert 'mount --bind "$SYSROOT/var/lib/suveryn/host/machine-id" "$SYSROOT/etc/machine-id"' in BOOT_MODE
     assert ": > /etc/machine-id" in POSTINST and "link /var/lib/suveryn/host/machine-id" not in POSTINST
 
 
 def test_only_the_listed_etc_paths_link_into_the_data_partition():
     links = dict(re.findall(r"^link (\S+)\s+(\S+)$", POSTINST, re.M))
     into_var = {target: dest for target, dest in links.items() if target.startswith("/var/")}
-    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/systemd/network"}
+    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/systemd/network"}
     for path in into_var.values():
         assert f"`{path}" in DESIGN, f"{path} isn't in the design note's list"
     assert links["/run/systemd/resolve/stub-resolv.conf"] == "/etc/resolv.conf"
@@ -157,12 +170,10 @@ def test_the_appliance_initrd_holds_only_what_reaches_the_disk():
 
 
 def test_the_data_partition_opens_with_the_tpm_or_five_typed_keys():
-    """In the initrd (our own: mkosi.images/initrd) and the same line in the system."""
-    initrd = (MKOSI / "mkosi.images" / "initrd" / "extra" / "etc" / "crypttab").read_text()
-    system = (MKOSI / "mkosi.extra" / "etc" / "crypttab").read_text()
-    assert initrd == system
-    line = [ln.split() for ln in system.splitlines() if ln.strip() and not ln.startswith("#")]
-    assert line == [["suveryn-data", "PARTLABEL=suveryn-data", "-", "tpm2-device=auto,tries=6,x-initrd.attach"]]
+    """In our own initrd (mkosi.images/initrd): the TPM, then 5 typed attempts (the TPM counts as one try)."""
+    assert ('/usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,tries=6'
+            in BOOT_MODE)
+    assert "tpm2.target" in BOOT_MODE_UNIT.read_text()
     conf = (MKOSI / "mkosi.conf").read_text()
     assert "Dependencies=initrd" in conf and "Initrds=%O/initrd" in conf
     for lib in ("libtss2-esys", "libtss2-tcti-device"):
@@ -203,7 +214,9 @@ def test_every_extra_tree_exists():
 def test_the_identity_is_made_once_at_first_boot_without_network():
     unit = configparser.ConfigParser(strict=False, interpolation=None)
     unit.read(MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-identity.service")
-    assert unit["Unit"]["ConditionPathExists"] == "!/var/lib/suveryn/identity/identity.json"  # never replaced
+    text = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-identity.service").read_text()
+    assert "ConditionPathExists=!/var/lib/suveryn/identity/identity.json" in text  # never replaced
+    assert "ConditionPathExists=!/run/suveryn/installer-mode" in text  # not on the installer stick
     assert "tpm2.target" in unit["Unit"]["After"] and "local-fs.target" in unit["Unit"]["After"]
     assert unit["Service"]["ExecStart"] == "/usr/lib/suveryn/identity create"
     assert unit["Service"]["PrivateNetwork"] == "yes"

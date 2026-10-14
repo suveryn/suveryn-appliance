@@ -1,0 +1,307 @@
+#!/usr/bin/python3
+"""Install this appliance from the installer stick: everything the console installer does (#37, C2 to C7).
+
+    /usr/lib/suveryn/install --disk /dev/nvme0n1 --name notary-brussels-01 --timezone Europe/Brussels \\
+        [--interface eno1] [--address dhcp | --address 192.168.1.50/24 --gateway 192.168.1.1 --dns 192.168.1.1] \\
+        [--model FOLDER ...] [--json]
+    /usr/lib/suveryn/install --list-models [--json]
+
+Runs only in installer mode (the system started from the stick: suveryn-boot-mode, in the initrd). The
+console installer (C1 to C7) collects the answers and calls this; it can also run on its own. Steps,
+each announced on stderr as "step N/M: …" (C6 shows them):
+
+1. partitions the disk, copies the system and encrypts the data partition (install-disk);
+2. opens the new data partition with its temporary key and writes the office's settings on it: the
+   name, the time zone, the network (DHCP or a fixed address), the chosen model bundles (#36: each
+   checked in full before the disk is touched, and again while it is copied);
+3. links the data partition to this machine's TPM (PCR 7) and makes the recovery key, then removes
+   the temporary key (#34);
+4. makes the disk the first boot entry.
+
+The appliance's identity is made on its first start (#35). The recovery key is printed once (C7) and
+stored nowhere. Exit codes: 0 installed, 1 failed, 2 refused (nothing written).
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+import ipaddress
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
+RUN = Path(os.environ.get("SUVERYN_RUN", "/run/suveryn"))
+ZONEINFO = Path("/usr/share/zoneinfo")
+NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+START = time.monotonic()
+
+
+def load(name: str):
+    sys.dont_write_bytecode = True  # the system is read-only; and no __pycache__ in the source tree
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(LIB / name))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+class Refused(Exception):
+    pass
+
+
+def step(n: int, total: int, text: str) -> None:
+    print(f"step {n}/{total}: {text}  [{time.monotonic() - START:.0f} s]", file=sys.stderr, flush=True)
+
+
+def run(*cmd: str) -> str:
+    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+
+
+# ---------------------------------------------------------------------------- the answers
+def check_name(name: str) -> str:
+    if not NAME.fullmatch(name or ""):
+        raise Refused(f"the name {name!r} can't be used: letters, digits and hyphens, at most 63, "
+                      "not starting or ending with a hyphen")
+    return name
+
+
+def check_timezone(tz: str) -> str:
+    path = ZONEINFO / tz
+    if not re.fullmatch(r"[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*", tz or "") or not path.is_file():
+        raise Refused(f"unknown time zone {tz!r}")
+    return tz
+
+
+def interfaces() -> dict[str, str]:
+    """Ethernet ports: name -> MAC address."""
+    out = {}
+    for p in sorted(Path("/sys/class/net").iterdir()):
+        if (p / "device").exists() and (p / "type").read_text().strip() == "1":
+            out[p.name] = (p / "address").read_text().strip()
+    return out
+
+
+def network_file(args) -> tuple[str, dict]:
+    ports = interfaces()
+    iface = args.interface or (next(iter(ports)) if ports else None)
+    if iface not in ports:
+        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})")
+    mac = ports[iface]
+    summary = {"interface": iface, "mac": mac}
+    lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]"]
+    if args.address == "dhcp":
+        if args.gateway or args.dns:
+            raise Refused("--gateway and --dns go with a fixed address, not DHCP")
+        lines.append("DHCP=yes")
+        summary["address"] = "dhcp"
+    else:
+        try:
+            addr = ipaddress.ip_interface(args.address)
+            gw = ipaddress.ip_address(args.gateway) if args.gateway else None
+            dns = [ipaddress.ip_address(d) for d in (args.dns or "").split(",") if d]
+        except ValueError as e:
+            raise Refused(f"unusable address: {e}") from None
+        if addr.network.prefixlen == addr.max_prefixlen or addr.ip == addr.network.network_address:
+            raise Refused(f"{args.address} isn't a host address with a network prefix (e.g. 192.168.1.50/24)")
+        if gw and gw not in addr.network:
+            raise Refused(f"the gateway {gw} isn't in {addr.network}")
+        if not dns:
+            raise Refused("a fixed address needs a DNS server (--dns)")
+        lines.append(f"Address={addr}")
+        if gw:
+            lines.append(f"Gateway={gw}")
+        lines += [f"DNS={d}" for d in dns]
+        summary.update(address=str(addr), gateway=str(gw) if gw else None, dns=[str(d) for d in dns])
+    return "\n".join(lines) + "\n", summary
+
+
+# ---------------------------------------------------------------------------- the stick's bundles
+def bundles_partition() -> str | None:
+    try:
+        return (RUN / "bundles-partition").read_text().strip() or None
+    except OSError:
+        return None
+
+
+class StickBundles:
+    """The stick's bundles partition, mounted read-only for as long as it is needed."""
+
+    def __enter__(self) -> Path | None:
+        self.mnt = None
+        node = bundles_partition()
+        if not node:
+            return None
+        self.mnt = Path(tempfile.mkdtemp(prefix="suveryn-bundles-", dir="/run"))
+        subprocess.run(["mount", "-o", "ro,nosuid,nodev,noexec", node, str(self.mnt)], check=True,
+                       capture_output=True)
+        return self.mnt
+
+    def __exit__(self, *exc) -> None:
+        if self.mnt:
+            subprocess.run(["umount", str(self.mnt)], capture_output=True)
+            self.mnt.rmdir()
+
+
+def list_models(folder: Path | None) -> list[dict]:
+    """Every bundle on the stick, checked (signature and every file): C3's list."""
+    if folder is None:
+        return []
+    bundle = load("bundle")
+    out = []
+    for d in sorted(p for p in folder.iterdir() if p.is_dir() and (p / "manifest.json").exists()):
+        try:
+            r = bundle.verify(d)
+            out.append({"folder": d.name, "valid": True, "kind": r["kind"], "name": r["name"],
+                        "version": r["version"], "size": r["size"], "key": r["key"]})
+        except bundle.Invalid as e:
+            out.append({"folder": d.name, "valid": False, "error": str(e)})
+    return out
+
+
+# ---------------------------------------------------------------------------- installing
+def install(args) -> dict:
+    mode = (RUN / "boot-mode").read_text().strip() if (RUN / "boot-mode").exists() else "unknown"
+    if mode != "installer":
+        raise Refused(f"this system started as {mode!r}, not as the installer (from the stick): nothing is installed")
+    name = check_name(args.name)
+    tz = check_timezone(args.timezone)
+    network, net_summary = network_file(args)
+    disk = load("install-disk")
+    bundle = load("bundle")
+    total = 4
+    models = []
+    with StickBundles() as stick, tempfile.TemporaryDirectory(prefix="suveryn-install-", dir="/run") as tmp:
+        work = Path(tmp)
+        chosen = []
+        for folder in args.model or []:
+            if stick is None or not (stick / folder / "manifest.json").exists():
+                raise Refused(f"no bundle {folder!r} on the stick")
+            chosen.append(stick / folder)
+        # Each chosen bundle is checked in full now (signature and every file), before the disk is
+        # touched; and again while it is copied, in case the stick changed in between.
+        for c in chosen:
+            print(f"install: checking {c.name}", file=sys.stderr, flush=True)
+            try:
+                r = bundle.verify(c)
+            except bundle.Invalid as e:
+                raise Refused(f"the bundle {c.name} isn't valid: {e}") from None
+            if r["kind"] != "model":
+                raise Refused(f"{c.name} is a {r['kind']} bundle, not a model")
+
+        step(1, total, f"partitioning {args.disk}, copying the system, encrypting the data partition")
+        try:
+            source, made, key = disk.partition(args.disk, work)
+        except disk.Refused as e:
+            raise Refused(str(e)) from None
+        data = disk.data_node(made)
+
+        step(2, total, "writing this office's settings and the language models onto the data partition")
+        mapper = f"suveryn-install-{secrets.token_hex(4)}"
+        target = work / "target"
+        target.mkdir()
+        run("cryptsetup", "open", "--key-file", str(key), data, mapper)
+        try:
+            run("mount", "-o", "nosuid,nodev,noexec", f"/dev/mapper/{mapper}", str(target))
+            try:
+                host = target / "lib/suveryn/host"
+                host.mkdir(parents=True, exist_ok=True)
+                (host / "hostname").write_text(name + "\n")
+                (host / "localtime").unlink(missing_ok=True)
+                (host / "localtime").symlink_to(ZONEINFO / tz)
+                net = target / "lib/suveryn/network"
+                net.mkdir(parents=True, exist_ok=True)
+                (net / "10-suveryn.network").write_text(network)
+                for c in chosen:
+                    print(f"install: copying {c.name}", file=sys.stderr, flush=True)
+                    try:
+                        r = bundle.install(c, target / "lib/suveryn/bundles")
+                    except bundle.Invalid as e:
+                        raise Refused(f"the bundle {c.name} failed its check while it was copied: {e}") from None
+                    models.append({"name": r["name"], "version": r["version"], "size": r["size"]})
+                rel = load("system-state").os_release()
+                record = {"image": rel.get("IMAGE_ID"), "version": rel.get("IMAGE_VERSION"), "name": name,
+                          "timezone": tz, "network": net_summary, "models": models,
+                          "installed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                (target / "lib/suveryn/installed.json").write_text(json.dumps(record, indent=2) + "\n")
+                run("sync")
+            finally:
+                run("umount", str(target))
+        finally:
+            run("cryptsetup", "close", mapper)
+
+        step(3, total, "linking the disk key to this machine's TPM and making the recovery key")
+        recovery = disk.enrol(data, key)
+        key.write_bytes(secrets.token_bytes(64))
+
+    step(4, total, "making the disk the first boot entry")
+    boot_entry = add_boot_entry(args.disk)
+    out = disk.result(args.disk, source, data, made, recovery)
+    out.update(name=name, timezone=tz, network=net_summary, models=models, boot_entry=boot_entry)
+    return out
+
+
+def add_boot_entry(target: str) -> str:
+    """A firmware boot entry for the disk's boot loader, first in the boot order. Without one, most
+    firmware still finds it (the removable path, EFI/BOOT/BOOTX64.EFI), so a failure is reported, not fatal."""
+    if not shutil.which("efibootmgr"):
+        return "skipped: efibootmgr isn't installed"
+    loader = "\\EFI\\systemd\\systemd-bootx64.efi"
+    r = subprocess.run(["efibootmgr", "--create", "--disk", target, "--part", "1", "--loader", loader,
+                        "--label", "suveryn"], capture_output=True, text=True)
+    return "added, first in the boot order" if r.returncode == 0 else f"not added: {r.stderr.strip()[-200:]}"
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="install", description=__doc__.splitlines()[0])
+    ap.add_argument("--list-models", action="store_true", help="the bundles on the stick, checked (C3)")
+    ap.add_argument("--disk")
+    ap.add_argument("--name")
+    ap.add_argument("--timezone", default="Europe/Brussels")
+    ap.add_argument("--interface")
+    ap.add_argument("--address", default="dhcp")
+    ap.add_argument("--gateway")
+    ap.add_argument("--dns")
+    ap.add_argument("--model", action="append", help="a bundle folder on the stick (repeat for several)")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    if os.geteuid() != 0:
+        print("install: run as root", file=sys.stderr)
+        return 2
+    if a.list_models:
+        with StickBundles() as stick:
+            models = list_models(stick)
+        if a.json:
+            print(json.dumps(models, indent=2))
+        else:
+            for m in models:
+                print(f"{m['folder']}: " + (f"{m['name']} {m['version']}, {m['size'] / 2**30:.1f} GiB" if m["valid"]
+                                             else f"NOT VALID: {m['error']}"))
+        return 0
+    if not a.disk or not a.name:
+        ap.error("--disk and --name are needed")
+    try:
+        result = install(a)
+    except Refused as e:
+        print(f"install: {e}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as e:
+        print(f"install: {' '.join(e.cmd)} failed: {(e.stderr or '').strip()[-500:]}", file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps(result, indent=1))
+    else:
+        print(f"installed onto {result['target']} as {result['name']}; models: "
+              f"{', '.join(m['name'] for m in result['models']) or 'none'}")
+        print(f"recovery key (shown once): {result['recovery_key']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

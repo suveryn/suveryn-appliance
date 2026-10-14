@@ -36,22 +36,24 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 | Path | What |
 |---|---|
 | `mkosi.conf`, `mkosi.conf.d/` | Ubuntu 24.04, the packages, the boot file. The appliance adds `linux-generic` and `linux-firmware`, and an initrd that holds only what reaches the disk |
-| `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `crypttab`, so it opens the data partition |
+| `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `suveryn-boot-mode` (installed appliance or installer, and `/var` for it) with `boot-disk` and its udev rule |
 | `mkosi.repart/` | What a release brings: the EFI partition (1 GiB), slot A (EROFS, 32 GiB) and its verity. mkosi puts the root hash in the boot file (`roothash=`) |
-| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/var` from the encrypted data partition in the initrd, `noexec,nosuid,nodev`; `/tmp` in memory; the machine-id), `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
+| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/tmp` in memory), an empty `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install` and `install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
 | `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock |
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
+| `make-stick` | Makes an installer stick: the disk image and a bundles partition with signed bundles |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
-| `test/` | `test_mkosi_config.py` (any machine) and `run-vm-tests` (a virtual machine with a TPM) |
+| `test/` | `test_mkosi_config.py`, `test_install.py` (any machine), `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
 
 ## How the pieces fit
 
 - **Verified root.** The boot file carries `roothash=`; systemd's verity generator opens slot A with
   it as `/dev/mapper/root` and mounts it read-only. A block that doesn't match is a read error.
-- **`/var` in the initrd.** fstab's `x-initrd.mount` makes the initrd mount the data partition
-  before the switch to the real system, so `/var` and the links into it work from the first moment.
+- **`/var` in the initrd.** `suveryn-boot-mode` mounts it before the switch to the real system, so
+  `/var` and the links into it work from the first moment: the data partition on an installed
+  appliance, memory on the installer stick (below).
 - **The machine-id** is the one exception to "link into `/var`": systemd won't follow a link for
-  `/etc/machine-id`. The image has an empty `/etc/machine-id`, and fstab bind-mounts
+  `/etc/machine-id`. The image has an empty `/etc/machine-id`, and `suveryn-boot-mode` bind-mounts
   `/var/lib/suveryn/host/machine-id` over it in the initrd. The installer creates that file empty on
   the data partition; systemd fills it on the first boot and reads it on every boot after.
 - **The image's own `/var`** (what packages put there) would be hidden by the data partition. It is
@@ -60,14 +62,14 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 
 ## The encrypted data partition (#34)
 
-- **Installing** (`/usr/lib/suveryn/install-disk <disk>`, the console installer's disk step): erases
+- **Installing** (`/usr/lib/suveryn/install-disk <disk>`, the installer's disk step, below): erases
   the disk and applies `/usr/lib/suveryn/repart.d`. The EFI partition and slot A with its verity are
   copied block for block from the stick; slot A gets the partition UUIDs derived from the root hash
   (systemd finds a verity root by them; a block copy doesn't keep them). The data partition is made
   LUKS2 with a random key that exists only in memory, then the TPM (PCR 7) and a recovery key are
   enrolled and that key is removed. The data partition then has exactly two ways in: the TPM and the
   recovery key. The recovery key (systemd's modhex format, 8 groups of 8) is printed once.
-- **Booting**: the initrd's `crypttab` opens the data partition with the TPM, without a prompt. When
+- **Booting**: `suveryn-boot-mode` opens the boot disk's data partition with the TPM, without a prompt. When
   the TPM can't (a firmware or Secure Boot change, a replaced TPM), the console asks for the recovery
   key ("Please enter recovery key for disk suveryn-data"): five typed attempts. systemd counts the
   failed TPM attempt as one of the tries, hence `tries=6`.
@@ -79,10 +81,47 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 
 Known, to finish with the console installer (#37):
 
-- After five wrong keys the unlock gives up, and the system starts a new round of prompts. The
-  console screen for this case is C8b ("disk won't unlock").
+- After five wrong keys the unlock gives up and the initrd stops in emergency mode (nothing else
+  starts; the root account is locked, so only a restart helps). The console screen for this case is
+  C8b ("disk won't unlock"), with the prompt itself.
 - On the very first boot systemd logs "Failed to write /etc/machine-id: Invalid argument", and then
   saves the machine-id anyway: it is the same on every later boot (the tests check it).
+
+## Installer mode and the installer (#37)
+
+The installer stick holds the **same** system as an installed appliance (design note, "The installer"),
+made by `make-stick`: the image's EFI partition, slot A and verity, block for block, and a fourth
+partition named `suveryn-bundles` that fills the rest of the stick, exFAT (label `SUVBUNDLES`: exFAT
+labels hold 11 characters), with the signed bundles in folders of their own.
+
+```bash
+sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundles ./qwen3-30b-a3b-2026.10.1 …
+```
+
+- **One system, two modes, decided in the initrd** (`suveryn-boot-mode`, before anything else
+  starts). The disk the firmware started from (systemd-boot's `LoaderDevicePartUUID`) has a partition
+  named `suveryn-data`: **installed**, it is unlocked and mounted on `/var`. It has none:
+  **installer**, `/var` is in memory and nothing on any disk is opened. The mode is in
+  `/run/suveryn/boot-mode`; `/run/suveryn/installer-mode` exists for units' conditions (the identity
+  isn't made on the stick).
+- **Only the boot disk counts.** A stick started on a machine that has an appliance never opens that
+  appliance's data, and an appliance never opens a data partition on another disk. Slot A has the
+  same partition UUIDs on the stick and on an appliance of the same release (they come from the root
+  hash), so a udev rule gives the boot disk's partitions priority in `/dev/disk/by-partuuid`, and
+  slot A is opened only once the boot disk is there (`boot-disk wait`, before
+  `systemd-veritysetup@root`). The tests check that slot A comes from the boot disk in both cases.
+- **`/usr/lib/suveryn/install`** does everything the console installer will (C2 to C7), in installer
+  mode only: checks the answers (name, time zone, network) and every chosen bundle in full, before the
+  disk is touched; partitions it, copies the system and encrypts the data partition (install-disk);
+  writes the name, the time zone (`/etc/localtime` links to the data partition), the network
+  (`/etc/systemd/network/10-suveryn.network`, matched by MAC address: DHCP or a fixed address) and the
+  models (each checked again while it is copied) onto the data partition, with a record of the
+  installation (`/var/lib/suveryn/installed.json`); then enrols the TPM and the recovery key and adds a
+  firmware boot entry. Progress is `step N/4: …` on stderr; `--json` prints the result, with the
+  recovery key (shown once, C7). `install --list-models [--json]` checks the stick's bundles (C3).
+
+Still to come in #37: the console screens themselves (C1 to C7), the console after the first boot
+(C8) and the unlock screen (C8b), mDNS (`<name>.local`), the keyboard layout.
 
 ## The appliance's identity and system state (#35)
 
@@ -127,35 +166,38 @@ key and a spare. Format, signing and key handling: [`bundles/`](../../bundles/RE
 ## Tests
 
 ```bash
-python3 -m pytest image/mkosi/test                     # the configuration against the design
+python3 -m pytest image/mkosi/test                     # the configuration against the design; the installer's checks
 sudo python3 -m pytest image/mkosi/test/test_identity.py   # the identity tool, host key only (no TPM)
 python3 -m pytest bundles/tests                         # signed bundles, both sides
 sudo image/mkosi/test/run-vm-tests                      # the test system, in a virtual machine with a TPM
 ```
 
-`run-vm-tests` (QEMU with UEFI firmware and a virtual TPM, swtpm) reads the self-test's lines on the
-serial console, and types at the recovery-key prompt:
+`run-vm-tests` (QEMU with UEFI firmware and a virtual TPM, swtpm) makes a stick with `make-stick`,
+reads the self-test's lines on the serial console, and types at the recovery-key prompt:
 
-1. **install**: the test image as the stick, an empty second disk; `install-disk` partitions it,
-   copies slot A (verified against the root hash), encrypts the data partition with the TPM (PCR 7)
-   and a recovery key only, and leaves the stick untouched;
-2. **boot the installed disk twice**: the TPM opens the data partition without a prompt, and every
-   rule holds: root from the verity device, read-only (EROFS), can't be written, the boot file's root
-   hash, verified, every block readable; `/var` the encrypted data partition, `noexec,nosuid,nodev`,
-   nothing runs from it; `/tmp` in memory; no swap; the `/etc` links; the image's `/var` restored;
-   the network up; the same machine-id on both boots; the identity made, sealed to the TPM
-   (`host+tpm2`), its private key nowhere in plain form, signing and verifying (also with `openssl`
-   alone); the system state (release, slot, root hash, verity, PCR 11); the same identity on both boots;
-   two bundle keys trusted; on the first boot, of three test bundles on a second disk the signed one
-   verifies and is installed onto the data partition (without the file its manifest doesn't list),
-   a changed one and one signed with an unknown key are refused; the installed bundle still verifies
-   on every later boot;
-3. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
+1. **install from the stick**: the stick (the test image and three test bundles: a signed one, a
+   changed one, one signed with an unknown key) and an empty second disk. The stick starts in
+   installer mode, without a prompt: slot A from the stick, `/var` in memory, no data partition
+   opened, no identity. The installer lists the bundles (the signed one valid, the other two refused),
+   refuses a bad name and the changed bundle without writing anything, then installs: slot A copied
+   (verified against the root hash), the data partition encrypted with the TPM (PCR 7) and a recovery
+   key only, the signed model installed, a boot entry; the stick untouched;
+2. **boot the installed disk**: the TPM opens the data partition without a prompt, and every rule
+   holds: slot A from the boot disk, installed mode with its own disk's data partition; root from the
+   verity device, read-only (EROFS), can't be written, the boot file's root hash, verified, every block
+   readable; `/var` the encrypted data partition, `noexec,nosuid,nodev`, nothing runs from it; `/tmp`
+   in memory; no swap; the `/etc` links; the image's `/var` restored; the installer's name, time zone
+   and network file; the network up; the identity made, sealed to the TPM (`host+tpm2`), its private
+   key nowhere in plain form, signing and verifying (also with `openssl` alone); the system state
+   (release, slot, root hash, verity, PCR 11); two bundle keys trusted; the installed model verifies;
+3. **boot it again with the stick attached**: the same, from its own disk; the same machine-id and
+   identity;
+4. **the stick beside the installed disk**: installer mode, slot A from the stick, and the installed
+   disk's data partition is never opened (no prompt);
+5. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
    accepts the right one; every rule holds and the machine-id is unchanged; the identity is kept but
    refuses to sign (sealed to the old TPM);
-4. **wrong keys**: after five, the unlock gives up and nothing boots;
-5. **a changed block in slot A**: verity refuses it ("data block … is corrupted").
+6. **wrong keys**: after five, the unlock gives up and nothing starts;
+7. **a changed block in slot A**: verity refuses it ("data block … is corrupt").
 
-Until installer mode exists, the test's stick has an encrypted data partition of its own, opened with
-a test passphrase typed at the prompt. Without KVM a boot takes two to five minutes and the whole
-run about 25; with KVM, a few minutes.
+Without KVM a boot takes two to five minutes and the whole run about 40; with KVM, a few minutes.

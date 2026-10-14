@@ -1,4 +1,2 @@
-# The data partition (#34): unlocked by the TPM (PCR 7) at boot; if that fails, the console asks for
-# the recovery key: 5 typed attempts. systemd counts the failed TPM attempt as one of the tries,
-# hence tries=6. Same line as the system's own /etc/crypttab.
-suveryn-data  PARTLABEL=suveryn-data  -  tpm2-device=auto,tries=6,x-initrd.attach
+# Empty on purpose. The data partition (#34) is opened in the initrd by suveryn-boot-mode.service:
+# only the one on the disk the appliance started from, with the TPM (PCR 7) or the recovery key.
