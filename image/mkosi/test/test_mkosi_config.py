@@ -55,21 +55,37 @@ def test_the_appliance_slot_is_the_designs_32_gib():
 
 @pytest.mark.parametrize("profile", ["appliance", "test"])
 def test_the_whole_disk_is_the_designs_layout(profile):
-    """ESP, A, A-verity (matched, left as they are), then B, B-verity (empty) and the data partition."""
+    """On an empty disk: the EFI partition and slot A copied from the stick, B and its verity empty, data."""
     parts = partitions(MKOSI / "target" / profile)
     assert [p["Type"] for p in parts] == ["esp", "root", "root-verity", "root", "root-verity", "linux-generic"]
-    b, b_verity, data = parts[3:]
-    assert b["Label"] == b_verity["Label"] == "_empty"
-    assert data["Label"] == "suveryn-data" and data["Format"] == "ext4"
+    esp, a, a_verity, b, b_verity, data = parts
+    assert esp["CopyBlocks"] == "@SOURCE_ESP@"            # install-disk names the stick's EFI partition
+    assert a["CopyBlocks"] == a_verity["CopyBlocks"] == "auto"  # the running system's slot A
+    # systemd finds a verity root by UUIDs derived from the root hash; a block copy doesn't keep them.
+    assert a["UUID"] == "@ROOT_UUID@" and a_verity["UUID"] == "@ROOT_VERITY_UUID@"
+    assert b["Label"] == b_verity["Label"] == "_empty" and "CopyBlocks" not in b
+    assert data["Label"] == "suveryn-data" and data["Format"] == "ext4" and data["Encrypt"] == "key-file"
     assert "SizeMaxBytes" not in data  # the rest of the disk
     assert data["CopyFiles"] == "/usr/lib/suveryn/empty-machine-id:/lib/suveryn/host/machine-id"
-    # The matched partitions say nothing that could change what the release brought.
-    for p in parts[:3]:
-        assert set(p) == {"file", "Type"}, p
+
+
+def test_install_disk_fills_in_every_placeholder():
+    tool = (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "install-disk").read_text()
+    used = set(re.findall(r"@[A-Z_]+@", "".join(f.read_text() for f in (MKOSI / "target" / "appliance").glob("*.conf"))))
+    assert used == {"@SOURCE_ESP@", "@ROOT_UUID@", "@ROOT_VERITY_UUID@"}
+    for placeholder in used:
+        assert placeholder in tool
+
+
+def test_the_test_copies_keep_their_size():
+    """A copied slot that grows puts unverified space after the verified content."""
+    parts = partitions(MKOSI / "target" / "test")
+    assert parts[1]["Weight"] == parts[2]["Weight"] == "0"
 
 
 def test_appliance_and_test_differ_only_in_sizes():
-    strip = lambda ps: [{k: v for k, v in p.items() if not k.startswith("Size")} for p in ps]  # noqa: E731
+    strip = lambda ps: [{k: v for k, v in p.items() if not k.startswith("Size") and k != "Weight"}  # noqa: E731
+                        for p in ps]
     assert strip(partitions(MKOSI / "target" / "appliance")) == strip(partitions(MKOSI / "target" / "test"))
 
 
@@ -85,7 +101,7 @@ def test_both_slots_verity_fits_a_32_gib_slot():
 
 def test_var_is_the_data_partition_and_nothing_on_it_runs():
     var = next(e for e in FSTAB if e[1] == "/var")
-    assert var[0] == "PARTLABEL=suveryn-data"
+    assert var[0] == "/dev/mapper/suveryn-data"
     assert set(var[3].split(",")) >= {"noexec", "nosuid", "nodev", "x-initrd.mount"}
 
 
@@ -138,3 +154,45 @@ def test_the_appliance_initrd_holds_only_what_reaches_the_disk():
     assert "KernelModulesInitrdExclude=.*" in appliance and "KernelModulesInitrdInclude=default" in appliance
     for module in ("/vmd.ko", "/megaraid_sas.ko", "/uas.ko", "/tpm_crb.ko"):
         assert module in appliance
+
+
+def test_the_data_partition_opens_with_the_tpm_or_five_typed_keys():
+    """In the initrd (our own: mkosi.images/initrd) and the same line in the system."""
+    initrd = (MKOSI / "mkosi.images" / "initrd" / "extra" / "etc" / "crypttab").read_text()
+    system = (MKOSI / "mkosi.extra" / "etc" / "crypttab").read_text()
+    assert initrd == system
+    line = [ln.split() for ln in system.splitlines() if ln.strip() and not ln.startswith("#")]
+    assert line == [["suveryn-data", "PARTLABEL=suveryn-data", "-", "tpm2-device=auto,tries=6,x-initrd.attach"]]
+    conf = (MKOSI / "mkosi.conf").read_text()
+    assert "Dependencies=initrd" in conf and "Initrds=%O/initrd" in conf
+    for lib in ("libtss2-esys", "libtss2-tcti-device"):
+        assert lib in (MKOSI / "mkosi.images" / "initrd" / "mkosi.conf").read_text() and lib in conf
+    assert "dmsetup" in conf  # without its udev rules libdevmapper waits forever (install-disk hung)
+
+
+def test_the_tpm_binding_is_pcr_7_and_never_pcrlock():
+    tool = (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "install-disk").read_text()
+    assert 'TPM_PCRS = "7"' in tool and '"--tpm2-pcrlock="' in tool
+    assert "systemctl mask" in POSTINST and "systemd-pcrlock" in POSTINST
+
+
+def test_every_extra_tree_exists():
+    """mkosi resolves paths in mkosi.conf.d/ against the main folder, and in a profile against the profile's."""
+    def trees(conf: Path) -> list[str]:
+        out, inside = [], False
+        for line in conf.read_text().splitlines():
+            if line.startswith("ExtraTrees="):
+                inside = True
+                line = line.split("=", 1)[1]
+            elif not line.startswith((" ", "\t")):
+                inside = False
+            if inside and line.strip():
+                out.append(line.strip().split(":")[0])
+        return out
+    for conf, base in [(MKOSI / "mkosi.conf.d" / "10-appliance.conf", MKOSI),
+                       (MKOSI / "mkosi.profiles" / "test" / "mkosi.conf", MKOSI / "mkosi.profiles" / "test"),
+                       (MKOSI / "mkosi.images" / "initrd" / "mkosi.conf", MKOSI / "mkosi.images" / "initrd")]:
+        found = trees(conf)
+        assert found, conf
+        for t in found:
+            assert (base / t).is_dir(), f"{conf.name}: {t}"

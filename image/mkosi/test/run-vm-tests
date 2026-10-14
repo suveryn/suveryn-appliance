@@ -1,83 +1,278 @@
-#!/bin/bash
-# Boots the test system (mkosi --profile test) in a virtual machine and checks the read-only
-# system's rules (docs/design/appliance-architecture.md; tracker #39, step 1):
-#
-#   1. first boot:  the self-test passes (image/mkosi/mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest)
-#   2. second boot: it passes again, with the same machine-id (kept on the data partition)
-#   3. a changed block in the system: verity refuses it
-#
-# Needs root, qemu-system-x86_64, OVMF and systemd-repart. Without KVM (software emulation) each boot
-# takes a few minutes.
-#
-#   sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
-set -uo pipefail
-HERE=$(cd "$(dirname "$0")" && pwd)
-MKOSI=$(dirname "$HERE")
-IMAGE=${1:-$(ls -t "$MKOSI"/mkosi.output/suveryn-test_*.raw 2>/dev/null | head -1)}
-WORK=${SUVERYN_VM_WORK:-$(mktemp -d /var/tmp/suveryn-vm-XXXXXX)}
-mkdir -p "$WORK"
-BOOT_TIMEOUT=${SUVERYN_VM_BOOT_TIMEOUT:-1200}
-OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
-OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
-failed=0
+#!/usr/bin/python3
+"""Install the test system with the installer's disk step and boot it, in a virtual machine with a TPM.
 
-note() { echo "== $*"; }
-pass() { echo "   ok   $*"; }
-fail() { echo "   FAIL $*"; failed=$((failed+1)); }
+The design's rules for the read-only system (#39) and the encrypted data partition (#34),
+checked by the self-test inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest):
 
-[ -f "$IMAGE" ] || { echo "no test image: build it with: cd image/mkosi && mkosi -f --profile test build" >&2; exit 2; }
-ACCEL=tcg; [ -w /dev/kvm ] && ACCEL=kvm
-note "image $IMAGE, work folder $WORK, acceleration: $ACCEL"
+1. install:        the test image as the "stick", an empty second disk and a virtual TPM; install-disk
+                   copies slot A, encrypts the data partition, enrols the TPM and a recovery key
+2. first boot:     the installed disk alone; the TPM unlocks the data partition (no prompt); every rule passes
+3. second boot:    the same, with the same machine-id
+4. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
+                   the right one opens the data partition and every rule passes
+5. five wrong keys: a new TPM again; after five wrong keys the console stops asking
+6. a changed block in slot A: verity refuses it
 
-# The installer's part (#37): the release's partitions, plus slot B and the data partition.
-disk="$WORK/disk.raw"
-cp --sparse=always "$IMAGE" "$disk"
-truncate -s 4G "$disk"
-# repart copies files for the new partitions from the system being installed, as the installer will.
-mkdir -p "$WORK/source/usr/lib/suveryn" && : > "$WORK/source/usr/lib/suveryn/empty-machine-id"
-systemd-repart --dry-run=no --definitions="$MKOSI/target/test" --copy-source="$WORK/source" "$disk" > "$WORK/repart.log" 2>&1 \
-  || { cat "$WORK/repart.log"; echo "systemd-repart failed" >&2; exit 2; }
-note "partitions: $(sfdisk -l "$disk" 2>/dev/null | awk '/^\// {print $NF}' | tr '\n' ' ')"
-cp "$OVMF_VARS" "$WORK/vars.fd"
+Needs root, qemu-system-x86_64, OVMF, swtpm. Without KVM each boot takes two to three minutes.
 
-boot() {  # boot <disk> <log>: boots until the self-test powers the machine off (or the timeout)
-  timeout "$BOOT_TIMEOUT" qemu-system-x86_64 -machine q35 -accel "$ACCEL" -cpu max -smp 2 -m 2048 \
-    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" -drive if=pflash,format=raw,file="$WORK/vars.fd" \
-    -drive file="$1",format=raw,if=virtio -nic user,model=virtio-net-pci \
-    -display none -serial file:"$2" -no-reboot > "$2.qemu" 2>&1
-}
-result() { grep -a "SUVERYN-SELFTEST RESULT" "$1" | tail -1 | sed 's/.*RESULT //' | tr -d '\r'; }
-field() { grep -a "SUVERYN-SELFTEST" "$1" | grep -a "$2" | head -1 | sed 's/.*: //' | tr -d '\r'; }
+    sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
+"""
 
-for n in 1 2; do
-  note "boot $n"
-  start=$(date +%s); boot "$disk" "$WORK/boot$n.log"; secs=$(( $(date +%s) - start ))
-  grep -a "SUVERYN-SELFTEST" "$WORK/boot$n.log" | sed 's/^.*SUVERYN-SELFTEST /   /' | tr -d '\r'
-  [ "$(result "$WORK/boot$n.log")" = PASS ] && pass "boot $n: self-test passed (${secs}s)" \
-    || fail "boot $n: self-test didn't pass (${secs}s; console: $WORK/boot$n.log)"
-done
-id1=$(field "$WORK/boot1.log" "machine-id kept on /var"); id2=$(field "$WORK/boot2.log" "machine-id kept on /var")
-[ -n "$id1" ] && [ "$id1" = "$id2" ] && pass "the machine-id survives a restart ($id1)" \
-  || fail "the machine-id changed between boots ('$id1' / '$id2')"
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
 
-note "a changed block in the system"
-bad="$WORK/disk-changed.raw"
-cp --sparse=always "$disk" "$bad"
-# Slot A is partition 2. Change one byte in the middle of it, where the system's files are.
-read -r start size < <(sfdisk --json "$bad" | python3 -c 'import json,sys; p=json.load(sys.stdin)["partitiontable"]["partitions"][1]; print(p["start"], p["size"])')
-offset=$(( (start + size / 2) * 512 + 123 ))
-orig=$(dd if="$bad" bs=1 skip="$offset" count=1 status=none | od -An -tu1 | tr -d ' ')
-printf "\\$(printf '%03o' $(( (orig + 1) % 256 )))" | dd of="$bad" bs=1 seek="$offset" conv=notrunc status=none
-cp "$OVMF_VARS" "$WORK/vars.fd"
-boot "$bad" "$WORK/changed.log"
-if grep -aq "SUVERYN-SELFTEST RESULT PASS" "$WORK/changed.log"; then
-  fail "the changed system passed: verity didn't notice (console: $WORK/changed.log)"
-elif grep -aiq "verity.*corrupt\|data block .* is corrupted\|verity.*error" "$WORK/changed.log"; then
-  pass "verity refused the changed block: $(grep -ai -m1 'corrupt' "$WORK/changed.log" | tr -d '\r' | cut -c1-120)"
-else
-  fail "the changed system didn't pass, but no verity error was seen (console: $WORK/changed.log)"
-fi
+HERE = Path(__file__).resolve().parent
+MKOSI = HERE.parent
+OVMF_CODE = Path("/usr/share/OVMF/OVMF_CODE_4M.fd")
+OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
+BOOT_TIMEOUT = int(os.environ.get("SUVERYN_VM_BOOT_TIMEOUT", "1200"))
+ACCEL = "kvm" if os.access("/dev/kvm", os.W_OK) else "tcg"
+PROMPT = re.compile(rb"(?i)(please enter|enter) (the )?(passphrase|recovery key)[^\n]*suveryn-data")
+STICK_PASSPHRASE = "suveryn-test-stick"
+GAVE_UP = re.compile(rb"Failed to start .{0,40}systemd-cryptsetup")
+ANSWER_WINDOW = 20  # seconds a typed key may take to be checked (software emulation)
+WRONG_KEY = "cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc"
 
-echo
-if [ "$failed" -eq 0 ]; then echo "ALL PASSED"; rm -rf "$WORK"; exit 0; fi
-echo "$failed FAILED (kept: $WORK)"; exit 1
+failed = 0
+
+
+def note(text: str) -> None:
+    print(f"== {text}", flush=True)
+
+
+def ok(text: str) -> None:
+    print(f"   ok   {text}", flush=True)
+
+
+def bad(text: str) -> None:
+    global failed
+    failed += 1
+    print(f"   FAIL {text}", flush=True)
+
+
+class TPM:
+    """A virtual TPM 2.0 (swtpm) whose state survives restarts of the machine, like a real one."""
+
+    def __init__(self, state: Path):
+        self.state = state
+        state.mkdir(parents=True, exist_ok=True)
+
+    def start(self) -> Path:
+        sock = self.state / "swtpm.sock"
+        sock.unlink(missing_ok=True)
+        self.proc = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={self.state}",
+                                      "--ctrl", f"type=unixio,path={sock}", "--terminate"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            if sock.exists():
+                return sock
+            time.sleep(0.1)
+        raise RuntimeError("swtpm didn't start")
+
+    def stop(self) -> None:
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            self.proc.wait()
+
+
+def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, credential: str | None = None,
+         keys: list[str] = (), quiet_after_keys: int = 0, stop_when_given_up: bool = False) -> tuple[str, int]:
+    """Boot until the machine powers off (or the timeout). Answers recovery-key prompts with `keys`, in
+    order. With quiet_after_keys, stops once all keys are used and no new prompt came for that many
+    seconds. Returns (console output, number of prompts seen)."""
+    log = work / f"{name}.log"
+    sersock = work / f"{name}.serial"
+    tpmsock = tpm.start()
+    cmd = ["qemu-system-x86_64", "-machine", "q35", "-accel", ACCEL, "-cpu", "max", "-smp", "2", "-m", "2048",
+           "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
+           "-drive", f"if=pflash,format=raw,file={vars_file}",
+           "-chardev", f"socket,id=chrtpm,path={tpmsock}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
+           "-device", "tpm-crb,tpmdev=tpm0",
+           "-nic", "user,model=virtio-net-pci", "-display", "none", "-no-reboot",
+           "-chardev", f"socket,id=ser0,path={sersock},server=on,wait=on", "-serial", "chardev:ser0"]
+    for d in disks:
+        cmd += ["-drive", f"file={d},format=raw,if=virtio"]
+    if credential:
+        cmd += ["-smbios", f"type=11,value=io.systemd.credential:{credential}"]
+    qemu = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=open(work / f"{name}.qemu", "w"))
+    for _ in range(100):
+        if sersock.exists():
+            break
+        time.sleep(0.1)
+    conn = socket.socket(socket.AF_UNIX)
+    conn.connect(str(sersock))
+    buf = bytearray()
+    prompts = 0
+    pending = list(keys)
+    last_prompt = time.time()
+    ignore_until = 0.0   # after a key is typed, the prompt is redrawn while it's checked: not a new prompt
+    failed_after = None  # how many prompts came before the unlock service first gave up
+    start = time.time()
+    conn.settimeout(1)
+    with open(log, "wb") as out:
+        while qemu.poll() is None and time.time() - start < BOOT_TIMEOUT:
+            try:
+                chunk = conn.recv(65536)
+            except socket.timeout:
+                chunk = b""
+            except OSError:
+                break
+            if chunk:
+                out.write(chunk)
+                out.flush()
+                buf += chunk
+            tail = bytes(buf[-4096:])
+            if failed_after is None and GAVE_UP.search(tail):
+                failed_after = prompts
+            if time.time() >= ignore_until and PROMPT.search(tail):
+                prompts += 1
+                last_prompt = time.time()
+                del buf[:]  # each prompt answered once
+                if pending:
+                    time.sleep(1)
+                    conn.sendall(pending.pop(0).encode() + b"\r")
+                    ignore_until = time.time() + ANSWER_WINDOW
+            if quiet_after_keys and not pending and prompts and time.time() - last_prompt > quiet_after_keys:
+                break
+            if stop_when_given_up and failed_after is not None:
+                time.sleep(5)
+                break
+    conn.close()
+    if qemu.poll() is None:
+        qemu.terminate()
+        qemu.wait()
+    tpm.stop()
+    boot.failed_after = failed_after
+    return log.read_bytes().decode(errors="replace").replace("\r", ""), prompts
+
+
+def selftest(output: str) -> dict:
+    lines = [ln.split("SUVERYN-SELFTEST ", 1)[1].strip() for ln in output.splitlines() if "SUVERYN-SELFTEST " in ln]
+    for ln in lines:
+        print(f"   {ln}" if not ln.startswith("recovery-key") else "   recovery-key (hidden)", flush=True)
+    value = lambda prefix: next((ln[len(prefix):].strip() for ln in lines if ln.startswith(prefix)), None)  # noqa: E731
+    machine_id = next((ln.split(": ", 1)[1] for ln in lines if ln.startswith("ok   machine-id kept on /var")), None)
+    return {"result": value("RESULT "), "recovery_key": value("recovery-key "), "machine_id": machine_id,
+            "unlocked_by": value("unlocked-by ")}
+
+
+def main() -> int:
+    image = Path(sys.argv[1]) if len(sys.argv) > 1 else max(MKOSI.glob("mkosi.output/suveryn-test_*.raw"),
+                                                            key=os.path.getmtime, default=None)
+    if not image or not image.exists():
+        print("no test image: cd image/mkosi && mkosi -f --profile test build", file=sys.stderr)
+        return 2
+    work = Path(os.environ.get("SUVERYN_VM_WORK") or tempfile.mkdtemp(prefix="suveryn-vm-", dir="/var/tmp"))
+    work.mkdir(parents=True, exist_ok=True)
+    note(f"image {image}, work folder {work}, acceleration: {ACCEL}")
+
+    stick, target = work / "stick.raw", work / "target.raw"
+    shutil.copyfile(image, stick)
+    # Until installer mode exists (#37: on the stick /var lives in memory), the test's stick gets an
+    # encrypted data partition of its own, opened with a test passphrase typed at the prompt.
+    with open(stick, "r+b") as f:
+        f.truncate(os.path.getsize(stick) + 2 * 2**30)
+    defs = work / "stick-repart.d"
+    defs.mkdir()
+    for name, body in (("00-esp", "Type=esp\nWeight=0"), ("10-root", "Type=root\nWeight=0"),
+                       ("11-root-verity", "Type=root-verity\nWeight=0"),
+                       ("30-data", "Type=linux-generic\nLabel=suveryn-data\nFormat=ext4\nEncrypt=key-file\n"
+                                   "MakeDirectories=/lib/suveryn/host\n"
+                                   "CopyFiles=/usr/lib/suveryn/empty-machine-id:/lib/suveryn/host/machine-id")):
+        (defs / f"{name}.conf").write_text(f"[Partition]\n{body}\n")
+    (work / "stick-key").write_text(STICK_PASSPHRASE)
+    source = work / "source" / "usr/lib/suveryn"
+    source.mkdir(parents=True)
+    (source / "empty-machine-id").touch()
+    subprocess.run(["systemd-repart", "--dry-run=no", "--offline=yes", f"--definitions={defs}",
+                    f"--key-file={work / 'stick-key'}",
+                    f"--copy-source={work / 'source'}", str(stick)], check=True, capture_output=True)
+    with open(target, "wb") as f:
+        f.truncate(6 * 2**30)
+    tpm = TPM(work / "tpm")
+    shutil.copyfile(OVMF_VARS, work / "vars-install.fd")
+    shutil.copyfile(OVMF_VARS, work / "vars.fd")
+
+    note("1. install onto the empty disk")
+    out, _ = boot(work, "install", [stick, target], tpm, work / "vars-install.fd", credential="suveryn.test=install",
+                  keys=[STICK_PASSPHRASE])
+    r = selftest(out)
+    key = r["recovery_key"]
+    if r["result"] == "PASS" and key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key):
+        ok("installed: slot A copied, data partition encrypted, TPM and recovery key enrolled")
+    else:
+        bad(f"install didn't pass (console: {work}/install.log)")
+        print(f"\n{failed} FAILED (kept: {work})")
+        return 1
+
+    machine_ids = []
+    for n in (2, 3):
+        note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it")
+        out, prompts = boot(work, f"boot{n - 1}", [target], tpm, work / "vars.fd")
+        r = selftest(out)
+        machine_ids.append(r["machine_id"])
+        if r["result"] == "PASS" and prompts == 0:
+            ok("every rule passed, unlocked by the TPM without a prompt")
+        else:
+            bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/boot{n - 1}.log)")
+    if machine_ids[0] and machine_ids[0] == machine_ids[1]:
+        ok(f"the machine-id survives a restart ({machine_ids[0]})")
+    else:
+        bad(f"the machine-id changed between boots ({machine_ids})")
+
+    note("4. TPM replaced: the recovery key opens the data partition")
+    out, prompts = boot(work, "recovery", [target], TPM(work / "tpm-new"), work / "vars.fd", keys=[WRONG_KEY, key])
+    r = selftest(out)
+    if prompts == 2 and r["result"] == "PASS" and r["machine_id"] == machine_ids[0]:
+        ok("asked for the recovery key, refused a wrong one, opened with the right one; every rule passed")
+    else:
+        bad(f"{prompts} prompt(s), result {r['result']} (console: {work}/recovery.log)")
+
+    note("5. wrong keys: after five the unlock gives up, and the data partition stays closed")
+    out, prompts = boot(work, "tries", [target], TPM(work / "tpm-other"), work / "vars.fd",
+                        keys=[WRONG_KEY] * 6, stop_when_given_up=True)
+    if boot.failed_after == 5 and "RESULT" not in out:
+        ok("five wrong keys refused, then the unlock gave up; nothing booted")
+    else:
+        bad(f"the unlock gave up after {boot.failed_after} prompt(s) of {prompts}; "
+            f"result seen: {'RESULT' in out} (console: {work}/tries.log)")
+
+    note("6. a changed block in slot A")
+    changed = work / "target-changed.raw"
+    shutil.copyfile(target, changed)
+    layout = subprocess.run(["sfdisk", "--json", str(changed)], capture_output=True, text=True, check=True).stdout
+    part = json.loads(layout)["partitiontable"]["partitions"][1]
+    offset = (part["start"] + part["size"] // 2) * 512 + 123
+    with open(changed, "r+b") as f:
+        f.seek(offset)
+        byte = f.read(1)
+        f.seek(offset)
+        f.write(bytes([(byte[0] + 1) % 256]))
+    out, _ = boot(work, "changed", [changed], tpm, work / "vars.fd")
+    corrupted = re.search(r"verity.*(data block .* is corrupted|corrupt)", out, re.I)
+    if "RESULT PASS" in out:
+        bad(f"the changed system passed: verity didn't notice (console: {work}/changed.log)")
+    elif corrupted:
+        ok(f"verity refused the changed block: {corrupted.group(0)[:100]}")
+    else:
+        bad(f"the changed system didn't pass, but no verity error was seen (console: {work}/changed.log)")
+
+    print()
+    if failed == 0:
+        print("ALL PASSED")
+        shutil.rmtree(work)
+        return 0
+    print(f"{failed} FAILED (kept: {work})")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
