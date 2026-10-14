@@ -1,6 +1,6 @@
 # First-boot setup: design handoff
 
-Design for the Sūveryn appliance's bare-metal console installer and its web setup wizard. Approved October 2026. Tracker: see the implementation issue that links here. Background: §5.8 (setup flow) and §8 (licensing and support) of the development context.
+Design for the sūveryn appliance's bare-metal console installer and its web setup wizard. Approved October 2026. Tracker: see the implementation issue that links here. Background: §5.8 (setup flow) and §8 (licensing and support) of the development context.
 
 ## What is in this folder
 

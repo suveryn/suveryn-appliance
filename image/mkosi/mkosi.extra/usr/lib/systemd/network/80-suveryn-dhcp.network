@@ -1,0 +1,7 @@
+# DHCP (IPv4 and IPv6) on every Ethernet port, whatever the machine names it. A fixed address set in
+# the installer (#37, C4) goes in /etc/systemd/network, which is on the data partition and wins.
+[Match]
+Type=ether
+
+[Network]
+DHCP=yes
