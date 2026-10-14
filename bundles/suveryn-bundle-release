@@ -1,0 +1,199 @@
+#!/usr/bin/python3
+"""Making and signing bundles, at Sūveryn Labs (tracker #36). The appliance side, which checks them, is
+image/mkosi/mkosi.extra/usr/lib/suveryn/bundle; this tool uses its format, so the two can't drift.
+
+    suveryn-bundle-release make DIR --kind model --name NAME --version VERSION
+        write DIR/manifest.json: every file in DIR with its size and SHA-256
+    suveryn-bundle-release sign DIR (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
+        write DIR/manifest.sig, then check it with the public key
+    suveryn-bundle-release public-key (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
+        the public key (PEM) and its fingerprint, for image/mkosi/mkosi.extra/usr/lib/suveryn/bundle-keys
+    suveryn-bundle-release test-key FILE
+        a new private key in a file: for tests and development only, never for a release
+
+Release keys live in AWS KMS (key spec ECC_NIST_EDWARDS25519, usage SIGN_VERIFY; signing algorithm
+ED25519_SHA_512, plain Ed25519). The private key never leaves KMS; this tool sends it only the
+short text to sign (108 bytes, the bundle tool's signed_text()), never the files. Needs the
+AWS CLI v2 and credentials allowed kms:Sign and kms:GetPublicKey on that key.
+"""
+
+import argparse
+import base64
+import datetime
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+TOOL = HERE.parent / "image" / "mkosi" / "mkosi.extra" / "usr" / "lib" / "suveryn" / "bundle"
+_loader = importlib.machinery.SourceFileLoader("suveryn_bundle", str(TOOL))
+bundle = importlib.util.module_from_spec(importlib.util.spec_from_loader("suveryn_bundle", _loader))
+sys.dont_write_bytecode = True  # never a __pycache__ in the image's tree
+_loader.exec_module(bundle)
+
+
+def fail(msg: str) -> None:
+    print(f"suveryn-bundle-release: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------- make
+def make(folder: Path, kind: str, name: str, version: str) -> dict:
+    if not folder.is_dir():
+        fail(f"{folder} isn't a folder")
+    files = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        dirnames.sort()
+        for d in dirnames:
+            if os.path.islink(os.path.join(dirpath, d)):
+                fail(f"{os.path.join(dirpath, d)} is a link: bundles hold plain files only")
+        for fname in sorted(filenames):
+            path = Path(dirpath) / fname
+            rel = path.relative_to(folder).as_posix()
+            if rel in ("manifest.json", "manifest.sig"):
+                continue
+            if path.is_symlink() or not path.is_file():
+                fail(f"{rel} isn't a plain file")
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                while chunk := f.read(bundle.CHUNK):
+                    h.update(chunk)
+            files.append({"path": rel, "size": path.stat().st_size, "sha256": h.hexdigest()})
+    manifest = {"format": bundle.FORMAT, "kind": kind, "name": name, "version": version,
+                "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "files": files}
+    try:
+        bundle.check_manifest(manifest)
+    except bundle.Invalid as e:
+        fail(str(e))
+    (folder / "manifest.sig").unlink(missing_ok=True)  # a new manifest needs a new signature
+    (folder / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
+    return manifest
+
+
+# ---------------------------------------------------------------------------- signers
+class KeyFile:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def public_pem(self) -> bytes:
+        return run(["openssl", "pkey", "-in", str(self.path), "-pubout"])
+
+    def sign(self, text: bytes) -> bytes:
+        with tempfile.NamedTemporaryFile() as t:
+            t.write(text)
+            t.flush()
+            return run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(self.path), "-in", t.name])
+
+
+class AwsKms:
+    def __init__(self, key: str, region: str | None):
+        self.base = ["aws", "kms"]
+        self.key = key
+        self.region = ["--region", region] if region else []
+
+    def call(self, *args: str) -> dict:
+        return json.loads(run([*self.base, *args, "--key-id", self.key, *self.region, "--output", "json"]))
+
+    def public_pem(self) -> bytes:
+        r = self.call("get-public-key")
+        if r.get("KeySpec") != "ECC_NIST_EDWARDS25519" or r.get("KeyUsage") != "SIGN_VERIFY":
+            fail(f"{self.key} isn't an Ed25519 signing key (KeySpec {r.get('KeySpec')}, KeyUsage {r.get('KeyUsage')})")
+        der = base64.b64decode(r["PublicKey"])
+        return run(["openssl", "pkey", "-pubin", "-inform", "DER"], der)
+
+    def sign(self, text: bytes) -> bytes:
+        with tempfile.NamedTemporaryFile() as t:
+            t.write(text)
+            t.flush()
+            r = self.call("sign", "--message", f"fileb://{t.name}", "--message-type", "RAW",
+                          "--signing-algorithm", "ED25519_SHA_512")
+        return base64.b64decode(r["Signature"])
+
+
+def run(cmd: list[str], data: bytes | None = None) -> bytes:
+    try:
+        r = subprocess.run(cmd, input=data, capture_output=True)
+    except FileNotFoundError:
+        fail(f"{cmd[0]} isn't installed")
+    if r.returncode != 0:
+        fail(f"{' '.join(cmd[:3])}: {r.stderr.decode(errors='replace').strip()}")
+    return r.stdout
+
+
+def signer(args) -> KeyFile | AwsKms:
+    if args.key_file:
+        return KeyFile(Path(args.key_file))
+    return AwsKms(args.aws_kms, args.region)
+
+
+# ---------------------------------------------------------------------------- sign
+def sign(folder: Path, s) -> dict:
+    try:
+        raw = (folder / "manifest.json").read_bytes()
+        bundle.check_manifest(json.loads(raw))
+    except (OSError, ValueError) as e:
+        fail(f"no usable manifest.json in {folder} ({e}); run make first")
+    except bundle.Invalid as e:
+        fail(str(e))
+    pem = s.public_pem()
+    fp = bundle.fingerprint(pem)
+    text = bundle.signed_text(raw)
+    signature = s.sign(text)
+    # Check before writing: a signature the appliance would refuse never leaves here.
+    if len(signature) != 64 or not bundle.ed25519_verify(text, signature, pem):
+        fail("the signer's signature doesn't verify with its public key")
+    sig = {"format": bundle.SIG_FORMAT, "key": fp, "signature": base64.b64encode(signature).decode()}
+    (folder / "manifest.sig").write_text(json.dumps(sig, indent=2) + "\n")
+    return sig
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(prog="suveryn-bundle-release", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+    m = sub.add_parser("make")
+    m.add_argument("dir", type=Path)
+    m.add_argument("--kind", required=True, choices=bundle.KINDS)
+    m.add_argument("--name", required=True)
+    m.add_argument("--version", required=True)
+    for name in ("sign", "public-key"):
+        s = sub.add_parser(name)
+        if name == "sign":
+            s.add_argument("dir", type=Path)
+        g = s.add_mutually_exclusive_group(required=True)
+        g.add_argument("--aws-kms", metavar="KEY", help="KMS key id, ARN or alias/…")
+        g.add_argument("--key-file", metavar="PRIVATE.pem", help="tests and development only")
+        s.add_argument("--region")
+    t = sub.add_parser("test-key")
+    t.add_argument("file", type=Path)
+    a = p.parse_args(argv)
+    if a.cmd == "make":
+        m = make(a.dir, a.kind, a.name, a.version)
+        print(f"manifest written: {m['kind']} {m['name']} {m['version']}, {len(m['files'])} file(s)")
+    elif a.cmd == "sign":
+        sig = sign(a.dir, signer(a))
+        print(f"signed with {sig['key']}")
+    elif a.cmd == "public-key":
+        pem = signer(a).public_pem()
+        sys.stdout.write(pem.decode())
+        print(f"# fingerprint {bundle.fingerprint(pem)}", file=sys.stderr)
+    elif a.cmd == "test-key":
+        if a.file.exists():
+            fail(f"{a.file} exists")
+        old = os.umask(0o077)
+        try:
+            run(["openssl", "genpkey", "-algorithm", "ed25519", "-out", str(a.file)])
+        finally:
+            os.umask(old)
+        print(f"test key written to {a.file} (never use it for a release)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -153,8 +153,8 @@ What changes because the system is read-only:
 
 ## Updates (#40)
 
-- An update is one signed bundle: a new system, its verity and its boot file (#36 and #40 decide
-  the signing; one verification path for models and updates).
+- An update is one signed bundle: a new system, its verity and its boot file, signed and checked
+  like a model bundle (#36, decisions D7 to D9; one verification path for models and updates).
 - It comes by download (connected) or on a USB stick (air-gapped). It is verified before anything is
   written.
 - **systemd-sysupdate** writes it to the slot that isn't running and adds its boot file with three
@@ -259,3 +259,11 @@ the chat UI) are copied in as they are now. Packer can then go (decision D1).
 | D4 | A machine with KVM for the image tests | **Not available yet.** Until it is, the tests run in Claude's workspace with a small test system (slow, without hardware acceleration); the full image waits for KVM or real hardware |
 | D5 | No swap on disk | **Yes** (zram if memory runs short) |
 | D6 | Remote support for connected appliances only, as above (#43) | **Yes**, details in #43 |
+
+## Decisions for signed bundles (14 October 2026, #36)
+
+| # | Decision | Outcome |
+|---|---|---|
+| D7 | How bundles are signed | **Ed25519, checked with openssl** (already in the system for the identity). A signed manifest lists every file's size and SHA-256 |
+| D8 | Where the private signing keys live | **AWS KMS** (key spec `ECC_NIST_EDWARDS25519`): the key never leaves it, and only a 108-byte text with the manifest's SHA-256 is sent to be signed, never the files |
+| D9 | How a key is replaced | **Two trusted keys in every system**, the current one and a spare. A lost or leaked key is retired by an update, signed with the other, that leaves it out and brings a new spare |

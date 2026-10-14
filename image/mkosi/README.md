@@ -18,6 +18,7 @@ mode (#37), and the sūveryn services in this system.
 pip install "git+https://github.com/systemd/mkosi.git@v25.3"   # in a venv; pinned
 cd image/mkosi
 sudo mkosi -f build                  # the appliance: linux-generic and firmware, slot A of 32 GiB
+test/make-test-keys                  # once: the test system's bundle keys (#36), never committed
 sudo mkosi -f --profile test build   # the test system: the same layout, small (for run-vm-tests)
 ```
 
@@ -37,7 +38,7 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 | `mkosi.conf`, `mkosi.conf.d/` | Ubuntu 24.04, the packages, the boot file. The appliance adds `linux-generic` and `linux-firmware`, and an initrd that holds only what reaches the disk |
 | `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `crypttab`, so it opens the data partition |
 | `mkosi.repart/` | What a release brings: the EFI partition (1 GiB), slot A (EROFS, 32 GiB) and its verity. mkosi puts the root hash in the boot file (`roothash=`) |
-| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/var` from the encrypted data partition in the initrd, `noexec,nosuid,nodev`; `/tmp` in memory; the machine-id), `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install-disk`, `identity` and `system-state` with `suveryn-identity.service` |
+| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/var` from the encrypted data partition in the initrd, `noexec,nosuid,nodev`; `/tmp` in memory; the machine-id), `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
 | `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock |
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
@@ -110,11 +111,25 @@ Known, to finish with the console installer (#37):
 Still to come: the check-in that signs and sends this (with the portal), and the manifest check
 (`valid_until`) once the manifest format is agreed (#36).
 
+## Signed bundles (#36)
+
+`/usr/lib/suveryn/bundle` checks and installs signed bundles (models now, system updates in #40)
+against the public keys in `/usr/lib/suveryn/bundle-keys`: two per release, the current AWS KMS
+key and a spare. Format, signing and key handling: [`bundles/`](../../bundles/README.md).
+
+- **The appliance image** trusts `release-current.pem` and `release-spare.pem` once they are added
+  ([`bundle-keys/README.md`](mkosi.extra/usr/lib/suveryn/bundle-keys/README.md)). Until then it
+  trusts no key and refuses every bundle; `test_the_appliance_trusts_two_release_keys` is marked
+  as expected to fail as a reminder.
+- **The test image** trusts two test keys made by `test/make-test-keys` in `test/keys/` (ignored
+  by git). They never reach the appliance image (a test checks it).
+
 ## Tests
 
 ```bash
 python3 -m pytest image/mkosi/test                     # the configuration against the design
 sudo python3 -m pytest image/mkosi/test/test_identity.py   # the identity tool, host key only (no TPM)
+python3 -m pytest bundles/tests                         # signed bundles, both sides
 sudo image/mkosi/test/run-vm-tests                      # the test system, in a virtual machine with a TPM
 ```
 
@@ -131,6 +146,10 @@ serial console, and types at the recovery-key prompt:
    the network up; the same machine-id on both boots; the identity made, sealed to the TPM
    (`host+tpm2`), its private key nowhere in plain form, signing and verifying (also with `openssl`
    alone); the system state (release, slot, root hash, verity, PCR 11); the same identity on both boots;
+   two bundle keys trusted; on the first boot, of three test bundles on a second disk the signed one
+   verifies and is installed onto the data partition (without the file its manifest doesn't list),
+   a changed one and one signed with an unknown key are refused; the installed bundle still verifies
+   on every later boot;
 3. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
    accepts the right one; every rule holds and the machine-id is unchanged; the identity is kept but
    refuses to sign (sealed to the old TPM);
