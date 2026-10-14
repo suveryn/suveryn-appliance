@@ -1,0 +1,18 @@
+[Unit]
+Description=sūveryn: the appliance's identity (UUID and key, made once)
+Documentation=file:/usr/lib/suveryn/identity
+# On the data partition (/var), sealed with the TPM where there is one.
+After=local-fs.target tpm2.target systemd-tmpfiles-setup.service
+Wants=tpm2.target
+ConditionPathExists=!/var/lib/suveryn/identity/identity.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/suveryn/identity create
+PrivateNetwork=yes
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

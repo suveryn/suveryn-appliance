@@ -1,0 +1,118 @@
+#!/usr/bin/python3
+"""What system this appliance runs, for the check-in and the admin dashboard (tracker #35, "system intact").
+
+    system-state            readable
+    system-state --json     the same as JSON
+
+It reports, without judging:
+
+- image:     the release (IMAGE_ID and IMAGE_VERSION from os-release)
+- slot:      the system slot it booted (the root partition's label, e.g. suveryn_x86-64)
+- roothash:  the root hash the boot file gave the kernel (roothash= on the command line)
+- verity:    whether dm-verity checks the running system against that root hash ("verified")
+- pcr11:     the TPM's PCR 11 (SHA-256): the measurement of the boot file, where a TPM is present
+- identity:  the appliance's UUID and key fingerprint (identity show), and whether it can sign
+
+Sūveryn Labs publishes the root hash of every release; the portal compares (design note, "What it
+protects, and what not"). Exit code 0 when verity is active and the root hash matches, 1 otherwise.
+"""
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+IDENTITY = "/usr/lib/suveryn/identity"
+
+
+def sh(*cmd: str) -> tuple[int, str]:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 127, str(e)
+    return r.returncode, r.stdout
+
+
+def os_release() -> dict:
+    out = {}
+    for line in Path("/usr/lib/os-release").read_text().splitlines():
+        if "=" in line and not line.startswith("#"):
+            k, v = line.split("=", 1)
+            out[k] = v.strip().strip('"')
+    return out
+
+
+def root_hash() -> str | None:
+    m = re.search(r"(?:^|\s)roothash=([0-9a-f]{64})(?:\s|$)", Path("/proc/cmdline").read_text())
+    return m.group(1) if m else None
+
+
+def verity() -> dict:
+    code, out = sh("veritysetup", "status", "root")
+    fields = dict(re.findall(r"^\s*([a-z ]+):\s*(.*)$", out, re.M)) if code == 0 else {}
+    data = fields.get("data device", "")
+    label = None
+    if data:
+        uevent = Path("/sys/class/block") / Path(data).name / "uevent"
+        if uevent.exists():
+            label = next((ln[9:] for ln in uevent.read_text().splitlines() if ln.startswith("PARTNAME=")), None)
+    return {"active": code == 0, "status": fields.get("status"), "root_hash": fields.get("root hash"),
+            "data_device": data or None, "slot": label}
+
+
+def pcr11() -> str | None:
+    if not Path("/dev/tpmrm0").exists():
+        return None
+    code, out = sh("systemd-analyze", "pcrs", "11", "--json=short")
+    if code != 0:
+        return None
+    try:
+        return json.loads(out)[0].get("sha256")
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+def identity() -> dict | None:
+    code, out = sh(IDENTITY, "show", "--json")
+    if not out:
+        return None
+    try:
+        ident = json.loads(out)
+    except ValueError:
+        return None
+    return {k: ident.get(k) for k in ("uuid", "fingerprint", "sealed", "usable")}
+
+
+def state() -> dict:
+    rel = os_release()
+    rh = root_hash()
+    v = verity()
+    intact = bool(rh and v["active"] and v["status"] == "verified" and v["root_hash"] == rh)
+    return {"image": {"id": rel.get("IMAGE_ID"), "version": rel.get("IMAGE_VERSION")},
+            "slot": v["slot"], "roothash": rh,
+            "verity": {"active": v["active"], "status": v["status"], "matches_roothash": bool(rh) and v["root_hash"] == rh},
+            "pcr11": pcr11(), "identity": identity(), "verity_intact": intact}
+
+
+def main(argv: list[str]) -> int:
+    if argv not in ([], ["--json"]):
+        print("usage: system-state [--json]", file=sys.stderr)
+        return 2
+    s = state()
+    if argv:
+        print(json.dumps(s, indent=2))
+    else:
+        ident = s["identity"] or {}
+        print(f"Image:     {s['image']['id']} {s['image']['version']}\nSlot:      {s['slot']}\n"
+              f"Root hash: {s['roothash']}\n"
+              f"Verity:    {s['verity']['status'] or 'not active'}"
+              f"{'' if s['verity']['matches_roothash'] else ' (does NOT match the root hash)'}\n"
+              f"PCR 11:    {s['pcr11'] or 'no TPM'}\n"
+              f"Identity:  {ident.get('uuid', 'none')}"
+              f"{'' if not ident else ' (usable)' if ident.get('usable') else ' (NOT usable)'}")
+    return 0 if s["verity_intact"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

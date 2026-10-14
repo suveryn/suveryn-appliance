@@ -1,0 +1,244 @@
+#!/usr/bin/python3
+"""The appliance's identity: a UUID and an Ed25519 key, made once on this machine (tracker #35).
+
+    identity create             make it, if there is none yet (suveryn-identity.service, first boot)
+    identity show [--json]      the UUID, the public key, its fingerprint, and whether signing works here
+    identity sign FILE          the signature of FILE (base64) on stdout
+    identity verify FILE SIG [--public-key PEM]   exit 0 when SIG (base64, a file) is FILE's signature
+
+Everything lives on the encrypted data partition, in /var/lib/suveryn/identity:
+
+    uuid            the appliance's UUID (v4), one line
+    public.pem      the public key
+    private.cred    the private key, encrypted with systemd-creds (0600)
+    identity.json   uuid, public key, fingerprint and how the private key is sealed
+
+The private key is never written to disk in plain form: openssl's output goes straight into
+systemd-creds. It is sealed with the TPM and the host key on the data partition (host+tpm2), or with
+the host key alone on a machine without a TPM (host). No PCRs: a firmware update doesn't affect it;
+a replaced TPM (another motherboard) makes it unusable, and `show` then says so.
+
+The fingerprint is the SHA-256 of the raw 32-byte public key, in hex.
+"""
+
+import base64
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path
+
+DIR = Path(os.environ.get("SUVERYN_IDENTITY_DIR", "/var/lib/suveryn/identity"))
+CRED_NAME = "suveryn-identity"
+# Ed25519 SubjectPublicKeyInfo in DER: this 12-byte prefix, then the 32-byte key.
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+
+
+def fail(msg: str, code: int = 1) -> None:
+    print(f"identity: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def run(cmd: list[str], data: bytes | None = None, **kw) -> bytes:
+    r = subprocess.run(cmd, input=data, capture_output=True, **kw)
+    if r.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} {cmd[1] if len(cmd) > 1 else ''}: "
+                           f"{r.stderr.decode(errors='replace').strip().splitlines()[-1:] or ['exit %d' % r.returncode]}")
+    return r.stdout
+
+
+def has_tpm() -> bool:
+    return Path("/dev/tpmrm0").exists()
+
+
+def raw_public(pem: bytes) -> bytes:
+    der = run(["openssl", "pkey", "-pubin", "-outform", "DER"], pem)
+    if len(der) != 44 or not der.startswith(ED25519_SPKI_PREFIX):
+        raise RuntimeError("the public key isn't an Ed25519 key")
+    return der[12:]
+
+
+def fingerprint(pem: bytes) -> str:
+    return hashlib.sha256(raw_public(pem)).hexdigest()
+
+
+def write(path: Path, data: bytes, mode: int) -> None:
+    """Atomically, with the given mode from the start."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def exists() -> bool:
+    return (DIR / "identity.json").exists()
+
+
+def create() -> int:
+    if exists():
+        print(f"identity: already exists ({load()['uuid']})", file=sys.stderr)
+        return 0
+    DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(DIR, 0o755)  # the public parts are readable; private.cred itself is 0600
+    sealed = "host+tpm2" if has_tpm() else "host"
+    # Key generation piped straight into systemd-creds: the plain key only ever exists in a pipe.
+    gen = subprocess.Popen(["openssl", "genpkey", "-algorithm", "ed25519"], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+    tmp_cred = DIR / ".private.cred.new"
+    enc = subprocess.run(["systemd-creds", "encrypt", f"--name={CRED_NAME}", f"--with-key={sealed}",
+                          "--tpm2-pcrs=", "-", str(tmp_cred)], stdin=gen.stdout, capture_output=True)
+    gen.stdout.close()
+    gen_err = gen.stderr.read()
+    if gen.wait() != 0 or enc.returncode != 0:
+        tmp_cred.unlink(missing_ok=True)
+        fail(f"couldn't create the key: {(gen_err or enc.stderr).decode(errors='replace').strip()}")
+    os.chmod(tmp_cred, 0o600)
+    try:
+        private = decrypt(tmp_cred)
+        pem = run(["openssl", "pkey", "-pubout"], private)
+        del private
+        ident = {"uuid": str(uuid.uuid4()), "algorithm": "ed25519", "public_key": pem.decode(),
+                 "fingerprint": fingerprint(pem), "sealed": sealed}
+    except RuntimeError as e:
+        tmp_cred.unlink(missing_ok=True)
+        fail(f"the new key can't be used: {e}")
+    os.rename(tmp_cred, DIR / "private.cred")
+    write(DIR / "public.pem", pem, 0o644)
+    write(DIR / "uuid", (ident["uuid"] + "\n").encode(), 0o644)
+    write(DIR / "identity.json", (json.dumps(ident, indent=2) + "\n").encode(), 0o644)  # last: marks it complete
+    print(f"identity: created {ident['uuid']} (fingerprint {ident['fingerprint'][:16]}…, sealed {sealed})",
+          file=sys.stderr)
+    return 0
+
+
+def load() -> dict:
+    try:
+        ident = json.loads((DIR / "identity.json").read_text())
+    except (OSError, ValueError) as e:
+        fail(f"no identity ({e.__class__.__name__}); it is made at first boot", 3)
+    return ident
+
+
+def decrypt(cred: Path | None = None) -> bytes:
+    return run(["systemd-creds", "decrypt", f"--name={CRED_NAME}", str(cred or DIR / "private.cred"), "-"])
+
+
+def memfd(data: bytes) -> int:
+    """data in an anonymous memory file: openssl's -rawin needs to know the input's size (no pipe)."""
+    fd = os.memfd_create("suveryn-identity-data")
+    os.write(fd, data)
+    os.lseek(fd, 0, os.SEEK_SET)
+    return fd
+
+
+def sign_bytes(data: bytes) -> bytes:
+    """Ed25519 signature of data. The private key passes through memory and a pipe, never a file."""
+    private = decrypt()
+    r, w = os.pipe()
+    d = memfd(data)
+    try:
+        proc = subprocess.Popen(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", f"/dev/fd/{r}",
+                                 "-in", f"/dev/fd/{d}"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                pass_fds=(r, d))
+        os.close(r)
+        r = -1
+        os.write(w, private)
+        os.close(w)
+        w = -1
+        out, err = proc.communicate()
+    finally:
+        for fd in (r, w, d):
+            if fd >= 0:
+                os.close(fd)
+        del private
+    if proc.returncode != 0 or len(out) != 64:
+        raise RuntimeError(f"openssl pkeyutl -sign: {err.decode(errors='replace').strip()}")
+    return out
+
+
+def verify_bytes(data: bytes, signature: bytes, pem: bytes) -> bool:
+    fds = [memfd(pem), memfd(signature), memfd(data)]
+    try:
+        r = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-rawin", "-inkey", f"/dev/fd/{fds[0]}",
+                            "-sigfile", f"/dev/fd/{fds[1]}", "-in", f"/dev/fd/{fds[2]}"],
+                           stdin=subprocess.DEVNULL, capture_output=True, pass_fds=fds)
+    finally:
+        for fd in fds:
+            os.close(fd)
+    return r.returncode == 0
+
+
+def usable() -> tuple[bool, str]:
+    """Whether this machine can sign with the identity: a test signature, checked."""
+    ident = load()
+    probe = b"suveryn identity self-check"
+    try:
+        sig = sign_bytes(probe)
+    except RuntimeError as e:
+        reason = str(e)
+        if ident.get("sealed") == "host+tpm2":
+            reason += " (sealed to a TPM: replaced TPM or motherboard?)"
+        return False, reason
+    if not verify_bytes(probe, sig, ident["public_key"].encode()):
+        return False, "the signature doesn't match the public key"
+    return True, "signs and verifies"
+
+
+def show(as_json: bool) -> int:
+    ident = load()
+    ok, why = usable()
+    out = {k: ident[k] for k in ("uuid", "algorithm", "fingerprint", "sealed", "public_key")}
+    out["usable"] = ok
+    out["usable_detail"] = why
+    if as_json:
+        print(json.dumps(out, indent=2))
+    else:
+        print(f"UUID:         {out['uuid']}\nFingerprint:  {out['fingerprint']}\n"
+              f"Key:          Ed25519, sealed {out['sealed']}\nUsable:       {'yes' if ok else 'NO'} ({why})")
+    return 0 if ok else 1
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        fail("usage: identity create | show [--json] | sign FILE | verify FILE SIG [--public-key PEM]", 2)
+    cmd, args = argv[0], argv[1:]
+    try:
+        if cmd == "create" and not args:
+            return create()
+        if cmd == "show" and args in ([], ["--json"]):
+            return show(bool(args))
+        if cmd == "sign" and len(args) == 1:
+            load()
+            data = sys.stdin.buffer.read() if args[0] == "-" else Path(args[0]).read_bytes()
+            print(base64.b64encode(sign_bytes(data)).decode())
+            return 0
+        if cmd == "verify" and len(args) in (2, 4) and (len(args) == 2 or args[2] == "--public-key"):
+            pem = Path(args[3]).read_bytes() if len(args) == 4 else load()["public_key"].encode()
+            data = Path(args[0]).read_bytes()
+            try:
+                sig = base64.b64decode(Path(args[1]).read_text().strip(), validate=True)
+            except ValueError:
+                fail("the signature isn't base64", 1)
+            good = len(sig) == 64 and verify_bytes(data, sig, pem)
+            print("valid" if good else "INVALID")
+            return 0 if good else 1
+    except RuntimeError as e:
+        fail(str(e))
+    except OSError as e:
+        fail(f"{e.filename}: {e.strerror}")
+    fail(f"usage: identity create | show [--json] | sign FILE | verify FILE SIG [--public-key PEM]", 2)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

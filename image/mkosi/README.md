@@ -37,7 +37,7 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 | `mkosi.conf`, `mkosi.conf.d/` | Ubuntu 24.04, the packages, the boot file. The appliance adds `linux-generic` and `linux-firmware`, and an initrd that holds only what reaches the disk |
 | `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `crypttab`, so it opens the data partition |
 | `mkosi.repart/` | What a release brings: the EFI partition (1 GiB), slot A (EROFS, 32 GiB) and its verity. mkosi puts the root hash in the boot file (`roothash=`) |
-| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/var` from the encrypted data partition in the initrd, `noexec,nosuid,nodev`; `/tmp` in memory; the machine-id), `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, and `/usr/lib/suveryn/install-disk` |
+| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/var` from the encrypted data partition in the initrd, `noexec,nosuid,nodev`; `/tmp` in memory; the machine-id), `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install-disk`, `identity` and `system-state` with `suveryn-identity.service` |
 | `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock |
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
@@ -83,10 +83,38 @@ Known, to finish with the console installer (#37):
 - On the very first boot systemd logs "Failed to write /etc/machine-id: Invalid argument", and then
   saves the machine-id anyway: it is the same on every later boot (the tests check it).
 
+## The appliance's identity and system state (#35)
+
+- **The identity** is a UUID (v4) and an Ed25519 key, made on the first boot of the installed
+  system by `suveryn-identity.service` (`/usr/lib/suveryn/identity create`), only when there is none
+  yet. It lives on the encrypted data partition, in `/var/lib/suveryn/identity`: `uuid`,
+  `public.pem`, `identity.json` (UUID, public key, fingerprint, how it is sealed) and `private.cred`.
+- **The private key is never on disk in plain form.** `openssl genpkey` writes it straight into
+  `systemd-creds encrypt`, which seals it with the TPM and the host key on the data partition
+  (`host+tpm2`; `host` alone on a machine without a TPM). Signing decrypts it into memory and hands it
+  to `openssl` through a pipe.
+- **Bound to the TPM, not to PCR 7.** A firmware or Secure Boot change doesn't affect it. A replaced
+  TPM (another motherboard) does: the data partition then opens with the recovery key, the identity
+  stays, but it can't sign, and `identity show` says so ("Usable: NO"). Such an appliance has to be
+  registered again (portal, later).
+- **The fingerprint** is the SHA-256 of the raw 32-byte public key, in hex.
+- `identity show [--json]`, `identity sign FILE` (base64 on stdout; `-` reads stdin), `identity
+  verify FILE SIG [--public-key PEM]`. A signature is plain Ed25519: `openssl pkeyutl -verify -rawin`
+  checks it with `public.pem` alone, as the portal will.
+- **System state** (`/usr/lib/suveryn/system-state [--json]`) reports, without judging: the release
+  (`IMAGE_ID`, `IMAGE_VERSION`), the slot it booted, the root hash from the boot file, whether verity
+  checks the running system against it, the TPM's PCR 11 (the boot file's measurement) and the
+  identity. The portal compares the root hash with the one Sūveryn Labs published for that release
+  ("system intact"). Exit code 0 when verity is active and matches the root hash.
+
+Still to come: the check-in that signs and sends this (with the portal), and the manifest check
+(`valid_until`) once the manifest format is agreed (#36).
+
 ## Tests
 
 ```bash
 python3 -m pytest image/mkosi/test                     # the configuration against the design
+sudo python3 -m pytest image/mkosi/test/test_identity.py   # the identity tool, host key only (no TPM)
 sudo image/mkosi/test/run-vm-tests                      # the test system, in a virtual machine with a TPM
 ```
 
@@ -100,9 +128,12 @@ serial console, and types at the recovery-key prompt:
    rule holds: root from the verity device, read-only (EROFS), can't be written, the boot file's root
    hash, verified, every block readable; `/var` the encrypted data partition, `noexec,nosuid,nodev`,
    nothing runs from it; `/tmp` in memory; no swap; the `/etc` links; the image's `/var` restored;
-   the network up; the same machine-id on both boots;
+   the network up; the same machine-id on both boots; the identity made, sealed to the TPM
+   (`host+tpm2`), its private key nowhere in plain form, signing and verifying (also with `openssl`
+   alone); the system state (release, slot, root hash, verity, PCR 11); the same identity on both boots;
 3. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
-   accepts the right one; every rule holds and the machine-id is unchanged;
+   accepts the right one; every rule holds and the machine-id is unchanged; the identity is kept but
+   refuses to sign (sealed to the old TPM);
 4. **wrong keys**: after five, the unlock gives up and nothing boots;
 5. **a changed block in slot A**: verity refuses it ("data block … is corrupted").
 
