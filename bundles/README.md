@@ -15,7 +15,8 @@ path for models and updates. Decisions D7 to D9 in the [design note](../docs/des
 
 ```
 qwen3-30b-a3b-2026.10.1/
-  manifest.json     format, kind (model or system), name, version, created; per file: path, size, SHA-256
+  manifest.json     format, kind (model or system), name, version, created; per file: path, size, SHA-256;
+                    optionally title, description (and description_nl, description_fr) and default
   manifest.sig      the key's fingerprint and the Ed25519 signature
   model.gguf
   …

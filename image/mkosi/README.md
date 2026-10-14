@@ -127,7 +127,7 @@ only) shows the approved screens and hands the answers to `install`:
 
 | Screen | What it asks or shows |
 |---|---|
-| C1 | Language (stored for the web setup; this console is English for now), keyboard layout (loaded at once; a test field), time zone |
+| C1 | Language: English, Nederlands or Français; the screens switch at once, and it is stored for the web setup. Keyboard layout (loaded at once; a test field), time zone |
 | C2 | The hardware check (NVIDIA card and its memory, cores, TPM 2.0, memory against the recommended 64 GB) and the target disk; the stick and disks too small for the partition definitions can't be chosen. No TPM, no NVIDIA card or no usable disk stops here |
 | C3 | The stick's models, each checked in full in the background from the start: signed ones offered (title, description, size, default from the bundle's manifest), others skipped with the reason; whether they fit on the disk |
 | C4 | The Ethernet port, the name (`<name>.local`), DHCP (the lease shown) or a fixed address; after 30 s without a lease it switches to a fixed address, with Retry DHCP (C4b) |
@@ -143,8 +143,17 @@ set (`/etc/default/console-setup`), which has the "ū". It has no "✓", so the 
 The keyboard layout is kept on the data partition (`/etc/default/keyboard` links there, design note) and
 loaded at every start by console-setup.
 
+**Languages.** Every word on these screens is in `installer-text.json`, in English (the approved
+design's copy), Dutch (formal: u) and French (vous); a test checks that every text exists in all three
+with the same values filled in, and the house style (no em dashes, no informal forms, sūveryn in lower
+case mid-sentence). Sizes follow the language (17,0 GB; 17,0 Go), and the confirmation word too
+(ERASE, WISSEN, EFFACER). A model's description can be given in each language
+(`description_nl`, `description_fr` in its manifest); without one, the English shows. The installer
+engine's own messages (a failed step's detail) stay in English. The Dutch and French copy is a
+first version: to be read by a native speaker before release.
+
 Still to come in #37: the console after the first start (C8) and the unlock screen (C8b), mDNS
-(`<name>.local`), and the Dutch and French copy for this console (not in the design yet).
+(`<name>.local`).
 
 ## The appliance's identity and system state (#35)
 
@@ -204,10 +213,11 @@ console installer through a terminal emulator (pyte) the way a person would:
    installer mode, without a prompt: slot A from the stick, `/var` in memory, no data partition
    opened, no identity. `install --list-models` finds the signed bundle valid and refuses the other
    two; a bad name and the changed bundle are refused without writing anything; the stick untouched;
-2. **install with the console installer**: C1 to C7 on the console: the defaults on C1, the empty disk
-   chosen, the signed model offered and ticked and the other two skipped with their reasons, the name
-   typed and the DHCP lease shown, ERASE typed, the progress, the recovery key read off the screen and
-   its first group typed, Restart;
+2. **install with the console installer**: C1 to C7 on the console, in Dutch: Nederlands chosen on C1
+   (the screens switch at once), the empty disk chosen, the signed model offered and ticked (with its
+   Dutch description) and the other two skipped with their reasons, the name typed and the DHCP lease
+   shown, WISSEN typed, the progress, the recovery key read off the screen and its first group typed,
+   Restart;
 3. **boot the installed disk**: the TPM opens the data partition without a prompt, and every rule
    holds: slot A from the boot disk, installed mode with its own disk's data partition; root from the
    verity device, read-only (EROFS), can't be written, the boot file's root hash, verified, every block
