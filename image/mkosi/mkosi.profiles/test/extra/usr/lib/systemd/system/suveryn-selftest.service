@@ -1,6 +1,6 @@
 [Unit]
 Description=sūveryn test system: check the read-only system's rules (test profile only)
-After=multi-user.target systemd-tmpfiles-setup.service systemd-networkd.service
+After=multi-user.target systemd-tmpfiles-setup.service systemd-networkd.service suveryn-identity.service
 
 [Service]
 Type=oneshot

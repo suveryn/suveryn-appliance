@@ -1,15 +1,17 @@
 #!/usr/bin/python3
 """Install the test system with the installer's disk step and boot it, in a virtual machine with a TPM.
 
-The design's rules for the read-only system (#39) and the encrypted data partition (#34),
-checked by the self-test inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest):
+The design's rules for the read-only system (#39), the encrypted data partition (#34) and the
+appliance's identity and system state (#35), checked by the self-test inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest):
 
 1. install:        the test image as the "stick", an empty second disk and a virtual TPM; install-disk
                    copies slot A, encrypts the data partition, enrols the TPM and a recovery key
-2. first boot:     the installed disk alone; the TPM unlocks the data partition (no prompt); every rule passes
-3. second boot:    the same, with the same machine-id
+2. first boot:     the installed disk alone; the TPM unlocks the data partition (no prompt); the
+                   identity is made, sealed to the TPM, and signs; every rule passes
+3. second boot:    the same, with the same machine-id and the same identity
 4. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
-                   the right one opens the data partition and every rule passes
+                   the right one opens the data partition and every rule passes; the identity is
+                   kept but can't sign (it was sealed to the old TPM)
 5. five wrong keys: a new TPM again; after five wrong keys the console stops asking
 6. a changed block in slot A: verity refuses it
 
@@ -39,6 +41,9 @@ PROMPT = re.compile(rb"(?i)(please enter|enter) (the )?(passphrase|recovery key)
 STICK_PASSPHRASE = "suveryn-test-stick"
 GAVE_UP = re.compile(rb"Failed to start .{0,40}systemd-cryptsetup")
 ANSWER_WINDOW = 20  # seconds a typed key may take to be checked (software emulation)
+# The initrd may draw the same prompt again within seconds, as its other jobs finish; what was typed
+# before that redraw is lost. So a key is typed only once the prompt has stood this long unchanged.
+SETTLE = 6
 WRONG_KEY = "cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc-cccccccc"
 
 failed = 0
@@ -114,6 +119,8 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
     pending = list(keys)
     last_prompt = time.time()
     ignore_until = 0.0   # after a key is typed, the prompt is redrawn while it's checked: not a new prompt
+    drawn_at = None      # when the prompt waiting for an answer was last drawn
+    scanned = 0          # how far buf has been searched for a prompt
     failed_after = None  # how many prompts came before the unlock service first gave up
     start = time.time()
     conn.settimeout(1)
@@ -132,7 +139,13 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
             tail = bytes(buf[-4096:])
             if failed_after is None and GAVE_UP.search(tail):
                 failed_after = prompts
-            if time.time() >= ignore_until and PROMPT.search(tail):
+            # Search everything new (a burst of kernel messages can push a prompt out of the tail).
+            for m in PROMPT.finditer(bytes(buf), scanned):
+                drawn_at = time.time()
+                scanned = m.end()
+            if drawn_at and time.time() >= ignore_until and time.time() - drawn_at >= SETTLE:
+                drawn_at = None
+                scanned = 0
                 prompts += 1
                 last_prompt = time.time()
                 del buf[:]  # each prompt answered once
@@ -161,7 +174,7 @@ def selftest(output: str) -> dict:
     value = lambda prefix: next((ln[len(prefix):].strip() for ln in lines if ln.startswith(prefix)), None)  # noqa: E731
     machine_id = next((ln.split(": ", 1)[1] for ln in lines if ln.startswith("ok   machine-id kept on /var")), None)
     return {"result": value("RESULT "), "recovery_key": value("recovery-key "), "machine_id": machine_id,
-            "unlocked_by": value("unlocked-by ")}
+            "unlocked_by": value("unlocked-by "), "identity": value("identity ") or None}
 
 
 def main() -> int:
@@ -213,12 +226,13 @@ def main() -> int:
         print(f"\n{failed} FAILED (kept: {work})")
         return 1
 
-    machine_ids = []
+    machine_ids, identities = [], []
     for n in (2, 3):
         note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it")
         out, prompts = boot(work, f"boot{n - 1}", [target], tpm, work / "vars.fd")
         r = selftest(out)
         machine_ids.append(r["machine_id"])
+        identities.append(r["identity"])
         if r["result"] == "PASS" and prompts == 0:
             ok("every rule passed, unlocked by the TPM without a prompt")
         else:
@@ -227,12 +241,18 @@ def main() -> int:
         ok(f"the machine-id survives a restart ({machine_ids[0]})")
     else:
         bad(f"the machine-id changed between boots ({machine_ids})")
+    if identities[0] and identities[0] == identities[1]:
+        ok(f"the identity survives a restart ({identities[0].split()[0]})")
+    else:
+        bad(f"the identity changed between boots, or is missing ({identities})")
 
     note("4. TPM replaced: the recovery key opens the data partition")
-    out, prompts = boot(work, "recovery", [target], TPM(work / "tpm-new"), work / "vars.fd", keys=[WRONG_KEY, key])
+    out, prompts = boot(work, "recovery", [target], TPM(work / "tpm-new"), work / "vars.fd",
+                        credential="suveryn.test=tpm-replaced", keys=[WRONG_KEY, key])
     r = selftest(out)
-    if prompts == 2 and r["result"] == "PASS" and r["machine_id"] == machine_ids[0]:
-        ok("asked for the recovery key, refused a wrong one, opened with the right one; every rule passed")
+    if prompts == 2 and r["result"] == "PASS" and r["machine_id"] == machine_ids[0] and r["identity"] == identities[0]:
+        ok("asked for the recovery key, refused a wrong one, opened with the right one; every rule passed; "
+           "the identity is kept and refuses to sign without its TPM")
     else:
         bad(f"{prompts} prompt(s), result {r['result']} (console: {work}/recovery.log)")
 

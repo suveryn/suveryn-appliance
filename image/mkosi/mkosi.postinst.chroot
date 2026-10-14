@@ -31,6 +31,8 @@ rm -rf /usr/share/factory/var/{cache,log,tmp}/* /usr/share/factory/var/lib/apt/l
 # 3. Services: the network by DHCP, the resolver and time. Nothing is ever installed later (no apt).
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
 systemctl mask apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+# The appliance's identity, made at first boot on the data partition (#35).
+systemctl enable suveryn-identity.service
 
 # 4. No pcrlock: the data partition is bound to PCR 7 (#34); pcrlock policies (and the TPM NV index
 #    they write) are decision D2, postponed. systemd 255 would generate one at every boot.
