@@ -3,9 +3,11 @@
 # line to the serial console (image/mkosi/test/run-vm-tests reads them), then powers off.
 #
 # Mode, from the credential suveryn.test (QEMU: -smbios type=11,value=io.systemd.credential:suveryn.test=…):
-#   install          started from the installer stick (/dev/vda): check installer mode, then install
-#                    onto the empty second disk (/dev/vdb) with the stick's good test bundle, and check
-#                    what that made; a bad name and a changed bundle are refused first, writing nothing
+#   install-checks   started from the installer stick (/dev/vda): check installer mode, the stick's
+#                    bundles, and that a bad name and a changed bundle are refused, writing nothing on
+#                    the empty second disk (/dev/vdb). The installation itself is done through the
+#                    console installer (run-vm-tests drives it on the serial console)
+#   first-boot       the installed system's first start: also the installer's firmware boot entry
 #   stick-beside     started from the stick, with an installed appliance as the second disk: installer
 #                    mode, and that appliance's data partition is never opened
 #   tpm-replaced     check the running system; the identity, sealed to the old TPM, must be unusable
@@ -42,7 +44,7 @@ if [ "$mode" = stick-beside ]; then
   finish
 fi
 
-if [ "$mode" = install ]; then
+if [ "$mode" = install-checks ]; then
   installer_checks
   check "stick's bundles checked"      python3 -c '
 import json, subprocess
@@ -62,24 +64,7 @@ print("good valid; changed and untrusted refused")'
   }
   check "a bad name is refused, nothing written"       refused --name 'Not_A-Name-'
   check "a changed bundle is refused, nothing written" refused --name test-appliance --model changed
-  if result=$(/usr/lib/suveryn/install --disk /dev/vdb --name test-appliance --timezone Europe/Brussels --model good --json 2>/run/install.err); then
-    sed "s/^/SUVERYN-SELFTEST progress /" /run/install.err > "$out"
-    say "ok   install onto /dev/vdb"
-    say "recovery-key $(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["recovery_key"])')"
-    field() { echo "$result" | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
-    check "data partition: TPM and recovery key only" test "$(field '" ".join(d["key_slots"])')" = "recovery tpm2"
-    data=$(field 'd["data_partition"]')
-    check "data partition is LUKS2" sh -c "cryptsetup luksDump $data | grep -q '^Version:.*2'"
-    check "TPM bound to PCR 7"     sh -c "cryptsetup luksDump $data | grep -A8 systemd-tpm2 | grep -Eq 'tpm2-(hash-)?pcrs: *7\$'"
-    check "slot A copied exactly" bash -c 'h=$(sed -n "s/.*roothash=\([0-9a-f]*\).*/\1/p" /proc/cmdline); veritysetup verify /dev/vdb2 /dev/vdb3 "$h" && echo "verifies against ${h:0:16}…"'
-    check "the model is installed" test "$(field '",".join(m["name"] for m in d["models"])')" = test-model
-    check "boot entry for the disk" bash -c "test \"$(field 'd["boot_entry"]')\" = 'added, first in the boot order' && efibootmgr | grep -q suveryn && efibootmgr | sed -n 's/^BootOrder: //p'"
-    check "the stick is untouched" bash -c "b=\$(cat /run/stick-before.gpt); a=\$($(declare -f gpt); gpt); [ \${#b} -eq 16 ] && [ \"\$a\" = \"\$b\" ] && echo \"partition table \$a\""
-  else
-    sed "s/^/SUVERYN-SELFTEST error /" /run/install.err > "$out"
-    say "FAIL install onto /dev/vdb"
-    fails=$((fails+1))
-  fi
+  check "the stick is untouched" bash -c "b=\$(cat /run/stick-before.gpt); a=\$($(declare -f gpt); gpt); [ \${#b} -eq 16 ] && [ \"\$a\" = \"\$b\" ] && echo \"partition table \$a\""
   finish
 fi
 
@@ -140,6 +125,10 @@ bundle=/usr/lib/suveryn/bundle; installed=/var/lib/suveryn/bundles/model/test-mo
 check "two bundle keys trusted"       bash -c "test \$($bundle keys | wc -l) -eq 2 && $bundle keys | cut -c1-16 | tr '\n' ' '"
 check "the installer's settings"     bash -c 'test "$(hostname)" = test-appliance && test "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/Europe/Brussels && grep -q "^MACAddress=" /etc/systemd/network/10-suveryn.network && python3 -c "import json; d=json.load(open(\"/var/lib/suveryn/installed.json\")); assert d[\"name\"] == \"test-appliance\"" && echo "$(hostname), $(date +%Z)"'
 check "the installer's network file in use" bash -c 'i=$(ls /sys/class/net | grep -v "^lo$" | head -1); for n in $(seq 30); do f=$(networkctl status --no-pager "$i" 2>/dev/null | sed -n "s/^ *Network File: //p"); [ -n "$f" ] && break; sleep 1; done; echo "$i: $f"; test "$(readlink -f "$f")" = "$(readlink -f /etc/systemd/network/10-suveryn.network)"'
+check "the installer's keyboard layout" grep -q '^XKBLAYOUT="be"' /etc/default/keyboard
+if [ "$mode" = first-boot ]; then
+  check "the installer's boot entry"   bash -c 'efibootmgr | grep -i suveryn && efibootmgr | sed -n "s/^BootOrder: //p"'
+fi
 check "installed bundle verifies"     bash -c "$bundle verify $installed 2>/dev/null | grep -q '^valid:' && echo \$(du -sh $installed | cut -f1)"
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
 finish
