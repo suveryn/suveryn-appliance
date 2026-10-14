@@ -1,0 +1,54 @@
+#!/bin/bash
+# In the initrd: is this the installed appliance or the installer stick? Then mount /var for it
+# (design note, "The installer: the same system, in installer mode"; #37).
+#
+# The disk the firmware booted from (systemd-boot's LoaderDevicePartUUID) decides:
+#   it has a partition named suveryn-data  ->  installed: unlock it (TPM, or the recovery key at the
+#                                              console) and mount it on /var
+#   it has none                            ->  installer: /var in memory; nothing on any disk is opened
+# Only the boot disk counts: a stick started on a machine that already has an appliance never opens
+# that appliance's data, and an appliance never opens a data partition on another disk.
+set -euo pipefail
+
+SYSROOT=${SYSROOT:-/sysroot}
+say() { echo "suveryn-boot-mode: $*"; }
+die() { say "$*" >&2; exit 1; }
+
+# 1. The boot disk: the one with the EFI partition the boot loader started from.
+disk=$(/usr/lib/suveryn/boot-disk wait) || die "can't tell which disk this system started from"
+
+# 2. Its partitions, by name (sysfs; no other disk is looked at).
+data= bundles=
+for p in /sys/class/block/"$disk"/"$disk"*; do
+  [ -r "$p/uevent" ] || continue
+  name=$(grep -m1 '^PARTNAME=' "$p/uevent" | cut -d= -f2- || true)
+  case "$name" in
+    suveryn-data) data=${p##*/} ;;
+    suveryn-bundles) bundles=${p##*/} ;;
+  esac
+done
+mkdir -p /run/suveryn
+
+if [ -n "$data" ]; then
+  say "installed appliance on $disk: unlocking /dev/$data"
+  echo installed > /run/suveryn/boot-mode
+  # The TPM (PCR 7) first; if it can't, the console asks for the recovery key: 5 typed attempts
+  # (systemd counts the failed TPM attempt as one of the tries, hence tries=6).
+  /usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,tries=6
+  # Nothing on the data partition can be run as a program.
+  mount -t ext4 -o noexec,nosuid,nodev /dev/mapper/suveryn-data "$SYSROOT/var"
+  echo "/dev/$data" > /run/suveryn/data-partition
+else
+  say "installer on $disk: /var in memory"
+  echo installer > /run/suveryn/boot-mode
+  : > /run/suveryn/installer-mode  # for units: ConditionPathExists=
+  mount -t tmpfs -o mode=0755,noexec,nosuid,nodev,size=50% tmpfs "$SYSROOT/var"
+  mkdir -p "$SYSROOT/var/lib/suveryn/host"
+  : > "$SYSROOT/var/lib/suveryn/host/machine-id"
+fi
+[ -n "$bundles" ] && echo "/dev/$bundles" > /run/suveryn/bundles-partition
+echo "/dev/$disk" > /run/suveryn/boot-disk
+
+# The machine-id lives on /var: systemd won't follow a link for it, so the file is mounted over the
+# image's empty /etc/machine-id (written by systemd on the first boot, read on every boot after).
+mount --bind "$SYSROOT/var/lib/suveryn/host/machine-id" "$SYSROOT/etc/machine-id"

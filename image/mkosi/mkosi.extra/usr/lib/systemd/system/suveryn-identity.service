@@ -5,6 +5,8 @@ Documentation=file:/usr/lib/suveryn/identity
 After=local-fs.target tpm2.target systemd-tmpfiles-setup.service
 Wants=tpm2.target
 ConditionPathExists=!/var/lib/suveryn/identity/identity.json
+# Not on the installer stick: there /var is in memory (#37).
+ConditionPathExists=!/run/suveryn/installer-mode
 
 [Service]
 Type=oneshot
