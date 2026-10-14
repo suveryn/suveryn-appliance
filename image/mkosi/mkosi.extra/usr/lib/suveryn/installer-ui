@@ -1,0 +1,1235 @@
+#!/usr/bin/python3
+"""The console installer: the screens C1 to C7 of the approved design (docs/design/first-boot-setup; #37).
+
+Runs on the installer stick's first console (suveryn-installer.service, installer mode only) and asks:
+
+    C1  language, keyboard and time zone      C4  network: port, name, DHCP or a fixed address
+    C2  hardware check and target disk        C5  summary; type ERASE to install
+    C3  language models from the stick        C6  installing          C7  the disk recovery key
+
+The work itself is /usr/lib/suveryn/install (the installer's engine); this program only collects the
+answers, shows progress and the recovery key, and restarts. Keys: arrows select, Tab moves to the next
+field, Space ticks, Enter continues, Esc goes back, F1 shows help, Ctrl+L redraws.
+
+For tests, SUVERYN_INSTALLER_FAKE names a JSON file that stands in for the machine (fake_system below);
+SUVERYN_INSTALLER_ALLOW_NO_GPU=1 lets a machine without an NVIDIA card continue (the test system).
+"""
+
+import curses
+import importlib.machinery
+import importlib.util
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+from argparse import Namespace
+from pathlib import Path
+
+LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
+STEPS = 6
+CHECK, WARN, ARROW = "√", "!", "▸"  # the console font (Uni2-Terminus) has √ but no ✓
+RECOMMENDED_MEMORY_GB = 64
+MIN_GPU_GB = 24
+DHCP_WAIT = 30
+
+
+def load(name: str):
+    sys.dont_write_bytecode = True
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(LIB / name))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+ENGINE = load("install")
+
+
+def gb(n: int) -> str:
+    return f"{n / 1e9:.1f} GB" if n < 1e12 else f"{n / 1e12:.1f} TB"
+
+
+# ---------------------------------------------------------------------------- the machine
+class RealSystem:
+    """What the installer asks of the machine it runs on."""
+
+    def version(self) -> str:
+        rel = load("system-state").os_release()
+        return rel.get("IMAGE_VERSION") or rel.get("VERSION_ID", "")
+
+    def hardware(self) -> dict:
+        gpu = None
+        try:
+            out = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                                 capture_output=True, text=True, timeout=20).stdout.strip().splitlines()
+            if out:
+                name, mem = [x.strip() for x in out[0].split(",")]
+                gpu = {"name": name, "memory_gb": round(int(mem) / 1024)}
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+        if gpu is None:
+            for dev in Path("/sys/bus/pci/devices").glob("*"):
+                try:
+                    if (dev / "vendor").read_text().strip() == "0x10de" and (dev / "class").read_text().startswith("0x03"):
+                        gpu = {"name": "NVIDIA graphics card (driver not loaded)", "memory_gb": None}
+                except OSError:
+                    continue
+        mem = next(int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
+                   if line.startswith("MemTotal:"))
+        try:
+            tpm = Path("/dev/tpmrm0").exists() and \
+                Path("/sys/class/tpm/tpm0/tpm_version_major").read_text().strip() == "2"
+        except OSError:
+            tpm = Path("/dev/tpmrm0").exists()
+        return {"gpu": gpu, "cores": os.cpu_count(), "memory_gb": round(mem / 2**20), "tpm": tpm}
+
+    def boot_disk(self) -> str:
+        return Path("/run/suveryn/boot-disk").read_text().strip().removeprefix("/dev/")
+
+    def disks(self) -> list[dict]:
+        out = json.loads(subprocess.run(["lsblk", "--json", "--bytes", "--nodeps", "-o", "NAME,TYPE,SIZE,MODEL,RM,RO"],
+                                        capture_output=True, text=True, check=True).stdout)
+        return [{"name": d["name"], "size": int(d["size"]), "model": (d.get("model") or "").strip(),
+                 "removable": bool(d.get("rm"))}
+                for d in out["blockdevices"] if d["type"] == "disk" and not d.get("ro") and int(d["size"]) > 0
+                and not d["name"].startswith(("zram", "loop", "sr", "ram"))]
+
+    def min_disk(self) -> int:
+        """The smallest disk the partition definitions fit on: their minimum sizes, plus 1 GiB of room."""
+        total = 2**30
+        for f in sorted((LIB / "repart.d").glob("*.conf")):
+            m = re.search(r"^SizeMinBytes=(\d+)([KMGT]?)", f.read_text(), re.M)
+            if m:
+                total += int(m.group(1)) * {"": 1, "K": 2**10, "M": 2**20, "G": 2**30, "T": 2**40}[m.group(2)]
+        return total
+
+    def models(self) -> list[dict]:
+        r = subprocess.run([str(LIB / "install"), "--list-models", "--json"], capture_output=True, text=True)
+        return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else []
+
+    def interfaces(self) -> list[dict]:
+        out = []
+        for name, mac in ENGINE.interfaces().items():
+            p = Path("/sys/class/net") / name
+            carrier = (p / "carrier").read_text().strip() == "1" if (p / "carrier").exists() else False
+            try:
+                speed = int((p / "speed").read_text())
+            except (OSError, ValueError):
+                speed = -1
+            model = ""
+            info = subprocess.run(["udevadm", "info", "--query=property", str(p)], capture_output=True, text=True).stdout
+            for key in ("ID_MODEL_FROM_DATABASE", "ID_MODEL"):
+                m = re.search(rf"^{key}=(.*)$", info, re.M)
+                if m:
+                    model = m.group(1)
+                    break
+            out.append({"name": name, "mac": mac, "model": model, "carrier": carrier, "speed": speed})
+        return out
+
+    def dhcp(self, iface: str) -> dict | None:
+        try:
+            addrs = json.loads(subprocess.run(["ip", "-j", "-4", "addr", "show", "dev", iface, "scope", "global"],
+                                              capture_output=True, text=True).stdout or "[]")
+            info = next((a for d in addrs for a in d.get("addr_info", []) if a.get("family") == "inet"), None)
+            if not info:
+                return None
+            routes = json.loads(subprocess.run(["ip", "-j", "-4", "route", "show", "default", "dev", iface],
+                                               capture_output=True, text=True).stdout or "[]")
+            dns = subprocess.run(["resolvectl", "dns", iface], capture_output=True, text=True).stdout
+            return {"address": f"{info['local']}/{info['prefixlen']}",
+                    "gateway": routes[0].get("gateway") if routes else None,
+                    "dns": re.findall(r"\d+\.\d+\.\d+\.\d+", dns.split(":", 1)[-1])}
+        except (OSError, ValueError):
+            return None
+
+    def timezones(self) -> list[str]:
+        zones = set()
+        tab = Path("/usr/share/zoneinfo/zone1970.tab")
+        if tab.exists():
+            for line in tab.read_text().splitlines():
+                if line and not line.startswith("#"):
+                    zones.add(line.split("\t")[2])
+        return sorted(zones | {"UTC"})
+
+    def apply_keyboard(self, kb: str) -> None:
+        """Load the layout on this console (a VT; nothing to do on a serial line)."""
+        layout, _, variant = kb.partition(":")
+        try:
+            keymap = subprocess.run(["ckbcomp", "-layout", layout, "-variant", variant], capture_output=True,
+                                    timeout=20).stdout
+            subprocess.run(["loadkeys", "-q"], input=keymap, capture_output=True, timeout=20)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def run_install(self, args: list[str]) -> subprocess.Popen:
+        return subprocess.Popen([str(LIB / "install"), *args, "--json"], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+
+    def reboot(self) -> None:
+        subprocess.run(["systemctl", "reboot"])
+
+
+class FakeSystem(RealSystem):
+    """A machine described in a JSON file (tests). install is simulated: its lines, then its result."""
+
+    def __init__(self, path: str):
+        self.path = Path(path)
+        self.d = json.loads(self.path.read_text())
+
+    def version(self):
+        return self.d.get("version", "0.0.0")
+
+    def hardware(self):
+        return self.d["hardware"]
+
+    def boot_disk(self):
+        return self.d["boot_disk"]
+
+    def disks(self):
+        return self.d["disks"]
+
+    def min_disk(self):
+        return self.d.get("min_disk", 10**9)
+
+    def models(self):
+        time.sleep(self.d.get("models_delay", 0))
+        return self.d["models"]
+
+    def interfaces(self):
+        return self.d["interfaces"]
+
+    def dhcp(self, iface):
+        return self.d.get("dhcp", {}).get(iface)
+
+    def timezones(self):
+        return self.d.get("timezones", ["Europe/Brussels", "Europe/Paris", "UTC"])
+
+    def apply_keyboard(self, kb):
+        self.record("keyboard", kb)
+
+    def record(self, key, value):
+        log = self.path.with_suffix(".log")
+        with open(log, "a") as f:
+            f.write(json.dumps({key: value}) + "\n")
+
+    def run_install(self, args):
+        self.record("install", args)
+        sim = self.d["install"]
+        code = (f"import sys,time,json\nfor l in {sim['lines']!r}:\n    print(l, file=sys.stderr, flush=True)\n"
+                f"    time.sleep({sim.get('delay', 0.05)})\nprint(json.dumps({sim.get('result', {})!r}))\n"
+                f"sys.exit({sim.get('exit', 0)})\n")
+        return subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+
+    def reboot(self):
+        self.record("reboot", True)
+        raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------- drawing
+class Ink:
+    """Colour pairs. On the appliance's console the 16 colours are set from the brand's dark theme
+    (console-colours, loaded with setvtrgb): black is the background #0B0D10, red the accent #FA5B35,
+    cyan the teal #3AD4CA, white the dim grey #A4A6A7, bright white the text #F3F4F5, blue the field
+    grey #272C32, magenta the bars' #12161B."""
+
+    def __init__(self):
+        self.ok = curses.has_colors()
+        if self.ok:
+            curses.start_color()
+            curses.use_default_colors()
+            # field: blue is the field grey (#272C32); bar: magenta is the bar black (#12161B).
+            for n, (fg, bg) in enumerate([(curses.COLOR_WHITE, -1), (curses.COLOR_RED, -1), (curses.COLOR_CYAN, -1),
+                                          (curses.COLOR_BLACK, curses.COLOR_RED), (curses.COLOR_WHITE, curses.COLOR_BLUE),
+                                          (curses.COLOR_WHITE, curses.COLOR_MAGENTA)], start=1):
+                try:
+                    curses.init_pair(n, fg, bg)
+                except curses.error:
+                    pass
+
+    def __call__(self, kind: str) -> int:
+        if not self.ok:
+            return {"bar": curses.A_REVERSE, "focus": curses.A_REVERSE, "strong": curses.A_BOLD}.get(kind, 0)
+        return {"dim": curses.color_pair(1), "text": curses.color_pair(1) | curses.A_BOLD,
+                "strong": curses.color_pair(1) | curses.A_BOLD, "accent": curses.color_pair(2) | curses.A_BOLD,
+                "ok": curses.color_pair(3) | curses.A_BOLD, "focus": curses.color_pair(4),
+                "field": curses.color_pair(5) | curses.A_BOLD, "bar": curses.color_pair(6)}[kind]
+
+
+class Canvas:
+    """Lines of styled pieces inside the box: a list of [(text, style), ...]."""
+
+    def __init__(self, width: int):
+        self.width = width
+        self.lines: list[list[tuple[str, str]]] = []
+
+    def add(self, *pieces, indent: int = 0) -> int:
+        """One line; when it is wider than the box, its last piece wraps under where that piece began."""
+        pieces = [(" " * indent, "text"), *pieces]
+        head, (last, style) = pieces[:-1], pieces[-1]
+        start = sum(len(t) for t, _ in head)
+        room = self.width - start
+        if len(last) <= room or room < 20:
+            self.lines.append([*head, (last if room >= 20 else last[: max(0, room)], style)])
+            return len(self.lines) - 1
+        # Continue under the last piece when what precedes it is a label column or blank; else under the
+        # line's own indent (a sentence made of several styled pieces).
+        joined = "".join(t for t, _ in head)
+        prev = head[-1][0] if head else ""
+        cont = start if (not prev.strip() or prev.endswith("  ") or len(head) <= 2 and prev.endswith(" ") and
+                         len(prev.strip()) <= 2) else len(joined) - len(joined.lstrip())
+        first = True
+        while last:
+            if len(last) <= room:
+                cut = len(last)
+            else:
+                cut = last.rfind(" ", 0, room + 1)
+                cut = room if cut <= 0 else cut
+            chunk, last = last[:cut].rstrip(), last[cut:].lstrip()
+            self.lines.append([*head, (chunk, style)] if first else [(" " * cont, "text"), (chunk, style)])
+            if not first:
+                room = self.width - cont
+            first = False
+        return len(self.lines) - 1
+
+    def wrap(self, text: str, style: str = "text", indent: int = 0, first: str = "") -> None:
+        words, line = text.split(), first
+        for w in words:
+            if len(line) + len(w) + (1 if line else 0) > self.width - indent:
+                self.add((line, style), indent=indent)
+                line = w
+            else:
+                line = f"{line} {w}" if line else w
+        if line:
+            self.add((line, style), indent=indent)
+
+    def blank(self) -> None:
+        self.lines.append([])
+
+
+# ---------------------------------------------------------------------------- fields
+class Field:
+    focusable = True
+    label = ""
+
+    def key(self, k) -> str | None:
+        """Handle a key; return "next", "submit" or None."""
+        return None
+
+
+class Radio(Field):
+    def __init__(self, label, options, value=None, on_change=None, disabled=()):
+        self.label, self.options = label, options  # [(value, text)]
+        self.disabled = set(disabled)
+        selectable = [v for v, _ in options if v not in self.disabled]
+        self.value = value if value in selectable else (selectable[0] if selectable else None)
+        self.on_change = on_change
+
+    def move(self, step):
+        values = [v for v, _ in self.options if v not in self.disabled]
+        if not values:
+            return
+        i = values.index(self.value) if self.value in values else 0
+        self.value = values[(i + step) % len(values)]
+        if self.on_change:
+            self.on_change(self.value)
+
+    def key(self, k):
+        if k in (curses.KEY_UP, curses.KEY_LEFT):
+            self.move(-1)
+        elif k in (curses.KEY_DOWN, curses.KEY_RIGHT):
+            self.move(1)
+
+    def draw(self, c: Canvas, focused: bool, col: int):
+        first = True
+        for v, text in self.options:
+            mark = "(*)" if v == self.value else "( )"
+            style = "focus" if focused and v == self.value else ("dim" if v in self.disabled else "text")
+            pieces = [(f" {mark} {text}".ljust(c.width - col - 2), style)]
+            c.add(((self.label if first else "").ljust(col), "dim"), *pieces)
+            first = False
+
+
+class Select(Field):
+    """A value from a long list: Enter opens it; type to narrow it down."""
+
+    def __init__(self, label, options, value, on_change=None, width=40):
+        self.label, self.options, self.value, self.on_change, self.width = label, options, value, on_change, width
+        self.open, self.filter, self.pos = False, "", 0
+
+    def shown(self):
+        f = self.filter.lower()
+        return [(v, t) for v, t in self.options if f in t.lower() or f in str(v).lower()]
+
+    def key(self, k):
+        if not self.open:
+            if k in (10, 13, curses.KEY_ENTER, ord(" ")):
+                self.open, self.filter = True, ""
+                values = [v for v, _ in self.shown()]
+                self.pos = values.index(self.value) if self.value in values else 0
+            return None
+        shown = self.shown()
+        if k in (10, 13, curses.KEY_ENTER):
+            if shown:
+                self.value = shown[min(self.pos, len(shown) - 1)][0]
+                if self.on_change:
+                    self.on_change(self.value)
+            self.open = False
+        elif k == 27:
+            self.open = False
+        elif k == curses.KEY_UP:
+            self.pos = max(0, self.pos - 1)
+        elif k == curses.KEY_DOWN:
+            self.pos = min(len(shown) - 1, self.pos + 1)
+        elif k in (curses.KEY_BACKSPACE, 127, 8):
+            self.filter, self.pos = self.filter[:-1], 0
+        elif (isinstance(k, str) and k.isprintable()) or (isinstance(k, int) and 32 <= k < 127):
+            self.filter += k if isinstance(k, str) else chr(k)
+            self.pos = 0
+        return None
+
+    def text(self):
+        return next((t for v, t in self.options if v == self.value), str(self.value))
+
+    def draw(self, c: Canvas, focused: bool, col: int):
+        w = min(self.width, c.width - col - 4)
+        c.add((self.label.ljust(col), "dim"), ("[ ", "dim"), ((self.text()[: w - 2]).ljust(w - 2) + "▾", "focus" if focused and not self.open else "field"), (" ]", "dim"))
+        if self.open:
+            shown = self.shown()
+            c.add((" " * col, "text"), ("  Type to search: ", "dim"), (self.filter + "_", "strong"))
+            top = max(0, self.pos - 4)
+            for i, (v, t) in enumerate(shown[top: top + 8], start=top):
+                c.add((" " * col, "text"), (f"  {t}".ljust(w), "focus" if i == self.pos else "text"))
+            if not shown:
+                c.add((" " * col, "text"), ("  nothing matches", "dim"))
+
+
+class Text(Field):
+    def __init__(self, label, value="", placeholder="", width=40, max_len=63, hint=""):
+        self.label, self.value, self.placeholder, self.width, self.max_len, self.hint = \
+            label, value, placeholder, width, max_len, hint
+
+    def key(self, k):
+        if k in (curses.KEY_BACKSPACE, 127, 8):
+            self.value = self.value[:-1]
+        elif isinstance(k, str) and k.isprintable():
+            if len(self.value) < self.max_len:
+                self.value += k
+        elif isinstance(k, int) and 32 <= k < 127 and len(self.value) < self.max_len:
+            self.value += chr(k)
+        return None
+
+    def draw(self, c: Canvas, focused: bool, col: int):
+        w = min(self.width, c.width - col - 4)
+        shown = self.value[-(w - 1):] if self.value else ""
+        if focused:
+            body = (shown + "_").ljust(w)
+        else:
+            body = (shown or self.placeholder).ljust(w)
+        c.add((self.label.ljust(col), "dim"), ("[ ", "dim"),
+              (body, "field" if (self.value or focused) else "dim"), (" ]", "dim"))
+        hint = self.hint() if callable(self.hint) else self.hint
+        if hint:
+            c.add((" " * col, "text"), (hint, "dim"))
+
+
+class Checklist(Field):
+    def __init__(self, items):
+        self.items = items  # dicts: label, right, right_style, note, note_style, enabled, checked
+        self.pos = next((i for i, it in enumerate(items) if it["enabled"]), 0)
+
+    def key(self, k):
+        enabled = [i for i, it in enumerate(self.items) if it["enabled"]]
+        if not enabled:
+            return None
+        if k == curses.KEY_UP:
+            prev = [i for i in enabled if i < self.pos]
+            self.pos = prev[-1] if prev else self.pos
+        elif k == curses.KEY_DOWN:
+            nxt = [i for i in enabled if i > self.pos]
+            self.pos = nxt[0] if nxt else self.pos
+        elif k == ord(" "):
+            it = self.items[self.pos]
+            it["checked"] = not it["checked"]
+        return None
+
+    def draw(self, c: Canvas, focused: bool, col: int):
+        for i, it in enumerate(self.items):
+            box = "[x]" if it["checked"] else ("[ ]" if it["enabled"] else "[-]")
+            left = f" {box}  {it['label']}"
+            mid = it.get("middle", "")
+            right = it.get("right", "")
+            w = c.width
+            line = left.ljust(int(w * 0.45)) + mid.ljust(int(w * 0.35))
+            line = line[: w - len(right) - 2].ljust(w - len(right) - 2)
+            style = "focus" if focused and i == self.pos else ("text" if it["enabled"] else "dim")
+            c.add((line, style), (right, "focus" if focused and i == self.pos else it.get("right_style", "text")))
+            if it.get("note"):
+                pieces = it["note"] if isinstance(it["note"], list) else [(it["note"], "dim")]
+                c.add(("       ", "text"), *pieces)
+            c.blank()
+
+
+class Button(Field):
+    def __init__(self, label, action):
+        self.label, self.action = label, action
+
+    def key(self, k):
+        if k in (10, 13, curses.KEY_ENTER):
+            return self.action
+        return None
+
+
+# ---------------------------------------------------------------------------- the screens
+class Screen:
+    title = ""
+    step = 1
+    help = ""
+    footer = [("↑↓", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("Esc", "Back"), ("F1", "Help")]
+
+    def __init__(self, app):
+        self.app = app
+        self.error = ""
+
+    def fields(self) -> list:
+        return []
+
+    def body(self, c: Canvas, focus) -> None:
+        pass
+
+    def leave(self) -> str | None:
+        """Checks before moving on: an error to show, or None."""
+        return None
+
+    def tick(self) -> bool:
+        """Called twice a second; True when the screen changed."""
+        return False
+
+
+class Language(Screen):
+    title, step = "Language, keyboard and time zone", 1
+    help = ("Language: the language of the web setup and of the appliance (English for now on this console).\n"
+            "Keyboard: the layout of the keyboard attached to this machine. Use the test field to check it.\n"
+            "Time zone: where the appliance is.")
+    footer = [("↑↓", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("F1", "Help")]
+
+    def __init__(self, app):
+        super().__init__(app)
+        a = app.answers
+        self.lang = Radio("Language", [("en", "English"), ("nl", "Nederlands"), ("fr", "Français")], a["language"])
+        self.kb = Select("Keyboard", list(ENGINE.KEYBOARDS.items()), a["keyboard"], on_change=app.system.apply_keyboard)
+        self.test = Text("Test it", placeholder="type here to check the layout", hint="Check a few letters: a, z, q, w, m and @.")
+        self.tz = Select("Time zone", [(z, z) for z in app.system.timezones()], a["timezone"])
+        self.next = Button("< Next >", "next")
+
+    def fields(self):
+        return [self.lang, self.kb, self.test, self.tz, self.next]
+
+    def body(self, c, focus):
+        c.wrap("This turns this machine into a sūveryn appliance. Afterwards, you finish setup from a browser "
+               "on another computer.")
+        c.blank()
+        for f in (self.lang, self.kb, self.test, self.tz):
+            f.draw(c, focus is f, 16)
+            c.blank()
+
+    def leave(self):
+        self.app.answers.update(language=self.lang.value, keyboard=self.kb.value, timezone=self.tz.value)
+
+
+class Hardware(Screen):
+    title, step = "Hardware and target disk", 2
+    help = ("The appliance needs an NVIDIA graphics card for the language models, and a TPM 2.0 chip that "
+            "unlocks the encrypted disk at every start. Everything on the disk you choose is erased.")
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.hw = app.system.hardware()
+        boot = app.system.boot_disk()
+        self.min = app.system.min_disk()
+        self.disks = [d for d in app.system.disks() if d["name"] != boot]
+        self.stick = next((d for d in app.system.disks() if d["name"] == boot), None)
+        options, disabled = [], []
+        for d in self.disks:
+            text = f"{d['name']:<10} {(d['model'] or 'disk')[:24]:<25} {gb(d['size'])}"
+            if d["size"] < self.min:
+                text += "  too small"
+                disabled.append(d["name"])
+            options.append((d["name"], text))
+        self.disk = Radio("", options, app.answers.get("disk"), disabled=disabled)
+        self.back, self.next = Button("< Back >", "back"), Button("< Next >", "next")
+
+    def problems(self) -> tuple[list, list]:
+        """(blocking, warnings) as lines for the hardware check."""
+        hw, block, warn = self.hw, [], []
+        if not hw["gpu"] and os.environ.get("SUVERYN_INSTALLER_ALLOW_NO_GPU") != "1":
+            block.append("No NVIDIA graphics card found: the language models need one.")
+        if not hw["tpm"]:
+            block.append("No TPM 2.0 found: switch it on in the firmware settings (often TPM, PTT or fTPM).")
+        if not self.disk.value:
+            block.append(f"No disk to install onto: it needs at least {gb(self.min)}.")
+        return block, warn
+
+    def fields(self):
+        return [self.disk, self.back, self.next]
+
+    def body(self, c, focus):
+        hw = self.hw
+        c.add(("Hardware check", "strong"))
+        def row(ok, label, value, note=None):
+            c.add((f"  {CHECK if ok else WARN} ", "ok" if ok else "accent"), (label.ljust(14), "dim"), (value, "text"))
+            if note:
+                c.add((" " * 19, "text"), (note, "dim"))
+        g = hw["gpu"]
+        if g:
+            mem = f" · {g['memory_gb']} GB" if g.get("memory_gb") else ""
+            ok = not g.get("memory_gb") or g["memory_gb"] >= MIN_GPU_GB
+            row(ok, "Graphics", g["name"] + mem,
+                "GeForce cards are licensed for on-premise office use only." if "GeForce" in g["name"] else
+                (None if ok else f"Recommended: {MIN_GPU_GB} GB. Larger models won't fit."))
+        else:
+            row(False, "Graphics", "no NVIDIA graphics card found")
+        row(True, "Processor", f"{hw['cores']} cores")
+        row(hw["tpm"], "Security", "TPM 2.0 · unlocks the encrypted disk" if hw["tpm"] else "no TPM 2.0 found")
+        mem_ok = hw["memory_gb"] >= RECOMMENDED_MEMORY_GB
+        row(mem_ok, "Memory", f"{hw['memory_gb']} GB" + ("" if mem_ok else f". Recommended: {RECOMMENDED_MEMORY_GB} GB."),
+            None if mem_ok else "You can continue. Long documents and several users at once will be slower.")
+        c.blank()
+        c.add(("Install to", "strong"))
+        self.disk.draw(c, focus is self.disk, 0)
+        if self.stick:
+            c.add((f"     {self.stick['name']:<10} {'Sūveryn installer':<25} {gb(self.stick['size'])}  installation medium", "dim"))
+        c.blank()
+        c.add((f"{WARN} ", "accent"), ("Everything on the selected disk will be erased. The disk is then encrypted.", "text"))
+
+    def leave(self):
+        block, _ = self.problems()
+        if block:
+            return block[0]
+        d = next(d for d in self.disks if d["name"] == self.disk.value)
+        self.app.answers.update(disk=d["name"], disk_size=d["size"], disk_model=d["model"], hardware=self.hw)
+
+
+def model_problem(error: str) -> str:
+    if "SHA-256" in error or "bytes, the manifest says" in error or "missing" in error:
+        return "Changed or damaged since it was signed."
+    if "trust" in error or "signature" in error or "signed" in error:
+        return "Signature not valid."
+    return error[:60]
+
+
+class Models(Screen):
+    title, step = "Language models", 3
+    help = ("Models come from the stick's suveryn-bundles partition. Each one is checked against Sūveryn Labs' "
+            "signature and every file's checksum; a model that fails is skipped. Several can be installed; "
+            "people choose one per conversation.")
+    footer = [("↑↓", "Move"), ("Space", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("Esc", "Back")]
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.list = None
+        self.back, self.next = Button("< Back >", "back"), Button("< Next >", "next")
+        self.build()
+
+    def build(self):
+        models = self.app.models
+        if models is None:
+            return
+        chosen = self.app.answers.get("models")
+        items = []
+        for m in models:
+            if m.get("valid"):
+                checked = (m["folder"] in chosen) if chosen is not None else bool(m.get("default"))
+                items.append({"folder": m["folder"], "label": m.get("title") or m["name"],
+                              "middle": f"{'default' if m.get('default') else 'optional'} · {gb(m['size'])}",
+                              "right": "", "size": m["size"], "note": m.get("description", ""),
+                              "enabled": True, "checked": checked})
+            else:
+                items.append({"folder": m["folder"], "label": m["folder"], "middle": "", "right": f"{WARN} skipped",
+                              "right_style": "accent", "enabled": False, "checked": False,
+                              "note": [(model_problem(m.get("error", "")) + " ", "accent"),
+                                       ("Not installed. Ask your partner for a new copy.", "dim")]})
+        self.list = Checklist(items)
+
+    def tick(self):
+        if self.list is None and self.app.models is not None:
+            self.build()
+            return True
+        return self.list is None
+
+    def free(self) -> int:
+        return self.app.answers.get("disk_size", 0) - self.app.system.min_disk()
+
+    def fields(self):
+        return ([self.list] if self.list and any(i["enabled"] for i in self.list.items) else []) + [self.back, self.next]
+
+    def body(self, c, focus):
+        if self.list is None:
+            c.add(("Checking the language models on this stick", "strong"))
+            c.wrap("Each model is checked against its signature and every file's checksum. This takes about a "
+                   f"minute per model. {int(time.time() - self.app.models_started)} s", "dim")
+            return
+        valid = [m for m in self.app.models if m.get("valid")]
+        c.add(("Found on this installation medium", "strong"))
+        c.add((f"Partition suveryn-bundles on {self.app.system.boot_disk()}", "dim"))
+        if valid:
+            keys = sorted({m["key"][:16] for m in valid})
+            c.add((f"{CHECK} ", "ok"), ("Signed by Sūveryn Labs · bundle key ", "text"), (", ".join(keys), "strong"))
+            c.add(("  matches a key built into this release", "dim"))
+        else:
+            c.add((f"{WARN} ", "accent"), ("No valid model on this stick.", "text"))
+        c.blank()
+        used = 0
+        for it in self.list.items:
+            if it["enabled"]:
+                used += it["size"] if it["checked"] else 0
+                fits = used <= self.free() or not it["checked"]
+                it["right"], it["right_style"] = (f"{CHECK} fits", "ok") if fits else (f"{WARN} too big", "accent")
+        self.list.draw(c, focus is self.list, 0)
+        c.add(("─" * c.width, "dim"))
+        chosen = [it for it in self.list.items if it["checked"]]
+        g = self.app.answers.get("hardware", {}).get("gpu")
+        if g and g.get("memory_gb"):
+            c.add(("Graphics".ljust(16), "dim"), (f"{g['memory_gb']} GB · one model active at a time, "
+                                                   "switching takes a few seconds", "text"))
+        disk = self.app.answers.get("disk", "")
+        c.add(("Disk".ljust(16), "dim"), (f"{len(chosen)} model{'s' if len(chosen) != 1 else ''} · {gb(used)} "
+                                          f"of {gb(self.app.answers.get('disk_size', 0))} on {disk}", "text"))
+
+    def leave(self):
+        if self.list is None:
+            return "Still checking the models on the stick. A moment, please."
+        chosen = [it for it in self.list.items if it["checked"]]
+        if any(it["enabled"] for it in self.list.items) and not chosen:
+            return "Choose at least one model (Space ticks it)."
+        if sum(it["size"] for it in chosen) > self.free():
+            return "The chosen models don't fit on the disk. Untick one."
+        self.app.answers["models"] = [it["folder"] for it in chosen]
+        self.app.answers["model_titles"] = [it["label"] for it in chosen]
+
+
+class Network(Screen):
+    title, step = "Network", 4
+    help = ("The name is how people reach the appliance: https://<name>.local. With DHCP the office's network "
+            "gives the address; ask for a reservation so it stays the same. Without DHCP, enter a fixed address "
+            "with its prefix, e.g. 192.168.1.50/24.")
+
+    def __init__(self, app):
+        super().__init__(app)
+        a = app.answers
+        self.ports = app.system.interfaces()
+        opts = []
+        for p in self.ports:
+            state = (f"connected · {p['speed'] // 1000 if p['speed'] >= 1000 else p['speed']} "
+                     f"{'Gbit/s' if p['speed'] >= 1000 else 'Mbit/s'}" if p["carrier"] and p["speed"] > 0
+                     else "connected" if p["carrier"] else "no cable")
+            opts.append((p["name"], f"{p['name']:<10} {p['model'][:26]:<27} {state}"))
+        first = next((p["name"] for p in self.ports if p["carrier"]), self.ports[0]["name"] if self.ports else None)
+        self.port = Radio("Interface", opts, a.get("interface") or first, on_change=lambda v: self.restart_dhcp())
+        self.name = Text("Name", a.get("name", ""), placeholder="e.g. notary-brussels-01",
+                         hint=lambda: f"Reachable as {self.name.value or 'name'}.local. Letters, digits and hyphens.")
+        self.mode = Radio("Address", [("dhcp", "Automatic (DHCP)"), ("fixed", "Fixed address")],
+                          a.get("address_mode", "dhcp"))
+        self.ip = Text("IP address", a.get("fixed_address", ""), placeholder="192.168.1.50/24", width=24)
+        self.gw = Text("Gateway", a.get("fixed_gateway", ""), placeholder="192.168.1.1", width=24)
+        self.dns = Text("DNS server", a.get("fixed_dns", ""), placeholder="192.168.1.1", width=24)
+        self.back, self.retry, self.next = Button("< Back >", "back"), Button("< Retry DHCP >", "retry"), Button("< Next >", "next")
+        self.lease, self.timed_out = None, False
+        self.restart_dhcp()
+
+    def restart_dhcp(self):
+        self.lease, self.timed_out, self.dhcp_started = None, False, time.time()
+
+    def tick(self):
+        if self.mode.value != "dhcp" and not self.timed_out:
+            return False
+        if self.lease is None and self.port.value and not self.timed_out:
+            self.lease = self.app.system.dhcp(self.port.value)
+            if self.lease is None and time.time() - self.dhcp_started > DHCP_WAIT:
+                self.timed_out = True
+                self.mode.value = "fixed"
+            return True
+        return False
+
+    def fields(self):
+        f = [self.port, self.name, self.mode]
+        if self.mode.value == "fixed":
+            f += [self.ip, self.gw, self.dns]
+        return f + [self.back] + ([self.retry] if self.timed_out else []) + [self.next]
+
+    def body(self, c, focus):
+        self.port.draw(c, focus is self.port, 16)
+        c.blank()
+        self.name.draw(c, focus is self.name, 16)
+        c.blank()
+        self.mode.draw(c, focus is self.mode, 16)
+        if self.mode.value == "dhcp":
+            if self.lease:
+                c.add((" " * 16, "text"), (f"{CHECK} ", "ok"), (f"Received {self.lease['address']}", "text"))
+                extra = " · ".join(x for x in (f"gateway {self.lease['gateway']}" if self.lease.get("gateway") else "",
+                                               f"DNS {', '.join(self.lease['dns'])}" if self.lease.get("dns") else "") if x)
+                if extra:
+                    c.add((" " * 18, "text"), (extra, "dim"))
+            else:
+                c.add((" " * 16, "text"), (f"Waiting for an address from DHCP… {int(time.time() - self.dhcp_started)} s", "dim"))
+            c.blank()
+            c.wrap("Ask your network administrator to reserve this address for the appliance, so it stays the "
+                   "same after a restart.", "dim")
+        else:
+            if self.timed_out:
+                c.add((" " * 16, "text"), (f"{WARN} ", "accent"), (f"No address received from DHCP after {DHCP_WAIT} seconds.", "text"))
+                c.add((" " * 18, "text"), ("Check the cable, or enter a fixed address below.", "dim"))
+            c.blank()
+            for f in (self.ip, self.gw, self.dns):
+                f.draw(c, focus is f, 16)
+            c.blank()
+            c.wrap("Ask your network administrator for a free address in your office network.", "dim")
+
+    def leave(self):
+        try:
+            ENGINE.check_name(self.name.value)
+        except ENGINE.Refused:
+            return "The name can be letters, digits and hyphens (at most 63), not starting or ending with a hyphen."
+        if not self.port.value:
+            return "No Ethernet port found."
+        args = Namespace(interface=self.port.value, address="dhcp", gateway=None, dns=None)
+        if self.mode.value == "fixed":
+            args = Namespace(interface=self.port.value, address=self.ip.value.strip(),
+                             gateway=self.gw.value.strip() or None, dns=self.dns.value.strip() or None)
+        try:
+            ENGINE.network_file(args, ports={p["name"]: p["mac"] for p in self.ports})
+        except ENGINE.Refused as e:
+            return str(e)[0].upper() + str(e)[1:] + "."
+        self.app.answers.update(interface=self.port.value, name=self.name.value, address_mode=self.mode.value,
+                                fixed_address=self.ip.value.strip(), fixed_gateway=self.gw.value.strip(),
+                                fixed_dns=self.dns.value.strip(), lease=self.lease)
+
+    def key(self, k):
+        if k == "retry":
+            self.mode.value = "dhcp"
+            self.restart_dhcp()
+            return True
+        return False
+
+
+class Summary(Screen):
+    title, step = "Ready to install", 5
+    help = "Check the answers. Installing erases the disk; type ERASE (capitals) to confirm."
+    footer = [("Tab", "Next field"), ("Enter", "Install"), ("Esc", "Back"), ("F1", "Help")]
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.confirm = Text("", "", placeholder="", width=12, max_len=10)
+        self.back, self.install = Button("< Back >", "back"), Button("< Install >", "next")
+
+    def fields(self):
+        return [self.confirm, self.back, self.install]
+
+    def body(self, c, focus):
+        a = self.app.answers
+        addr = (f"{a['lease']['address']} · DHCP" if a.get("lease") else "DHCP") if a["address_mode"] == "dhcp" \
+            else f"{a['fixed_address']} · fixed"
+        hw = a["hardware"]
+        rows = [("Keyboard", ENGINE.KEYBOARDS[a["keyboard"]]), ("Time zone", a["timezone"]),
+                ("Disk", f"{a['disk']} · {a['disk_model'] or 'disk'} · {gb(a['disk_size'])}"),
+                ("Encryption", "LUKS2 · unlocks with this machine's TPM"), ("Name", a["name"]), ("Address", addr),
+                ("Models", ", ".join(a["model_titles"]) or "none")]
+        for label, value in rows:
+            c.add((label.ljust(16), "dim"), (value, "text"))
+        if hw["memory_gb"] < RECOMMENDED_MEMORY_GB:
+            c.add(("Memory".ljust(16), "dim"), (f"{WARN} ", "accent"),
+                  (f"{hw['memory_gb']} GB, below the recommended {RECOMMENDED_MEMORY_GB} GB", "text"))
+        c.blank()
+        c.add((f"{WARN} ", "accent"), (f"All data on {a['disk']} will be permanently erased.", "strong"))
+        c.blank()
+        self.confirm.label = "Type ERASE to confirm  "
+        self.confirm.draw(c, focus is self.confirm, 24)
+
+    def leave(self):
+        if self.confirm.value != "ERASE":
+            return "Type ERASE in capitals to confirm."
+
+
+class Installing(Screen):
+    title, step = "Installing the sūveryn appliance", 6
+    footer = [("", "Installation in progress. Keys are disabled.")]
+
+    def __init__(self, app):
+        super().__init__(app)
+        a = app.answers
+        self.items = ["Checking the language models against their signatures",
+                      f"Partitioning {a['disk']} and copying system files",
+                      "Encrypting the disk (LUKS2, a new key for this machine)",
+                      "Copying language models",
+                      "Applying the name and network settings",
+                      "Linking the disk key to this machine's TPM",
+                      "Installing the boot loader"]
+        self.at, self.detail, self.percent = 0, "", 0.0
+        self.failed, self.result, self.lines = None, None, []
+        self.done = False
+        args = ["--disk", f"/dev/{a['disk']}", "--name", a["name"], "--language", a["language"],
+                "--keyboard", a["keyboard"], "--timezone", a["timezone"], "--interface", a["interface"]]
+        if a["address_mode"] == "fixed":
+            args += ["--address", a["fixed_address"], "--dns", a["fixed_dns"]]
+            if a["fixed_gateway"]:
+                args += ["--gateway", a["fixed_gateway"]]
+        for m in a["models"]:
+            args += ["--model", m]
+        self.proc = app.system.run_install(args)
+        self.sizes = {m["folder"]: m["size"] for m in app.models or [] if m.get("valid")}
+        self.total_models = sum(self.sizes.get(m, 0) for m in a["models"]) or 1
+        self.copied, self.checked, self.current = 0, 0, None
+        threading.Thread(target=self.read, daemon=True).start()
+
+    def read(self):
+        for line in self.proc.stderr:
+            line = line.rstrip()
+            self.lines.append(line)
+            self.follow(line)
+        out = self.proc.stdout.read()
+        code = self.proc.wait()
+        if code == 0:
+            try:
+                self.result = json.loads(out)
+                self.at, self.percent = len(self.items), 100.0
+            except ValueError:
+                self.failed = "the installer gave no result"
+        else:
+            last = [ln for ln in self.lines if not ln.startswith(("bundle:", "step ", "install-disk ["))]
+            self.failed = (last[-1] if last else f"exit {code}").removeprefix("install: ")
+        self.done = True
+
+    def follow(self, line):
+        a = self.app.answers
+        m = re.match(r"install: checking (.+)", line)
+        if m:
+            self.at, self.current = 0, m.group(1)
+            self.detail = f"{a['models'].index(self.current) + 1} of {len(a['models'])}" if self.current in a["models"] else ""
+        elif line.startswith("step 1/"):
+            self.at, self.detail, self.percent = 1, "", 25.0
+        elif line.startswith("install-disk") and "enrolling" in line:
+            pass
+        elif line.startswith("step 2/"):
+            self.at, self.percent = 3, 40.0
+        elif (m := re.match(r"install: copying (.+)", line)):
+            self.current = m.group(1)
+            n = a["models"].index(self.current) + 1 if self.current in a["models"] else 0
+            title = a["model_titles"][n - 1] if n else self.current
+            self.detail = f"{n} of {len(a['models'])} · {title}"
+        elif (m := re.match(r"bundle: \[(\d+)/(\d+)\] .* \((\d+) MiB\)", line)):
+            if self.at == 3:
+                self.copied += int(m.group(3)) * 2**20
+                self.percent = 40.0 + 40.0 * min(1.0, self.copied / self.total_models)
+            else:
+                self.checked += int(m.group(3)) * 2**20
+                self.percent = 20.0 * min(1.0, self.checked / self.total_models)
+        elif line.startswith("step 3/"):
+            self.at, self.detail, self.percent = 5, "", 85.0
+        elif line.startswith("step 4/"):
+            self.at, self.percent = 6, 95.0
+
+    def tick(self):
+        if self.done and self.result and not self.failed:
+            self.app.answers["result"] = self.result
+            self.app.go(RecoveryKey)
+        return True
+
+    def body(self, c, focus):
+        w = min(46, c.width - 10)
+        filled = int(w * self.percent / 100)
+        c.add(("█" * filled, "accent"), ("░" * (w - filled), "dim"), (f"  {int(self.percent)}%", "text"))
+        c.blank()
+        for i, text in enumerate(self.items):
+            if i < self.at or (self.done and not self.failed):
+                c.add((f"{CHECK} ", "ok"), (text, "text"))
+            elif i == self.at:
+                c.add((f"{WARN if self.failed else ARROW} ", "accent"),
+                      (text + (f" · {self.detail}" if self.detail and i in (0, 3) else ""), "accent"))
+            else:
+                c.add(("  ", "text"), (text, "dim"))
+        c.blank()
+        if self.failed:
+            c.add((f"{WARN} ", "accent"), ("The installation failed.", "strong"))
+            c.wrap(self.failed[:1].upper() + self.failed[1:], "accent", indent=2)
+            c.wrap(f"Nothing on the stick changed. The disk {self.app.answers['disk']} may be partly written; "
+                   "installing again erases it anew.", "dim", indent=2)
+        else:
+            c.add(("This takes about ten minutes. Do not turn off the machine.", "text"))
+            c.add(("Then you write down the disk recovery key, and the machine restarts.", "dim"))
+            c.add(("This appliance's ID and signing key are made at its first start.", "dim"))
+
+    def fields(self):
+        if self.failed:
+            self.footer = [("Enter", "Back to the summary")]
+            return [Button("< Back to the summary >", "back")]
+        return []
+
+
+class RecoveryKey(Screen):
+    title, step = "Write down the disk recovery key", 6
+    help = ("The recovery key opens the encrypted disk when the TPM can't: after a BIOS or firmware update, a "
+            "Secure Boot change, or on another machine. Keep it on paper, away from the appliance.")
+    footer = [("Enter", "Restart"), ("", "Remove the installation medium before restarting.")]
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.key_text = app.answers["result"]["recovery_key"]
+        self.confirm = Text("Type the first group to confirm  ", "", width=10, max_len=8)
+        self.restart = Button("< Restart >", "restart")
+
+    def fields(self):
+        return [self.confirm, self.restart]
+
+    def body(self, c, focus):
+        c.add((f"{CHECK} ", "ok"), ("The disk is encrypted and linked to this machine's TPM. It unlocks by itself "
+                                    "at every start.", "text"))
+        c.wrap("You need this key only if it can't: after a BIOS or firmware update, a Secure Boot change, or when "
+               "the disk is moved to another machine.", "dim", indent=2)
+        c.blank()
+        groups = self.key_text.split("-")
+        c.add(("    " + "-".join(groups[:4]), "strong"))
+        c.add(("    " + "-".join(groups[4:]), "strong"))
+        c.blank()
+        c.add((f"{WARN} ", "accent"), ("This is the only time it is shown. It is not stored on this machine.", "strong"))
+        c.wrap("Write it on paper and keep it with the office's other important documents, not with the appliance.",
+               "dim", indent=2)
+        c.blank()
+        ok = self.confirm.value == groups[0]
+        self.confirm.draw(c, focus is self.confirm, 34)
+        if ok:
+            c.add((" " * 34, "text"), (f"{CHECK} matches", "ok"))
+
+    def leave(self):
+        if self.confirm.value != self.key_text.split("-")[0]:
+            return "Type the first group of the key, as shown, to confirm you wrote it down."
+
+
+FLOW = [Language, Hardware, Models, Network, Summary]
+
+
+# ---------------------------------------------------------------------------- the program
+class App:
+    def __init__(self, scr, system):
+        self.scr, self.system = scr, system
+        self.answers = {"language": "en", "keyboard": "be", "timezone": "Europe/Brussels", "models": None}
+        self.version = system.version()
+        self.models, self.models_started = None, time.time()
+        threading.Thread(target=self.check_models, daemon=True).start()
+        self.ink = Ink()
+        self.screens: dict = {}
+        self.screen = None
+        self.focus = 0
+        self.help_open = False
+        self.go(Language)
+
+    def check_models(self):
+        try:
+            self.models = self.system.models()
+        except Exception as e:  # noqa: BLE001 (shown, not hidden)
+            self.models = [{"folder": "?", "valid": False, "error": str(e)}]
+
+    def go(self, cls):
+        # A screen keeps its fields when you come back to it; the ones after the hardware check are
+        # rebuilt from the answers, which may have changed.
+        if cls not in self.screens or cls in (Models, Summary, Installing, RecoveryKey):
+            self.screens[cls] = cls(self)
+        self.screen, self.focus, self.help_open = self.screens[cls], 0, False
+        self.screen.error = ""
+
+    def fields(self):
+        return self.screen.fields()
+
+    def draw(self):
+        scr, ink = self.scr, self.ink
+        scr.erase()
+        rows, cols = scr.getmaxyx()
+        def put(y, x, text, style="text"):
+            if 0 <= y < rows and x < cols:
+                try:
+                    scr.addstr(y, max(0, x), text[: max(0, cols - x - (1 if y == rows - 1 else 0))], ink(style))
+                except curses.error:
+                    pass
+        put(0, 0, " " * cols, "bar")
+        put(0, 1, "Sūveryn", "strong")
+        put(0, 9, "installer", "dim")
+        right = f"{self.version} · Step {self.screen.step} of {STEPS} "
+        put(0, cols - len(right), right, "dim")
+        width = min(cols - 4, 92)
+        c = Canvas(width - 6)
+        fields = self.fields()
+        focus = fields[self.focus] if fields and self.focus < len(fields) else None
+        self.screen.body(c, focus)
+        buttons = [f for f in fields if isinstance(f, Button)]
+        if self.screen.error:
+            c.blank()
+            c.add((f"{WARN} ", "accent"), (self.screen.error, "accent"))
+        lines = c.lines
+        while len(lines) + (4 if buttons else 2) > rows - 2 and [] in lines:  # a small console: fewer gaps
+            lines.remove([])
+        height = len(lines) + (4 if buttons else 2)
+        top = max(1, (rows - height) // 2)
+        left = (cols - width) // 2
+        try:
+            win = scr.derwin(min(height, rows - 2), width, top, left)
+            win.attrset(ink("dim"))
+            win.border()
+        except curses.error:
+            win = None
+        put(top, left + 2, f" {self.screen.title} ", "strong")
+        for i, line in enumerate(lines):
+            x = left + 3
+            for text, style in line:
+                put(top + 1 + i, x, text, style)
+                x += len(text)
+        if buttons:
+            x = left + width - 3 - sum(len(b.label) + 3 for b in buttons)
+            for b in buttons:
+                put(top + height - 2, x, b.label, "focus" if b is focus else "text")
+                x += len(b.label) + 3
+        if self.help_open and self.screen.help:
+            hc = Canvas(min(cols - 10, 70))
+            for para in self.screen.help.split("\n"):
+                hc.wrap(para)
+            hc.blank()
+            hc.add(("To leave the installer, remove the stick and press Ctrl+Alt+Del.", "dim"))
+            hc.add(("Esc closes this help.", "dim"))
+            hy = max(2, (rows - len(hc.lines) - 2) // 2)
+            hx = (cols - hc.width - 4) // 2
+            for i in range(len(hc.lines) + 2):
+                put(hy + i, hx, " " * (hc.width + 4), "field")
+            put(hy, hx + 2, " Help ", "strong")
+            for i, line in enumerate(hc.lines):
+                x = hx + 2
+                for text, style in line:
+                    put(hy + 1 + i, x, text, "field")
+                    x += len(text)
+        put(rows - 1, 0, " " * (cols - 1), "bar")
+        x = 1
+        for k, v in self.screen.footer:
+            if k:
+                put(rows - 1, x, k, "strong")
+                x += len(k) + 1
+            put(rows - 1, x, v, "dim")
+            x += len(v) + 3
+        scr.refresh()
+
+    def handle(self, k):
+        if self.help_open:
+            if k in (27, curses.KEY_F1):
+                self.help_open = False
+            return
+        if k == curses.KEY_F1:
+            self.help_open = True
+            return
+        if k == 12:  # Ctrl+L
+            self.scr.clear()
+            return
+        if isinstance(self.screen, Installing) and not self.screen.failed:
+            return  # keys are disabled while installing
+        fields = self.fields()
+        if not fields:
+            return
+        self.focus = min(self.focus, len(fields) - 1)
+        f = fields[self.focus]
+        if isinstance(f, Select) and f.open:
+            f.key(k)
+            return
+        if k == 9:  # Tab
+            self.focus = (self.focus + 1) % len(fields)
+            return
+        if k == curses.KEY_BTAB:
+            self.focus = (self.focus - 1) % len(fields)
+            return
+        if k == 27:
+            self.act("back")
+            return
+        if isinstance(f, (Radio, Checklist)) or (isinstance(f, Select) and k in (10, 13, curses.KEY_ENTER, ord(" "))):
+            if k in (10, 13, curses.KEY_ENTER) and not isinstance(f, Select):
+                self.act("next")
+                return
+            f.key(k)
+            self.screen.error = ""
+            return
+        if isinstance(f, Button):
+            if k in (10, 13, curses.KEY_ENTER):
+                self.act(f.action)
+            elif k in (curses.KEY_UP, curses.KEY_LEFT):
+                self.focus = (self.focus - 1) % len(fields)
+            elif k in (curses.KEY_DOWN, curses.KEY_RIGHT):
+                self.focus = (self.focus + 1) % len(fields)
+            return
+        if k in (10, 13, curses.KEY_ENTER):
+            self.act("restart" if isinstance(self.screen, RecoveryKey) else "next")
+            return
+        if k == curses.KEY_UP:
+            self.focus = (self.focus - 1) % len(fields)
+            return
+        if k == curses.KEY_DOWN:
+            self.focus = (self.focus + 1) % len(fields)
+            return
+        f.key(k)
+        self.screen.error = ""
+
+    def act(self, action):
+        s = self.screen
+        if action == "back":
+            if isinstance(s, Installing):
+                self.go(Summary)
+            elif not isinstance(s, (Language, RecoveryKey)):
+                self.go(FLOW[FLOW.index(type(s)) - 1])
+        elif action == "retry" and isinstance(s, Network):
+            s.key("retry")
+        elif action == "next":
+            err = s.leave()
+            if err:
+                s.error = err
+                return
+            if isinstance(s, Summary):
+                self.go(Installing)
+            else:
+                self.go(FLOW[FLOW.index(type(s)) + 1])
+        elif action == "restart" and isinstance(s, RecoveryKey):
+            err = s.leave()
+            if err:
+                s.error = err
+                return
+            s.error = ""
+            self.draw()
+            self.system.reboot()
+
+    def run(self):
+        curses.curs_set(0)
+        self.scr.keypad(True)
+        self.scr.timeout(500)
+        while True:
+            self.screen.tick()
+            self.draw()
+            try:
+                k = self.scr.get_wch()
+            except curses.error:
+                continue
+            # Plain ASCII as numbers (Tab 9, Enter 10, Esc 27, Space 32, Backspace 127); other letters
+            # (ū, é) stay text.
+            if isinstance(k, str) and len(k) == 1 and ord(k) < 128:
+                k = ord(k)
+            self.handle(k)
+
+
+def main() -> int:
+    os.environ.setdefault("ESCDELAY", "50")
+    fake = os.environ.get("SUVERYN_INSTALLER_FAKE")
+    system = FakeSystem(fake) if fake else RealSystem()
+    if not fake and Path("/run/suveryn/boot-mode").read_text().strip() != "installer":
+        print("installer-ui: this system didn't start from the installer stick", file=sys.stderr)
+        return 2
+    import locale
+    locale.setlocale(locale.LC_ALL, "C.UTF-8")
+    curses.wrapper(lambda scr: App(scr, system).run())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

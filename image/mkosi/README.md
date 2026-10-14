@@ -38,12 +38,12 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 | `mkosi.conf`, `mkosi.conf.d/` | Ubuntu 24.04, the packages, the boot file. The appliance adds `linux-generic` and `linux-firmware`, and an initrd that holds only what reaches the disk |
 | `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `suveryn-boot-mode` (installed appliance or installer, and `/var` for it) with `boot-disk` and its udev rule |
 | `mkosi.repart/` | What a release brings: the EFI partition (1 GiB), slot A (EROFS, 32 GiB) and its verity. mkosi puts the root hash in the boot file (`roothash=`) |
-| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/tmp` in memory), an empty `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install` and `install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
+| `mkosi.extra/` | Files in the system: `/etc/fstab` (`/tmp` in memory), an empty `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install`, `installer-ui` and `install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
 | `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock |
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `make-stick` | Makes an installer stick: the disk image and a bundles partition with signed bundles |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
-| `test/` | `test_mkosi_config.py`, `test_install.py` (any machine), `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
+| `test/` | `test_mkosi_config.py`, `test_install.py`, `test_installer_ui.py` (any machine; the console installer in a pseudo-terminal), `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
 
 ## How the pieces fit
 
@@ -120,8 +120,31 @@ sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundle
   firmware boot entry. Progress is `step N/4: …` on stderr; `--json` prints the result, with the
   recovery key (shown once, C7). `install --list-models [--json]` checks the stick's bundles (C3).
 
-Still to come in #37: the console screens themselves (C1 to C7), the console after the first boot
-(C8) and the unlock screen (C8b), mDNS (`<name>.local`), the keyboard layout.
+### The console installer (C1 to C7)
+
+`/usr/lib/suveryn/installer-ui` (`suveryn-installer.service`, on the first console, in installer mode
+only) shows the approved screens and hands the answers to `install`:
+
+| Screen | What it asks or shows |
+|---|---|
+| C1 | Language (stored for the web setup; this console is English for now), keyboard layout (loaded at once; a test field), time zone |
+| C2 | The hardware check (NVIDIA card and its memory, cores, TPM 2.0, memory against the recommended 64 GB) and the target disk; the stick and disks too small for the partition definitions can't be chosen. No TPM, no NVIDIA card or no usable disk stops here |
+| C3 | The stick's models, each checked in full in the background from the start: signed ones offered (title, description, size, default from the bundle's manifest), others skipped with the reason; whether they fit on the disk |
+| C4 | The Ethernet port, the name (`<name>.local`), DHCP (the lease shown) or a fixed address; after 30 s without a lease it switches to a fixed address, with Retry DHCP (C4b) |
+| C5 | The summary; type ERASE to install |
+| C6 | Progress, from `install`'s steps; keys are disabled. A failure says which step and why, and goes back to the summary |
+| C7 | The recovery key, once; typing its first group enables Restart |
+
+Keys: arrows select, Tab moves, Space ticks, Enter continues (opens a list on a list field), Esc goes
+back, F1 shows help, Ctrl+L redraws. The console looks like the design: the brand's dark theme as the
+console's 16 colours (`console-colours`, loaded with `setvtrgb`) and Terminus with the Uni2 character
+set (`/etc/default/console-setup`), which has the "ū". It has no "✓", so the screens show "√" there.
+
+The keyboard layout is kept on the data partition (`/etc/default/keyboard` links there, design note) and
+loaded at every start by console-setup.
+
+Still to come in #37: the console after the first start (C8) and the unlock screen (C8b), mDNS
+(`<name>.local`), and the Dutch and French copy for this console (not in the design yet).
 
 ## The appliance's identity and system state (#35)
 
@@ -173,31 +196,35 @@ sudo image/mkosi/test/run-vm-tests                      # the test system, in a 
 ```
 
 `run-vm-tests` (QEMU with UEFI firmware and a virtual TPM, swtpm) makes a stick with `make-stick`,
-reads the self-test's lines on the serial console, and types at the recovery-key prompt:
+reads the self-test's lines on the serial console, types at the recovery-key prompt, and drives the
+console installer through a terminal emulator (pyte) the way a person would:
 
-1. **install from the stick**: the stick (the test image and three test bundles: a signed one, a
+1. **the installer's checks**: the stick (the test image and three test bundles: a signed one, a
    changed one, one signed with an unknown key) and an empty second disk. The stick starts in
    installer mode, without a prompt: slot A from the stick, `/var` in memory, no data partition
-   opened, no identity. The installer lists the bundles (the signed one valid, the other two refused),
-   refuses a bad name and the changed bundle without writing anything, then installs: slot A copied
-   (verified against the root hash), the data partition encrypted with the TPM (PCR 7) and a recovery
-   key only, the signed model installed, a boot entry; the stick untouched;
-2. **boot the installed disk**: the TPM opens the data partition without a prompt, and every rule
+   opened, no identity. `install --list-models` finds the signed bundle valid and refuses the other
+   two; a bad name and the changed bundle are refused without writing anything; the stick untouched;
+2. **install with the console installer**: C1 to C7 on the console: the defaults on C1, the empty disk
+   chosen, the signed model offered and ticked and the other two skipped with their reasons, the name
+   typed and the DHCP lease shown, ERASE typed, the progress, the recovery key read off the screen and
+   its first group typed, Restart;
+3. **boot the installed disk**: the TPM opens the data partition without a prompt, and every rule
    holds: slot A from the boot disk, installed mode with its own disk's data partition; root from the
    verity device, read-only (EROFS), can't be written, the boot file's root hash, verified, every block
    readable; `/var` the encrypted data partition, `noexec,nosuid,nodev`, nothing runs from it; `/tmp`
-   in memory; no swap; the `/etc` links; the image's `/var` restored; the installer's name, time zone
-   and network file; the network up; the identity made, sealed to the TPM (`host+tpm2`), its private
-   key nowhere in plain form, signing and verifying (also with `openssl` alone); the system state
-   (release, slot, root hash, verity, PCR 11); two bundle keys trusted; the installed model verifies;
-3. **boot it again with the stick attached**: the same, from its own disk; the same machine-id and
+   in memory; no swap; the `/etc` links; the image's `/var` restored; the installer's name, time zone,
+   keyboard layout and network file (and, on the first start, its firmware boot entry); the network
+   up; the identity made, sealed to the TPM (`host+tpm2`), its private key nowhere in plain form,
+   signing and verifying (also with `openssl` alone); the system state (release, slot, root hash,
+   verity, PCR 11); two bundle keys trusted; the installed model verifies;
+4. **boot it again with the stick attached**: the same, from its own disk; the same machine-id and
    identity;
-4. **the stick beside the installed disk**: installer mode, slot A from the stick, and the installed
+5. **the stick beside the installed disk**: installer mode, slot A from the stick, and the installed
    disk's data partition is never opened (no prompt);
-5. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
+6. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
    accepts the right one; every rule holds and the machine-id is unchanged; the identity is kept but
    refuses to sign (sealed to the old TPM);
-6. **wrong keys**: after five, the unlock gives up and nothing starts;
-7. **a changed block in slot A**: verity refuses it ("data block … is corrupt").
+7. **wrong keys**: after five, the unlock gives up and nothing starts;
+8. **a changed block in slot A**: verity refuses it ("data block … is corrupt").
 
 Without KVM a boot takes two to five minutes and the whole run about 40; with KVM, a few minutes.

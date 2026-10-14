@@ -133,7 +133,7 @@ def test_the_machine_id_is_mounted_from_the_data_partition_in_the_initrd():
 def test_only_the_listed_etc_paths_link_into_the_data_partition():
     links = dict(re.findall(r"^link (\S+)\s+(\S+)$", POSTINST, re.M))
     into_var = {target: dest for target, dest in links.items() if target.startswith("/var/")}
-    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/systemd/network"}
+    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/default/keyboard", "/etc/systemd/network"}
     for path in into_var.values():
         assert f"`{path}" in DESIGN, f"{path} isn't in the design note's list"
     assert links["/run/systemd/resolve/stub-resolv.conf"] == "/etc/resolv.conf"
@@ -259,3 +259,26 @@ def test_the_test_bundle_keys_never_reach_the_appliance():
 @pytest.mark.xfail(strict=True, reason="waiting for the two release keys from AWS KMS (bundle-keys/README.md)")
 def test_the_appliance_trusts_two_release_keys():
     assert sorted(p.name for p in BUNDLE_KEYS.glob("*.pem")) == ["release-current.pem", "release-spare.pem"]
+
+
+def test_the_console_installer_runs_on_the_stick_only():
+    unit = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-installer.service").read_text()
+    assert "ConditionPathExists=/run/suveryn/installer-mode" in unit and "TTYPath=/dev/tty1" in unit
+    assert "ExecStart=/usr/lib/suveryn/installer-ui" in unit and "Conflicts=getty@tty1.service" in unit
+    assert "systemctl enable suveryn-installer.service" in POSTINST
+    test = (MKOSI / "mkosi.profiles" / "test" / "extra" / "usr" / "lib" / "systemd" / "system" /
+            "suveryn-installer.service.d" / "test.conf").read_text()
+    assert "ConditionCredential=suveryn.installer-on-serial" in test  # never on the appliance's own console
+
+
+def test_the_console_looks_like_the_design():
+    """The brand's dark theme as the console's 16 colours, and a font with ū (Uni2 Terminus)."""
+    rows = [[int(v) for v in line.split(",")] for line in
+            (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "console-colours").read_text().split()]
+    assert len(rows) == 3 and all(len(r) == 16 for r in rows)
+    colour = lambda i: "#%02X%02X%02X" % (rows[0][i], rows[1][i], rows[2][i])  # noqa: E731
+    assert (colour(0), colour(1), colour(6), colour(7), colour(15)) == ("#0B0D10", "#FA5B35", "#3AD4CA", "#A4A6A7", "#F3F4F5")
+    setup = (MKOSI / "mkosi.extra" / "etc" / "default" / "console-setup").read_text()
+    assert 'CODESET="Uni2"' in setup and 'FONTFACE="Terminus"' in setup
+    for pkg in ("kbd", "console-setup-linux", "keyboard-configuration"):
+        assert re.search(rf"^\s+{pkg}$", (MKOSI / "mkosi.conf").read_text(), re.M), pkg
