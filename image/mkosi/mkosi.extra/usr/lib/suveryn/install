@@ -115,7 +115,8 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
         raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})")
     mac = ports[iface]
     summary = {"interface": iface, "mac": mac}
-    lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]"]
+    lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]",
+             "MulticastDNS=yes"]
     if args.address == "dhcp":
         if args.gateway or args.dns:
             raise Refused("--gateway and --dns go with a fixed address, not DHCP")

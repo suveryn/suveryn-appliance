@@ -69,21 +69,17 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
   LUKS2 with a random key that exists only in memory, then the TPM (PCR 7) and a recovery key are
   enrolled and that key is removed. The data partition then has exactly two ways in: the TPM and the
   recovery key. The recovery key (systemd's modhex format, 8 groups of 8) is printed once.
-- **Booting**: `suveryn-boot-mode` opens the boot disk's data partition with the TPM, without a prompt. When
-  the TPM can't (a firmware or Secure Boot change, a replaced TPM), the console asks for the recovery
-  key ("Please enter recovery key for disk suveryn-data"): five typed attempts. systemd counts the
-  failed TPM attempt as one of the tries, hence `tries=6`.
+- **Booting**: `suveryn-boot-mode` opens the boot disk's data partition with the TPM, without a
+  prompt. When the TPM can't (a firmware or Secure Boot change, a replaced TPM), the unlock screen
+  (C8b, below) asks for the recovery key.
 - **PCR 7 only, never pcrlock.** systemd 255 would generate a pcrlock policy at every boot and
   `systemd-cryptenroll` would then use it; its units are masked and install-disk passes
   `--tpm2-pcrlock=`. Stronger bindings are decision D2 (postponed).
 - **`dmsetup` is in the image** for its udev rules: without them libdevmapper waits for udev forever,
   and repart's encryption hung.
 
-Known, to finish with the console installer (#37):
+Known:
 
-- After five wrong keys the unlock gives up and the initrd stops in emergency mode (nothing else
-  starts; the root account is locked, so only a restart helps). The console screen for this case is
-  C8b ("disk won't unlock"), with the prompt itself.
 - On the very first boot systemd logs "Failed to write /etc/machine-id: Invalid argument", and then
   saves the machine-id anyway: it is the same on every later boot (the tests check it).
 
@@ -137,11 +133,15 @@ only) shows the approved screens and hands the answers to `install`:
 
 Keys: arrows select, Tab moves, Space ticks, Enter continues (opens a list on a list field), Esc goes
 back, F1 shows help, Ctrl+L redraws. The console looks like the design: the brand's dark theme as the
-console's 16 colours (`console-colours`, loaded with `setvtrgb`) and Terminus with the Uni2 character
-set (`/etc/default/console-setup`), which has the "ū". It has no "✓", so the screens show "√" there.
+console's 16 colours (`console-colours`, loaded with `setvtrgb`) and Terminus with the character set
+console-setup calls "Vietnamese" (`/etc/default/console-setup`): of its Terminus fonts it is the one
+with the "ū", the French and Dutch letters and the half blocks the QR code needs. No console font has
+a "✓", so the screens show "√" there.
 
 The keyboard layout is kept on the data partition (`/etc/default/keyboard` links there, design note) and
-loaded at every start by console-setup.
+loaded at every start by console-setup. Its service runs `setupcon` directly (a drop-in): the
+package's own script tries to save into `/etc/console-setup`, which is read-only here, so it failed
+and the chosen layout never reached the console.
 
 **Languages.** Every word on these screens is in `installer-text.json`, in English (the approved
 design's copy), Dutch (formal: u) and French (vous); a test checks that every text exists in all three
@@ -152,8 +152,48 @@ case mid-sentence). Sizes follow the language (17,0 GB; 17,0 Go), and the confir
 engine's own messages (a failed step's detail) stay in English. The Dutch and French copy is a
 first version: to be read by a native speaker before release.
 
-Still to come in #37: the console after the first start (C8) and the unlock screen (C8b), mDNS
-(`<name>.local`).
+### The unlock screen (C8b)
+
+When the TPM can't open the data partition, `unlock-screen` (in the initrd) shows the design's
+"Disk won't unlock" screen on the console, in the brand's colours and font, and asks for the recovery
+key: five attempts; dashes, spaces and capitals optional (the key uses only letters that sit in the
+same place on AZERTY and QWERTY). The office's language isn't known yet (it is on the locked disk), so
+the screen is English with its essential lines in Dutch and French. Once the key opens the disk, the
+TPM is enrolled again (PCR 7, as at installation; `systemd-cryptenroll`, in the initrd), so the next
+start is unattended. The old TPM's slot is removed first, in a step of its own: asked to enrol and wipe
+at once, `systemd-cryptenroll` does nothing when a slot for the same PCRs exists, even one the new TPM
+can't open. After five wrong keys it says what that means and waits for Ctrl+Alt+Del; nothing
+else starts. The key passes only through a file in the initrd's memory, removed once tried. The
+initrd carries `kbd` and the Terminus font for this (about 3 MB more).
+
+### The console after installation (C8)
+
+`/usr/lib/suveryn/console-ui` (`suveryn-console.service`, on the first console of an installed appliance,
+never on the stick) shows how to reach the appliance: `https://<name>.local` and its IP address, the
+web setup's certificate fingerprint while setup is open, the network, how the disk was unlocked (by the
+TPM, or with the recovery key and linked to the TPM again), setup, the appliance ID, support (no valid
+manifest yet: the days until the banner shows for everyone) and the time, in the language chosen at
+installation. The menu:
+
+1. **network details**: the name on the network, each port's MAC address, addresses, gateway, DNS;
+2. **change network settings**: the installer's network screen (C4); the new settings go to the data
+   partition and are applied at once (`networkctl reload`), the name too;
+3. **the registration QR code** (`qrencode`, in half blocks), with the appliance's ID and key
+   fingerprint. The portal's address in it is a placeholder (`PORTAL_REGISTER`) until the portal exists;
+4. **restart** and 5. **shut down**, each confirmed first.
+
+The certificate fingerprint and "setup complete" come from files the web setup will write
+(`/var/lib/suveryn/etc/tls/setup-cert.pem`, `/var/lib/suveryn/etc/setup-complete`); until the web setup
+exists, the console shows the waiting state without a fingerprint.
+
+### `<name>.local`
+
+systemd-resolved answers for the appliance's name over mDNS on the office's network
+(`resolved.conf.d/50-suveryn-mdns.conf`, `MulticastDNS=yes` in each port's network file, the installer's
+too). The network mode's outgoing rules let mDNS out on the office's link (224.0.0.251 and ff02::fb,
+port 5353). The inbound rules, when they come to the image, must let UDP 5353 in.
+
+Still to come in #37: the web setup (screens 0 to 8, in the browser).
 
 ## The appliance's identity and system state (#35)
 
@@ -229,12 +269,17 @@ console installer through a terminal emulator (pyte) the way a person would:
    verity, PCR 11); two bundle keys trusted; the installed model verifies;
 4. **boot it again with the stick attached**: the same, from its own disk; the same machine-id and
    identity;
-5. **the stick beside the installed disk**: installer mode, slot A from the stick, and the installed
+5. **the console (C8)**: on the serial console, in Dutch: the addresses, disk, ID and support; the
+   network details; the registration QR code; the network changed to a fixed address (applied at
+   once, and used at every later start); shut down;
+6. **the stick beside the installed disk**: installer mode, slot A from the stick, and the installed
    disk's data partition is never opened (no prompt);
-6. **TPM replaced** (a new, empty TPM): the console asks for the recovery key, refuses a wrong one,
-   accepts the right one; every rule holds and the machine-id is unchanged; the identity is kept but
-   refuses to sign (sealed to the old TPM);
-7. **wrong keys**: after five, the unlock gives up and nothing starts;
-8. **a changed block in slot A**: verity refuses it ("data block … is corrupt").
+7. **TPM replaced** (a new, empty TPM): the unlock screen (C8b) asks for the recovery key, refuses a
+   wrong one, accepts the right one typed without dashes and in capitals, and enrolls the new TPM;
+   every rule holds and the machine-id is unchanged; the identity is kept but refuses to sign
+   (sealed to the old TPM);
+8. **the next start with that TPM**: unattended again, no prompt;
+9. **wrong keys**: after five, the unlock screen says so and waits; nothing starts;
+10. **a changed block in slot A**: verity refuses it ("data block … is corrupt").
 
-Without KVM a boot takes two to five minutes and the whole run about 40; with KVM, a few minutes.
+Without KVM a boot takes two to five minutes and the whole run about an hour; with KVM, a few minutes.
