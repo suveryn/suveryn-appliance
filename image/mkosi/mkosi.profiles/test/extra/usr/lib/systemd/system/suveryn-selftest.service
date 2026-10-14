@@ -1,0 +1,10 @@
+[Unit]
+Description=sūveryn test system: check the read-only system's rules (test profile only)
+After=multi-user.target systemd-tmpfiles-setup.service systemd-networkd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/suveryn-test/selftest
+
+[Install]
+WantedBy=multi-user.target

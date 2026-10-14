@@ -69,7 +69,7 @@ in it are links into the data partition, because they belong to this office:
 | `/etc/suveryn` | `/var/lib/suveryn/etc` | The network mode, approved destinations, service settings and secrets |
 | `/etc/nginx/sites-enabled/suveryn` | `/var/lib/suveryn/nginx/suveryn` | The office's site (its name) |
 | `/etc/hostname`, `/etc/hosts` | `/var/lib/suveryn/host/…` | The appliance's name (set in the installer) |
-| `/etc/machine-id` | kept by systemd on `/var` | Unique per appliance |
+| `/etc/machine-id` | `/var/lib/suveryn/host/machine-id`, mounted over it in the initrd (systemd won't follow a link for this one) | Unique per appliance |
 | `/etc/systemd/network/` office part | `/var/lib/suveryn/network` | Fixed address or DHCP (#37, C4) |
 
 Everything else stays where the image puts it. Today's provisioning writes in a few more places;
