@@ -1,6 +1,10 @@
 #!/bin/bash
-# Runs once per boot in the test system and prints one line per rule of the design note, then a
-# result line, to the serial console; image/mkosi/test/run-vm-tests reads them. Then powers off.
+# Runs once per boot in the test system, prints one line per rule of the design note and a result
+# line to the serial console (image/mkosi/test/run-vm-tests reads them), then powers off.
+#
+# Mode, from the credential suveryn.test (QEMU: -smbios type=11,value=io.systemd.credential:suveryn.test=…):
+#   install  the installer's disk step onto the second disk (/dev/vdb), then check what it made
+#   (none)   check the running system
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
 fails=0
@@ -8,14 +12,43 @@ check() {  # check <name> <command…>: ok when the command succeeds
   local name=$1; shift
   if detail=$("$@" 2>&1); then say "ok   $name${detail:+: $detail}"; else say "FAIL $name${detail:+: $detail}"; fails=$((fails+1)); fi
 }
+finish() {
+  say "boot-id $(cat /proc/sys/kernel/random/boot_id)"
+  if [ "$fails" -eq 0 ]; then say "RESULT PASS"; else say "RESULT FAIL ($fails)"; fi
+  systemctl --no-block poweroff
+  exit 0
+}
+mode=$(cat /run/credentials/@system/suveryn.test 2>/dev/null)
 
-root_dev=$(findmnt -no SOURCE /)
-check "root from the verity device"   test "$root_dev" = /dev/mapper/root
+if [ "$mode" = install ]; then
+  # The stick's partition table: the primary GPT (first 34 sectors) and the backup (last 33).
+  gpt() { s=$(blockdev --getsz /dev/vda) && { dd if=/dev/vda bs=512 count=34 status=none; dd if=/dev/vda bs=512 skip=$((s-33)) status=none; } | sha256sum | cut -c1-16; }
+  gpt > /run/stick-before.gpt
+  if result=$(/usr/lib/suveryn/install-disk --json /dev/vdb 2>/run/install-disk.err); then
+  sed "s/^/SUVERYN-SELFTEST progress /" /run/install-disk.err > "$out"
+    say "ok   install-disk onto /dev/vdb"
+    say "recovery-key $(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["recovery_key"])')"
+    slots=$(echo "$result" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["key_slots"]))')
+    check "data partition: TPM and recovery key only" test "$slots" = "recovery tpm2"
+    data=$(echo "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data_partition"])')
+    check "data partition is LUKS2" sh -c "cryptsetup luksDump $data | grep -q '^Version:.*2'"
+    check "TPM bound to PCR 7"     sh -c "cryptsetup luksDump $data | grep -A8 systemd-tpm2 | grep -Eq 'tpm2-(hash-)?pcrs: *7\$'"
+    check "slot A copied exactly" bash -c 'h=$(sed -n "s/.*roothash=\([0-9a-f]*\).*/\1/p" /proc/cmdline); veritysetup verify /dev/vdb2 /dev/vdb3 "$h" && echo "verifies against ${h:0:16}…"'
+    check "the stick is untouched" bash -c "b=\$(cat /run/stick-before.gpt); a=\$($(declare -f gpt); gpt); [ \${#b} -eq 16 ] && [ \"\$a\" = \"\$b\" ] && echo \"partition table \$a\""
+  else
+    sed "s/^/SUVERYN-SELFTEST error /" /run/install-disk.err > "$out"
+    say "FAIL install-disk onto /dev/vdb"
+    fails=$((fails+1))
+  fi
+  finish
+fi
+
+check "root from the verity device"   test "$(findmnt -no SOURCE /)" = /dev/mapper/root
 check "root mounted read-only"        sh -c 'findmnt -no OPTIONS / | grep -qw ro && echo "$(findmnt -no FSTYPE /)"'
 check "root can't be written"         sh -c '! touch /usr/suveryn-write-test 2>/dev/null'
 check "root hash from the boot file"  bash -c 'h=$(sed -n "s/.*roothash=\([0-9a-f]*\).*/\1/p" /proc/cmdline); [ -n "$h" ] && veritysetup status root | grep -q "$h" && echo "${h:0:16}…"'
 check "verity reports verified"       sh -c 'veritysetup status root | grep -E "^ +status:" | grep -q verified'
-check "/var on the data partition"    sh -c 'findmnt -no SOURCE /var | grep -q . && test "$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /var)")" = suveryn-data'
+check "/var on the encrypted data partition" bash -c 'src=$(findmnt -no SOURCE /var); st=$(cryptsetup status suveryn-data 2>&1); type=$(echo "$st" | sed -n "s/^ *type: *//p"); dev=$(echo "$st" | sed -n "s/^ *device: *//p"); label=$(sed -n "s/^PARTNAME=//p" "/sys/class/block/$(basename "$dev")/uevent"); echo "source $src, $type on $dev ($label)"; [ "$src" = /dev/mapper/suveryn-data ] && [ "$type" = LUKS2 ] && [ "$label" = suveryn-data ]'
 check "/var noexec,nosuid,nodev"      sh -c 'o=$(findmnt -no OPTIONS /var); for f in noexec nosuid nodev; do echo "$o" | grep -qw $f || exit 1; done'
 check "nothing runs from /var"        sh -c 'cp /usr/bin/true /var/tmp/x && ! /var/tmp/x 2>/dev/null; r=$?; rm -f /var/tmp/x; exit $r'
 check "/tmp in memory"                sh -c 'test "$(findmnt -no FSTYPE /tmp)" = tmpfs'
@@ -26,6 +59,4 @@ check "machine-id kept on /var"       sh -c 'id=$(cat /var/lib/suveryn/host/mach
 check "image /var restored"           test -d /var/lib/systemd
 check "every root block readable"     sh -c 'dd if=/dev/block/$(findmnt -no MAJ:MIN /) of=/dev/null bs=1M status=none'
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
-say "boot-id $(cat /proc/sys/kernel/random/boot_id)"
-if [ "$fails" -eq 0 ]; then say "RESULT PASS"; else say "RESULT FAIL ($fails)"; fi
-systemctl --no-block poweroff
+finish
