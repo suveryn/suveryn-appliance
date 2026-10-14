@@ -18,8 +18,8 @@ sense, like the systems in network equipment and phones:
    database, settings, certificates, models, logs, the appliance's identity. It unlocks
    automatically with the machine's TPM, and with a recovery key when that fails.
 3. **The USB stick boots the same system in "installer mode".** The console installer (#37) copies
-   the system onto the disk, creates the encrypted data partition, the identity and the recovery
-   key, and copies the signed models from the stick.
+   the system onto the disk, creates the encrypted data partition and the recovery
+   key, and copies the signed models from the stick. The first start makes the identity.
 4. **An update replaces the whole system.** There are two system slots, A and B. An update is
    written to the slot that isn't running; the appliance restarts into it, checks itself, and goes
    back to the previous slot on its own if the new one doesn't come up healthy.
@@ -119,8 +119,9 @@ is the only thing that starts. It:
 3. copies system and verity to slot A **block for block** and checks the copy against the root hash;
 4. creates the data partition: LUKS2 with a key made on this machine, enrolled to the TPM (PCR 7)
    and to a recovery key shown once (C7) (#34);
-5. creates the appliance's identity on the data partition: UUID and Ed25519 key, sealed by the TPM
-   where possible (#35);
+5. leaves the appliance's identity to the installed system's first start, which makes it on the
+   data partition: UUID and Ed25519 key, sealed by the TPM where possible, never stored in plain
+   form (#35; `suveryn-identity.service`, so it is sealed by the system that will use it);
 6. checks and copies the chosen model bundles (#36, C3);
 7. writes the name and network settings (C4), installs the boot file, and restarts into slot A.
 

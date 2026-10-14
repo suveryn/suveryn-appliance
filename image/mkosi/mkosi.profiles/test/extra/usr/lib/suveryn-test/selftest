@@ -3,8 +3,9 @@
 # line to the serial console (image/mkosi/test/run-vm-tests reads them), then powers off.
 #
 # Mode, from the credential suveryn.test (QEMU: -smbios type=11,value=io.systemd.credential:suveryn.test=…):
-#   install  the installer's disk step onto the second disk (/dev/vdb), then check what it made
-#   (none)   check the running system
+#   install       the installer's disk step onto the second disk (/dev/vdb), then check what it made
+#   tpm-replaced  check the running system; the identity, sealed to the old TPM, must be unusable
+#   (none)        check the running system
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
 fails=0
@@ -58,5 +59,40 @@ check "/etc/hosts on /var"            sh -c 'test "$(readlink -f /etc/hosts)" = 
 check "machine-id kept on /var"       sh -c 'id=$(cat /var/lib/suveryn/host/machine-id) && [ ${#id} -eq 32 ] && [ "$id" = "$(cat /etc/machine-id)" ] && echo "$id"'
 check "image /var restored"           test -d /var/lib/systemd
 check "every root block readable"     sh -c 'dd if=/dev/block/$(findmnt -no MAJ:MIN /) of=/dev/null bs=1M status=none'
+# The identity (#35): made at first boot, sealed to this TPM, never stored in plain form.
+id=/usr/lib/suveryn/identity; iddir=/var/lib/suveryn/identity
+say "identity $(python3 -c 'import json; d=json.load(open("/var/lib/suveryn/identity/identity.json")); print(d["uuid"], d["fingerprint"])' 2>/dev/null)"
+check "identity made at first boot"   python3 -c '
+import json, re, uuid
+d = json.load(open("/var/lib/suveryn/identity/identity.json"))
+assert uuid.UUID(d["uuid"]).version == 4 and open("/var/lib/suveryn/identity/uuid").read().strip() == d["uuid"]
+assert re.fullmatch("[0-9a-f]{64}", d["fingerprint"]) and d["algorithm"] == "ed25519"
+assert open("/var/lib/suveryn/identity/public.pem").read() == d["public_key"]
+print(d["uuid"])'
+check "fingerprint is the key's"      bash -c "f=\$(openssl pkey -pubin -in $iddir/public.pem -outform DER | tail -c 32 | sha256sum | cut -c1-64); grep -q \"\$f\" $iddir/identity.json && echo \${f:0:16}…"
+check "private key not stored plain"  bash -c "test \"\$(stat -c %a $iddir/private.cred)\" = 600 && ! grep -qa 'PRIVATE KEY' $iddir/private.cred && ! openssl pkey -in $iddir/private.cred -noout 2>/dev/null && ! grep -rqa 'PRIVATE KEY' $iddir /var/lib/suveryn/etc"
+if [ "$mode" = tpm-replaced ]; then
+  check "identity sealed to the TPM"  bash -c "grep -q '\"sealed\": \"host+tpm2\"' $iddir/identity.json"
+  check "identity unusable with another TPM" bash -c "! $id show >/tmp/show 2>&1 && grep -q 'Usable: *NO' /tmp/show && ! $id sign /etc/os-release >/dev/null 2>&1 && echo refused"
+  check "identity not replaced"       bash -c "test \$(ls $iddir | wc -l) -eq 4"
+else
+  check "identity sealed to the TPM"  bash -c "grep -q '\"sealed\": \"host+tpm2\"' $iddir/identity.json"
+  check "identity signs and verifies" bash -c "$id show | grep -q 'Usable: *yes' && $id sign /etc/os-release > /tmp/sig && $id verify /etc/os-release /tmp/sig && echo 'x' > /tmp/other && ! $id verify /tmp/other /tmp/sig >/dev/null"
+  check "signature checks with openssl" bash -c "base64 -d /tmp/sig > /tmp/sig.bin && openssl pkeyutl -verify -pubin -inkey $iddir/public.pem -rawin -in /etc/os-release -sigfile /tmp/sig.bin"
+fi
+# The system state the appliance reports (#35, "system intact").
+check "system state reported"         python3 -c '
+import json, re, subprocess
+r = subprocess.run(["/usr/lib/suveryn/system-state", "--json"], capture_output=True, text=True)
+s = json.loads(r.stdout)
+h = re.search(r"roothash=([0-9a-f]{64})", open("/proc/cmdline").read()).group(1)
+assert r.returncode == 0 and s["verity_intact"], s
+assert s["image"] == {"id": "suveryn-test", "version": "0.0.0"}, s["image"]
+assert s["roothash"] == h and s["verity"] == {"active": True, "status": "verified", "matches_roothash": True}, s
+assert s["slot"] and s["slot"].startswith("suveryn"), s["slot"]
+assert re.fullmatch("[0-9a-f]{64}", s["pcr11"] or ""), s["pcr11"]
+assert s["identity"]["uuid"] == open("/var/lib/suveryn/identity/uuid").read().strip()
+img = s["image"]
+print("%s %s, slot %s, PCR 11 %s..." % (img["id"], img["version"], s["slot"], s["pcr11"][:16]))'
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
 finish

@@ -196,3 +196,30 @@ def test_every_extra_tree_exists():
         assert found, conf
         for t in found:
             assert (base / t).is_dir(), f"{conf.name}: {t}"
+
+
+def test_the_identity_is_made_once_at_first_boot_without_network():
+    unit = configparser.ConfigParser(strict=False, interpolation=None)
+    unit.read(MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-identity.service")
+    assert unit["Unit"]["ConditionPathExists"] == "!/var/lib/suveryn/identity/identity.json"  # never replaced
+    assert "tpm2.target" in unit["Unit"]["After"] and "local-fs.target" in unit["Unit"]["After"]
+    assert unit["Service"]["ExecStart"] == "/usr/lib/suveryn/identity create"
+    assert unit["Service"]["PrivateNetwork"] == "yes"
+    assert "systemctl enable suveryn-identity.service" in POSTINST
+    assert re.search(r"^\s+openssl$", (MKOSI / "mkosi.conf").read_text(), re.M)
+    for tool in ("identity", "system-state"):
+        path = MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / tool
+        assert path.stat().st_mode & 0o111, tool
+
+
+def test_the_identity_is_sealed_without_pcrs():
+    """Bound to the TPM itself, not to PCR 7: a firmware update must not lose the identity (#35)."""
+    tool = (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "identity").read_text()
+    assert '"--tpm2-pcrs="' in tool and '"host+tpm2" if has_tpm() else "host"' in tool
+
+
+def test_every_python_tool_in_the_image_compiles():
+    """A syntax error in a tool only shows when the system runs it; catch it here."""
+    for path in (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn").iterdir():
+        if path.read_text().startswith("#!/usr/bin/python3"):
+            compile(path.read_text(), str(path), "exec")  # raises SyntaxError
