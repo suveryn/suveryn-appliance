@@ -1,0 +1,31 @@
+#!/bin/bash
+# Runs once per boot in the test system and prints one line per rule of the design note, then a
+# result line, to the serial console; image/mkosi/test/run-vm-tests reads them. Then powers off.
+out=/dev/ttyS0
+say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
+fails=0
+check() {  # check <name> <command…>: ok when the command succeeds
+  local name=$1; shift
+  if detail=$("$@" 2>&1); then say "ok   $name${detail:+: $detail}"; else say "FAIL $name${detail:+: $detail}"; fails=$((fails+1)); fi
+}
+
+root_dev=$(findmnt -no SOURCE /)
+check "root from the verity device"   test "$root_dev" = /dev/mapper/root
+check "root mounted read-only"        sh -c 'findmnt -no OPTIONS / | grep -qw ro && echo "$(findmnt -no FSTYPE /)"'
+check "root can't be written"         sh -c '! touch /usr/suveryn-write-test 2>/dev/null'
+check "root hash from the boot file"  bash -c 'h=$(sed -n "s/.*roothash=\([0-9a-f]*\).*/\1/p" /proc/cmdline); [ -n "$h" ] && veritysetup status root | grep -q "$h" && echo "${h:0:16}…"'
+check "verity reports verified"       sh -c 'veritysetup status root | grep -E "^ +status:" | grep -q verified'
+check "/var on the data partition"    sh -c 'findmnt -no SOURCE /var | grep -q . && test "$(lsblk -no PARTLABEL "$(findmnt -no SOURCE /var)")" = suveryn-data'
+check "/var noexec,nosuid,nodev"      sh -c 'o=$(findmnt -no OPTIONS /var); for f in noexec nosuid nodev; do echo "$o" | grep -qw $f || exit 1; done'
+check "nothing runs from /var"        sh -c 'cp /usr/bin/true /var/tmp/x && ! /var/tmp/x 2>/dev/null; r=$?; rm -f /var/tmp/x; exit $r'
+check "/tmp in memory"                sh -c 'test "$(findmnt -no FSTYPE /tmp)" = tmpfs'
+check "no swap"                       sh -c 'test -z "$(swapon --noheadings)"'
+check "/etc/suveryn on /var"          sh -c 'test "$(readlink -f /etc/suveryn)" = /var/lib/suveryn/etc && test -d /etc/suveryn'
+check "/etc/hosts on /var"            sh -c 'test "$(readlink -f /etc/hosts)" = /var/lib/suveryn/host/hosts && grep -q localhost /etc/hosts'
+check "machine-id kept on /var"       sh -c 'id=$(cat /var/lib/suveryn/host/machine-id) && [ ${#id} -eq 32 ] && [ "$id" = "$(cat /etc/machine-id)" ] && echo "$id"'
+check "image /var restored"           test -d /var/lib/systemd
+check "every root block readable"     sh -c 'dd if=/dev/block/$(findmnt -no MAJ:MIN /) of=/dev/null bs=1M status=none'
+check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
+say "boot-id $(cat /proc/sys/kernel/random/boot_id)"
+if [ "$fails" -eq 0 ]; then say "RESULT PASS"; else say "RESULT FAIL ($fails)"; fi
+systemctl --no-block poweroff
