@@ -49,7 +49,7 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 **Console installer**
 - Linux VT text UI, 16 colours set with `setvtrgb` from the dark brand theme. Font: Terminus (needs `ū`). The mock-ups use Source Code Pro as a stand-in.
 - Network name is set in the installer and announced over mDNS (`<name>.local`). DHCP first; after 30 s without a lease, offer a fixed address (C4b).
-- Model bundles come from the stick's exFAT partition `SUVERYN-BUNDLES`, which fills the rest of the stick. Each bundle's signed manifest is checked against the bundle public key built into the image, then every file's SHA-256 (tracker #36). Several models can be installed if the hardware allows.
+- Model bundles come from the stick's exFAT partition `suveryn-bundles` (file system label `SUVBUNDLES`: exFAT labels hold 11 characters), which fills the rest of the stick; C3 names it by its partition name. Each bundle's signed manifest is checked against the bundle public key built into the image, then every file's SHA-256 (tracker #36). Several models can be installed if the hardware allows.
 - Disk: LUKS2 with a new key per machine, unlocked by TPM 2.0 (PCR 7). Recovery key in modhex (systemd recovery key format), shown once (C7) and confirmed by typing the first group. Unlock prompt allows 5 attempts (`crypttab tries=5`). Tracker #34.
 - Secure Boot is not required (customer hardware).
 - Installation creates the appliance identity: UUID and Ed25519 key pair (tracker #35).

@@ -143,28 +143,42 @@ def slots(part: str) -> list[str]:
     return sorted(line.split()[1] for line in out if line.split())
 
 
-def install(target: str) -> dict:
+def partition(target: str, work: Path) -> tuple[str, list[dict], Path]:
+    """Steps 1 and 2: the partitions, with the data partition encrypted to a temporary key in work/key.
+    Returns (source disk, partitions made, key file). The caller enrols and removes the key (enrol)."""
     source = source_disk()
     check_target(target, source)
     if not Path("/dev/tpmrm0").exists():
         raise Refused("no TPM 2.0 found: the data partition can't unlock by itself (hardware check, #37 C2)")
+    os.chmod(work, 0o700)
+    key = work / "key"
+    key.write_bytes(secrets.token_bytes(64))
+    os.chmod(key, 0o600)
+    defs = definitions(work, esp_of(source))
+    step(f"partitioning {target} (copies slot A, encrypts the data partition)")
+    # Online (the default): repart encrypts the partition in place through device-mapper. Offline would
+    # build the whole file system in a scratch file as large as the data partition first.
+    made = json.loads(run("systemd-repart", "--dry-run=no", "--empty=force", f"--key-file={key}",
+                          f"--definitions={defs}", "--json=short", "--no-pager", target).stdout)
+    run("udevadm", "settle")
+    return source, made, key
+
+
+def data_node(made: list[dict]) -> str:
+    return next(p["node"] for p in made if p.get("label") == DATA_LABEL)
+
+
+def install(target: str) -> dict:
     with tempfile.TemporaryDirectory(prefix="suveryn-install-", dir="/run") as tmp:
-        work = Path(tmp)
-        os.chmod(work, 0o700)
-        key = work / "key"
-        key.write_bytes(secrets.token_bytes(64))
-        os.chmod(key, 0o600)
-        defs = definitions(work, esp_of(source))
-        step(f"partitioning {target} (copies slot A, encrypts the data partition)")
-        # Online (the default): repart encrypts the partition in place through device-mapper. Offline would
-        # build the whole file system in a scratch file as large as the data partition first.
-        made = json.loads(run("systemd-repart", "--dry-run=no", "--empty=force", f"--key-file={key}",
-                              f"--definitions={defs}", "--json=short", "--no-pager", target).stdout)
-        run("udevadm", "settle")
-        data = next(p["node"] for p in made if p.get("label") == DATA_LABEL)
+        source, made, key = partition(target, Path(tmp))
+        data = data_node(made)
         recovery = enrol(data, key)
         key.write_bytes(secrets.token_bytes(64))  # overwrite before the folder goes
     step("done")
+    return result(target, source, data, made, recovery)
+
+
+def result(target: str, source: str, data: str, made: list[dict], recovery: str) -> dict:
     return {"target": target, "source": source, "data_partition": data, "key_slots": slots(data),
             "partitions": [{"label": p.get("label"), "node": p.get("node"), "size": p.get("raw_size")} for p in made],
             "recovery_key": recovery}

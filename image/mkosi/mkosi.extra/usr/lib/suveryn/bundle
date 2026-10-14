@@ -5,7 +5,7 @@
     bundle install DIR [--to ROOT] [--json]   verify, copy into ROOT/<kind>/<name>/<version>, check the copy
     bundle keys [--json]                  the keys this system trusts
 
-A bundle is a folder (on the stick's SUVERYN-BUNDLES partition, or downloaded):
+A bundle is a folder (on the stick's suveryn-bundles partition, or downloaded):
 
     manifest.json   what the bundle holds: format, kind, name, version, created, and per file its
                     path, size and SHA-256

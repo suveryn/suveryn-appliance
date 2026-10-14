@@ -1,0 +1,5 @@
+# The disk the firmware started from wins (#37). An installed appliance and its installer stick of the
+# same release have partitions with the same UUIDs (slot A's come from its root hash), so
+# /dev/disk/by-partuuid/… could point at either: partitions on the boot disk get the higher priority,
+# and the verified root (systemd-veritysetup@root) is opened only once the boot disk is there.
+SUBSYSTEM=="block", ENV{DEVTYPE}=="partition", ACTION=="add|change", PROGRAM="/usr/lib/suveryn/boot-disk is-on %k", OPTIONS+="link_priority=10"
