@@ -126,6 +126,7 @@ check "two bundle keys trusted"       bash -c "test \$($bundle keys | wc -l) -eq
 check "the installer's settings"     bash -c 'test "$(hostname)" = test-appliance && test "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/Europe/Brussels && grep -q "^MACAddress=" /etc/systemd/network/10-suveryn.network && python3 -c "import json; d=json.load(open(\"/var/lib/suveryn/installed.json\")); assert d[\"name\"] == \"test-appliance\"" && echo "$(hostname), $(date +%Z)"'
 check "the installer's network file in use" bash -c 'i=$(ls /sys/class/net | grep -v "^lo$" | head -1); for n in $(seq 30); do f=$(networkctl status --no-pager "$i" 2>/dev/null | sed -n "s/^ *Network File: //p"); [ -n "$f" ] && break; sleep 1; done; echo "$i: $f"; test "$(readlink -f "$f")" = "$(readlink -f /etc/systemd/network/10-suveryn.network)"'
 check "the installer's keyboard layout" grep -q '^XKBLAYOUT="be"' /etc/default/keyboard
+check "the installer's language"      python3 -c 'import json; d = json.load(open("/var/lib/suveryn/installed.json")); assert d["language"] == "nl", d; print(d["language"])'
 if [ "$mode" = first-boot ]; then
   check "the installer's boot entry"   bash -c 'efibootmgr | grep -i suveryn && efibootmgr | sed -n "s/^BootOrder: //p"'
 fi
