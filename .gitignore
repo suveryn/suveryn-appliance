@@ -146,3 +146,8 @@ vite.config.ts.timestamp-*
 keycloak/theme/build/
 __pycache__/
 .pytest_cache/
+
+# mkosi build output and caches (image/mkosi)
+image/mkosi/mkosi.output/
+image/mkosi/mkosi.cache/
+image/mkosi/mkosi.tools/

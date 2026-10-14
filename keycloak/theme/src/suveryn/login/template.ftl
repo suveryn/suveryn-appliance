@@ -1,5 +1,5 @@
 <#-- Sūveryn login layout: keycloak.v2's template.ftl (Keycloak 26.8) with the page frame replaced
-     by the Sūveryn brand header and a centred card. Everything inside the card is unchanged. -->
+     by the sūveryn brand header and a centred card. Everything inside the card is unchanged. -->
 <#import "field.ftl" as field>
 <#import "footer.ftl" as loginFooter>
 <#import "theme-resources.ftl" as themeResourceTags>
@@ -158,7 +158,7 @@
 <body id="keycloak-bg" class="${properties.kcBodyClass!} suv-body" data-page-id="login-${pageId}">
 <div class="suv-page">
   <header class="suv-brand">
-    <#-- The Sūveryn lockup from suveryn-brand, inlined by build_theme.py (canvas cropped, shapes untouched). -->
+    <#-- The sūveryn lockup from suveryn-brand, inlined by build_theme.py (canvas cropped, shapes untouched). -->
     <#include "suveryn-logo.ftl">
     <p class="suv-tagline">${msg("suverynTagline")}</p>
     <#-- "Air-gapped" is a factual claim: shown only when the installation's network mode is air-gapped

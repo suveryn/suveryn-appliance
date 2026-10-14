@@ -1,0 +1,199 @@
+#!/usr/bin/python3
+"""Install the running system onto a disk: the installer's disk step (design note, "The installer"; #34, #37).
+
+    /usr/lib/suveryn/install-disk /dev/nvme0n1 [--json]
+
+Run from the installer USB stick, in installer mode. It erases the target disk and:
+
+1. creates the partitions (systemd-repart, /usr/lib/suveryn/repart.d): the EFI partition and slot A
+   copied block for block from the stick, slot B and its verity empty, and the data partition;
+2. encrypts the data partition (LUKS2) with a key made here and never stored;
+3. enrols the TPM (PCR 7: unlocks by itself at boot) and a recovery key (systemd's modhex format);
+4. removes the temporary key, so the TPM and the recovery key are the only ways in.
+
+The recovery key is printed once (the console installer shows it, #37 C7) and stored nowhere. Python 3
+standard library only; needs root, systemd-repart and systemd-cryptenroll.
+"""
+
+import argparse
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+DEFINITIONS = Path(os.environ.get("SUVERYN_REPART_D") or "/usr/lib/suveryn/repart.d")
+DATA_LABEL = "suveryn-data"
+TPM_PCRS = "7"
+ESP_TYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+
+class Refused(Exception):
+    pass
+
+
+START = time.monotonic()
+
+
+def step(text: str) -> None:
+    """Progress on stderr (the console installer shows it; --json keeps stdout for the result)."""
+    print(f"install-disk [{time.monotonic() - START:6.1f}s] {text}", file=sys.stderr, flush=True)
+
+
+def run(*cmd: str, **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
+
+
+def lsblk(*devs: str) -> list[dict]:
+    out = json.loads(run("lsblk", "--json", "--paths", "-o", "NAME,TYPE,PKNAME,PARTTYPE,PARTLABEL,SIZE,MOUNTPOINT",
+                         *devs).stdout)
+    flat: list[dict] = []
+
+    def walk(nodes):
+        for n in nodes:
+            flat.append(n)
+            walk(n.get("children", []))
+    walk(out["blockdevices"])
+    return flat
+
+
+def source_disk() -> str:
+    """The disk the running system booted from: the one under the verity root device."""
+    root = run("findmnt", "-no", "SOURCE", "/").stdout.strip()
+    majmin = run("findmnt", "-no", "MAJ:MIN", "/").stdout.strip()
+    dm = Path(f"/sys/dev/block/{majmin}").resolve().name  # dm-0
+    slaves = sorted(p.name for p in Path(f"/sys/block/{dm}/slaves").iterdir())
+    for part in slaves:
+        disk = Path(f"/sys/class/block/{part}").resolve().parent.name
+        if Path(f"/sys/block/{disk}").exists():
+            return f"/dev/{disk}"
+    raise Refused(f"can't find the disk under {root}")
+
+
+def esp_of(disk: str) -> str:
+    for n in lsblk(disk):
+        if n["type"] == "part" and (n.get("parttype") or "").lower() == ESP_TYPE:
+            return n["name"]
+    raise Refused(f"{disk} has no EFI system partition")
+
+
+def check_target(target: str, source: str) -> None:
+    info = lsblk(target)[0]
+    if info["type"] != "disk":
+        raise Refused(f"{target} is a {info['type']}, not a whole disk")
+    if Path(target).resolve() == Path(source).resolve():
+        raise Refused(f"{target} is the disk this system is running from")
+    mounted = [n["name"] for n in lsblk(target) if n.get("mountpoint")]
+    if mounted:
+        raise Refused(f"{target} is in use: {', '.join(mounted)} mounted")
+
+
+def root_hash() -> str:
+    """The running system's root hash, from the boot file's command line."""
+    for word in Path("/proc/cmdline").read_text().split():
+        if word.startswith("roothash="):
+            return word.split("=", 1)[1]
+    raise Refused("the running system has no root hash (not booted from a release)")
+
+
+def as_uuid(hex32: str) -> str:
+    return f"{hex32[:8]}-{hex32[8:12]}-{hex32[12:16]}-{hex32[16:20]}-{hex32[20:32]}"
+
+
+def definitions(workdir: Path, source_esp: str) -> Path:
+    """The disk's definitions, filled in for this system: the stick's EFI partition as the source to copy,
+    and slot A's partition UUIDs. systemd finds a verity root by them: the first half of the root hash
+    is the data partition's UUID, the second half the verity partition's. A block copy keeps the content
+    but not the UUIDs, so they are set here."""
+    h = root_hash()
+    out = workdir / "repart.d"
+    shutil.copytree(DEFINITIONS, out)
+    for f in out.glob("*.conf"):
+        f.write_text(f.read_text().replace("CopyBlocks=@SOURCE_ESP@", f"CopyBlocks={source_esp}")
+                     .replace("UUID=@ROOT_UUID@", f"UUID={as_uuid(h[:32])}")
+                     .replace("UUID=@ROOT_VERITY_UUID@", f"UUID={as_uuid(h[32:64])}"))
+    return out
+
+
+def enrol(part: str, key: Path) -> str:
+    """TPM (PCR 7) and a recovery key; then the temporary key goes. Returns the recovery key."""
+    step(f"enrolling the TPM (PCR {TPM_PCRS})")
+    # Plain PCR 7 (#34; signed or pcrlock policies are decision D2, postponed): no pcrlock policy, even
+    # if one exists on the system.
+    run("systemd-cryptenroll", f"--unlock-key-file={key}", "--tpm2-device=auto", f"--tpm2-pcrs={TPM_PCRS}",
+        "--tpm2-pcrlock=", part)
+    step("enrolling a recovery key")
+    out = run("systemd-cryptenroll", f"--unlock-key-file={key}", "--recovery-key", part).stdout
+    words = [w for w in out.split() if len(w) == 71 and w.count("-") == 7]  # 8 groups of 8 modhex
+    if len(words) != 1:
+        raise Refused("systemd-cryptenroll gave no recovery key")
+    # The key-file slot is a "password" slot; the recovery key has a type of its own and stays.
+    step("removing the temporary key")
+    run("systemd-cryptenroll", f"--unlock-key-file={key}", "--wipe-slot=password", part)
+    return words[0]
+
+
+def slots(part: str) -> list[str]:
+    """The kinds of key slots on the data partition (tpm2, recovery, password, …)."""
+    out = run("systemd-cryptenroll", part).stdout.splitlines()[1:]
+    return sorted(line.split()[1] for line in out if line.split())
+
+
+def install(target: str) -> dict:
+    source = source_disk()
+    check_target(target, source)
+    if not Path("/dev/tpmrm0").exists():
+        raise Refused("no TPM 2.0 found: the data partition can't unlock by itself (hardware check, #37 C2)")
+    with tempfile.TemporaryDirectory(prefix="suveryn-install-", dir="/run") as tmp:
+        work = Path(tmp)
+        os.chmod(work, 0o700)
+        key = work / "key"
+        key.write_bytes(secrets.token_bytes(64))
+        os.chmod(key, 0o600)
+        defs = definitions(work, esp_of(source))
+        step(f"partitioning {target} (copies slot A, encrypts the data partition)")
+        # Online (the default): repart encrypts the partition in place through device-mapper. Offline would
+        # build the whole file system in a scratch file as large as the data partition first.
+        made = json.loads(run("systemd-repart", "--dry-run=no", "--empty=force", f"--key-file={key}",
+                              f"--definitions={defs}", "--json=short", "--no-pager", target).stdout)
+        run("udevadm", "settle")
+        data = next(p["node"] for p in made if p.get("label") == DATA_LABEL)
+        recovery = enrol(data, key)
+        key.write_bytes(secrets.token_bytes(64))  # overwrite before the folder goes
+    step("done")
+    return {"target": target, "source": source, "data_partition": data, "key_slots": slots(data),
+            "partitions": [{"label": p.get("label"), "node": p.get("node"), "size": p.get("raw_size")} for p in made],
+            "recovery_key": recovery}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("target", help="the whole disk to install onto; everything on it is erased")
+    ap.add_argument("--json", action="store_true", help="print the result as JSON (for the console installer)")
+    a = ap.parse_args()
+    if os.geteuid() != 0:
+        print("install-disk: run as root", file=sys.stderr)
+        return 2
+    try:
+        result = install(a.target)
+    except Refused as e:
+        print(f"install-disk: {e}", file=sys.stderr)
+        return 2
+    except subprocess.CalledProcessError as e:
+        print(f"install-disk: {' '.join(e.cmd)} failed: {(e.stderr or '').strip()[-500:]}", file=sys.stderr)
+        return 1
+    if a.json:
+        print(json.dumps(result, indent=1))
+    else:
+        print(f"installed onto {result['target']}; data partition {result['data_partition']} "
+              f"(key slots: {', '.join(result['key_slots'])})")
+        print(f"recovery key (shown once): {result['recovery_key']}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
