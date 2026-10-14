@@ -171,6 +171,9 @@ def test_a_signed_manifest_still_cant_reach_outside_the_bundle(world, path):
     (lambda m: m["files"][0].update(size=True), "unusable size"),
     (lambda m: m["files"][0].update(sha256="ABC"), "unusable SHA-256"),
     (lambda m: m.update(format="suveryn-bundle/2"), "not a suveryn-bundle/1"),
+    (lambda m: m.update(title="x" * 65), "unusable title"),
+    (lambda m: m.update(description="line\x1b[31m"), "unusable description"),
+    (lambda m: m.update(default="yes"), "unusable default"),
 ])
 def test_a_signed_but_malformed_manifest_is_refused(world, edit, message):
     m = manifest(world)
@@ -292,3 +295,12 @@ def test_a_wrong_kms_key_type_is_refused(world, tmp_path):
     env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
     r = release("sign", world["bundle"], "--aws-kms", "k", env=env, check=False)
     assert r.returncode == 1 and "isn't an Ed25519 signing key" in r.stderr
+
+
+def test_title_description_and_default_for_the_installer(world):
+    release("make", world["bundle"], "--kind", "model", "--name", "test-model", "--version", "2026.10.1",
+            "--title", "Test Model 7B", "--description", "Small and fast. For tests.", "--default")
+    release("sign", world["bundle"], "--key-file", world["tmp"] / "current.key")
+    code, out = tool(world, "verify", world["bundle"])
+    assert code == 0 and (out["title"], out["description"], out["default"]) == \
+        ("Test Model 7B", "Small and fast. For tests.", True)

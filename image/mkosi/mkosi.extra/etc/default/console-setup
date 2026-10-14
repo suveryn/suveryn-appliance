@@ -1,0 +1,8 @@
+# The console's font and character set (console-setup, at every start): Terminus with the Uni2
+# set, which has "ū" (sūveryn) and the box and block characters the console screens use (#37).
+ACTIVE_CONSOLES="/dev/tty[1-6]"
+CHARMAP="UTF-8"
+CODESET="Uni2"
+FONTFACE="Terminus"
+FONTSIZE="8x16"
+VIDEOMODE=

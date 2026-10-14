@@ -2,6 +2,7 @@
 """Install this appliance from the installer stick: everything the console installer does (#37, C2 to C7).
 
     /usr/lib/suveryn/install --disk /dev/nvme0n1 --name notary-brussels-01 --timezone Europe/Brussels \\
+        [--language en|nl|fr] [--keyboard be] \\
         [--interface eno1] [--address dhcp | --address 192.168.1.50/24 --gateway 192.168.1.1 --dns 192.168.1.1] \\
         [--model FOLDER ...] [--json]
     /usr/lib/suveryn/install --list-models [--json]
@@ -12,8 +13,9 @@ each announced on stderr as "step N/M: …" (C6 shows them):
 
 1. partitions the disk, copies the system and encrypts the data partition (install-disk);
 2. opens the new data partition with its temporary key and writes the office's settings on it: the
-   name, the time zone, the network (DHCP or a fixed address), the chosen model bundles (#36: each
-   checked in full before the disk is touched, and again while it is copied);
+   name, the language (for the web setup), the keyboard layout, the time zone, the network (DHCP or a
+   fixed address), the chosen model bundles (#36: each checked in full before the disk is touched,
+   and again while it is copied);
 3. links the data partition to this machine's TPM (PCR 7) and makes the recovery key, then removes
    the temporary key (#34);
 4. makes the disk the first boot entry.
@@ -41,6 +43,11 @@ LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
 RUN = Path(os.environ.get("SUVERYN_RUN", "/run/suveryn"))
 ZONEINFO = Path("/usr/share/zoneinfo")
 NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+LANGUAGES = ("en", "nl", "fr")
+# The console keyboard layouts the installer offers (C1): XKB layout[:variant] -> name.
+KEYBOARDS = {"be": "Belgian (AZERTY)", "fr": "French (AZERTY)", "nl": "Dutch", "us": "English (US)",
+             "us:intl": "English (US, international)", "gb": "English (UK)", "de": "German",
+             "ch:fr": "Swiss French", "ch": "Swiss German", "lu": "Luxembourgish"}
 START = time.monotonic()
 
 
@@ -79,6 +86,19 @@ def check_timezone(tz: str) -> str:
     return tz
 
 
+def check_keyboard(kb: str) -> str:
+    if kb not in KEYBOARDS:
+        raise Refused(f"unknown keyboard layout {kb!r} (one of: {', '.join(KEYBOARDS)})")
+    return kb
+
+
+def keyboard_file(kb: str) -> str:
+    """/etc/default/keyboard (console-setup reads it at every start), on the data partition."""
+    layout, _, variant = kb.partition(":")
+    return (f'# Written by the installer (#37, C1): {KEYBOARDS[kb]}.\nXKBMODEL="pc105"\nXKBLAYOUT="{layout}"\n'
+            f'XKBVARIANT="{variant}"\nXKBOPTIONS=""\nBACKSPACE="guess"\n')
+
+
 def interfaces() -> dict[str, str]:
     """Ethernet ports: name -> MAC address."""
     out = {}
@@ -88,8 +108,8 @@ def interfaces() -> dict[str, str]:
     return out
 
 
-def network_file(args) -> tuple[str, dict]:
-    ports = interfaces()
+def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
+    ports = interfaces() if ports is None else ports
     iface = args.interface or (next(iter(ports)) if ports else None)
     if iface not in ports:
         raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})")
@@ -159,7 +179,8 @@ def list_models(folder: Path | None) -> list[dict]:
         try:
             r = bundle.verify(d)
             out.append({"folder": d.name, "valid": True, "kind": r["kind"], "name": r["name"],
-                        "version": r["version"], "size": r["size"], "key": r["key"]})
+                        "version": r["version"], "size": r["size"], "key": r["key"], "title": r["title"],
+                        "description": r["description"], "default": r["default"]})
         except bundle.Invalid as e:
             out.append({"folder": d.name, "valid": False, "error": str(e)})
     return out
@@ -172,6 +193,9 @@ def install(args) -> dict:
         raise Refused(f"this system started as {mode!r}, not as the installer (from the stick): nothing is installed")
     name = check_name(args.name)
     tz = check_timezone(args.timezone)
+    kb = check_keyboard(args.keyboard)
+    if args.language not in LANGUAGES:
+        raise Refused(f"unknown language {args.language!r} (one of: {', '.join(LANGUAGES)})")
     network, net_summary = network_file(args)
     disk = load("install-disk")
     bundle = load("bundle")
@@ -215,6 +239,7 @@ def install(args) -> dict:
                 (host / "hostname").write_text(name + "\n")
                 (host / "localtime").unlink(missing_ok=True)
                 (host / "localtime").symlink_to(ZONEINFO / tz)
+                (host / "keyboard").write_text(keyboard_file(kb))
                 net = target / "lib/suveryn/network"
                 net.mkdir(parents=True, exist_ok=True)
                 (net / "10-suveryn.network").write_text(network)
@@ -227,7 +252,8 @@ def install(args) -> dict:
                     models.append({"name": r["name"], "version": r["version"], "size": r["size"]})
                 rel = load("system-state").os_release()
                 record = {"image": rel.get("IMAGE_ID"), "version": rel.get("IMAGE_VERSION"), "name": name,
-                          "timezone": tz, "network": net_summary, "models": models,
+                          "language": args.language, "keyboard": kb, "timezone": tz,
+                          "network": net_summary, "models": models,
                           "installed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
                 (target / "lib/suveryn/installed.json").write_text(json.dumps(record, indent=2) + "\n")
                 run("sync")
@@ -243,7 +269,8 @@ def install(args) -> dict:
     step(4, total, "making the disk the first boot entry")
     boot_entry = add_boot_entry(args.disk)
     out = disk.result(args.disk, source, data, made, recovery)
-    out.update(name=name, timezone=tz, network=net_summary, models=models, boot_entry=boot_entry)
+    out.update(name=name, language=args.language, keyboard=kb, timezone=tz, network=net_summary, models=models,
+               boot_entry=boot_entry)
     return out
 
 
@@ -264,6 +291,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--disk")
     ap.add_argument("--name")
     ap.add_argument("--timezone", default="Europe/Brussels")
+    ap.add_argument("--language", default="en", help="the web setup's language: en, nl or fr")
+    ap.add_argument("--keyboard", default="be", help=f"console keyboard layout: {', '.join(KEYBOARDS)}")
     ap.add_argument("--interface")
     ap.add_argument("--address", default="dhcp")
     ap.add_argument("--gateway")
