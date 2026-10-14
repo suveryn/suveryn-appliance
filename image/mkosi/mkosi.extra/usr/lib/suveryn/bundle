@@ -8,7 +8,8 @@
 A bundle is a folder (on the stick's suveryn-bundles partition, or downloaded):
 
     manifest.json   what the bundle holds: format, kind, name, version, created, and per file its
-                    path, size and SHA-256
+                    path, size and SHA-256; optionally a title, a one-line description and whether
+                    the installer selects it by default
     manifest.sig    which key signed it (fingerprint) and the Ed25519 signature
     <the files>
 
@@ -118,6 +119,14 @@ def check_manifest(m) -> dict:
     for key, rx in (("name", NAME), ("version", VERSION)):
         if not isinstance(m.get(key), str) or not rx.fullmatch(m[key]):
             raise Invalid(f"unusable {key} {m.get(key)!r}")
+    # Optional, for the installer's model screen (C3): a display title, a one-line description, and
+    # whether it is selected by default. Text only: shown on the console, never run or rendered.
+    for key, limit in (("title", 64), ("description", 200)):
+        if key in m and (not isinstance(m[key], str) or not 0 < len(m[key]) <= limit
+                         or any(ord(c) < 32 or 0x7f <= ord(c) < 0xa0 for c in m[key])):
+            raise Invalid(f"unusable {key}: text of at most {limit} characters, no control characters")
+    if "default" in m and not isinstance(m["default"], bool):
+        raise Invalid("unusable default: true or false")
     files = m.get("files")
     if not isinstance(files, list) or not files:
         raise Invalid("the manifest lists no files")
@@ -240,7 +249,9 @@ def unlisted(folder: Path, manifest: dict) -> list[str]:
 
 def summary(folder: Path, manifest: dict, key: str) -> dict:
     return {"valid": True, "kind": manifest["kind"], "name": manifest["name"], "version": manifest["version"],
-            "created": manifest.get("created"), "key": key, "files": len(manifest["files"]),
+            "created": manifest.get("created"), "title": manifest.get("title", manifest["name"]),
+            "description": manifest.get("description", ""), "default": manifest.get("default", False),
+            "key": key, "files": len(manifest["files"]),
             "size": sum(f["size"] for f in manifest["files"]), "ignored": unlisted(folder, manifest)}
 
 
