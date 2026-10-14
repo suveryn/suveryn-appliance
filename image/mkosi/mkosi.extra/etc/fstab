@@ -1,8 +1,9 @@
 # The read-only system is mounted from the boot file's root hash (systemd-veritysetup-generator).
-# Everything the office writes is on the data partition, mounted in the initrd so it is there before
-# anything starts. Nothing on it can be run as a program. /tmp is in memory; there is no swap.
+# Everything the office writes is on the data partition (encrypted, see crypttab), mounted in the
+# initrd so it is there before anything starts. Nothing on it can be run as a program. /tmp is in
+# memory; there is no swap.
 # The machine-id lives on the data partition too: systemd won't follow a link for it, so the file is
 # mounted over /etc/machine-id before systemd starts, and systemd writes it there on the first boot.
-PARTLABEL=suveryn-data  /var  ext4   noexec,nosuid,nodev,x-initrd.mount  0 2
+/dev/mapper/suveryn-data  /var  ext4   noexec,nosuid,nodev,x-initrd.mount  0 2
 tmpfs                   /tmp  tmpfs  mode=1777,nosuid,nodev,size=25%     0 0
 /var/lib/suveryn/host/machine-id  /etc/machine-id  none  bind,x-initrd.mount  0 0
