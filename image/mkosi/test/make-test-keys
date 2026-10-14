@@ -1,0 +1,14 @@
+#!/bin/sh
+# The test system's bundle keys (tracker #36): two Ed25519 keys made on this machine, never committed.
+# The test image trusts their public halves; run-vm-tests signs its test bundles with them.
+#   image/mkosi/test/make-test-keys      (before: mkosi -f --profile test build; once is enough)
+set -eu
+cd "$(dirname "$0")"
+release=../../../bundles/suveryn-bundle-release
+pub=keys/public/usr/lib/suveryn/bundle-keys
+mkdir -p "$pub"
+for k in current spare; do
+  [ -f "keys/test-$k.key" ] || python3 "$release" test-key "keys/test-$k.key" >/dev/null
+  python3 "$release" public-key --key-file "keys/test-$k.key" > "$pub/test-$k.pem"
+done
+echo "test keys in image/mkosi/test/keys (not committed; the test image trusts $pub)"

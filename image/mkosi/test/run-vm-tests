@@ -6,9 +6,11 @@ appliance's identity and system state (#35), checked by the self-test inside the
 
 1. install:        the test image as the "stick", an empty second disk and a virtual TPM; install-disk
                    copies slot A, encrypts the data partition, enrols the TPM and a recovery key
-2. first boot:     the installed disk alone; the TPM unlocks the data partition (no prompt); the
-                   identity is made, sealed to the TPM, and signs; every rule passes
-3. second boot:    the same, with the same machine-id and the same identity
+2. first boot:     the installed disk; the TPM unlocks the data partition (no prompt); the
+                   identity is made, sealed to the TPM, and signs; of three test bundles on a second
+                   disk the signed one is installed, a changed one and an untrusted one are refused;
+                   every rule passes
+3. second boot:    the same, with the same machine-id, identity and installed bundle
 4. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
                    the right one opens the data partition and every rule passes; the identity is
                    kept but can't sign (it was sealed to the old TPM)
@@ -33,6 +35,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MKOSI = HERE.parent
+RELEASE = MKOSI.parent.parent / "bundles" / "suveryn-bundle-release"
 OVMF_CODE = Path("/usr/share/OVMF/OVMF_CODE_4M.fd")
 OVMF_VARS = Path("/usr/share/OVMF/OVMF_VARS_4M.fd")
 BOOT_TIMEOUT = int(os.environ.get("SUVERYN_VM_BOOT_TIMEOUT", "1200"))
@@ -177,11 +180,45 @@ def selftest(output: str) -> dict:
             "unlocked_by": value("unlocked-by "), "identity": value("identity ") or None}
 
 
+def bundle_disk(work: Path) -> Path:
+    """A small FAT disk with three test bundles (#36), signed with the test keys (test/make-test-keys):
+    good (plus a file its manifest doesn't list), changed (one byte of good's weights flipped after
+    signing) and untrusted (signed with a key the test system doesn't know)."""
+    src = work / "bundles"
+    good = src / "good"
+    good.mkdir(parents=True)
+    (good / "weights.bin").write_bytes(os.urandom(8 * 2**20))
+    (good / "config.json").write_text('{"test": true}\n')
+    rel = lambda *a: subprocess.run([sys.executable, str(RELEASE), *map(str, a)], check=True, capture_output=True)  # noqa: E731
+    rel("make", good, "--kind", "model", "--name", "test-model", "--version", "1.0")
+    rel("sign", good, "--key-file", HERE / "keys" / "test-current.key")
+    (good / "notes.txt").write_text("not in the manifest: never copied\n")
+    shutil.copytree(good, src / "changed")
+    with open(src / "changed" / "weights.bin", "r+b") as f:
+        f.seek(4 * 2**20)
+        b = f.read(1)
+        f.seek(4 * 2**20)
+        f.write(bytes([b[0] ^ 1]))
+    shutil.copytree(good, src / "untrusted")
+    rel("test-key", work / "untrusted.key")
+    rel("sign", src / "untrusted", "--key-file", work / "untrusted.key")
+    disk = work / "bundles.raw"
+    with open(disk, "wb") as f:
+        f.truncate(64 * 2**20)
+    subprocess.run(["mkfs.vfat", "-n", "SUVBUNDLES", str(disk)], check=True, capture_output=True)
+    subprocess.run(["mcopy", "-s", "-i", str(disk), str(good), str(src / "changed"), str(src / "untrusted"), "::"],
+                   check=True, capture_output=True)
+    return disk
+
+
 def main() -> int:
     image = Path(sys.argv[1]) if len(sys.argv) > 1 else max(MKOSI.glob("mkosi.output/suveryn-test_*.raw"),
                                                             key=os.path.getmtime, default=None)
     if not image or not image.exists():
-        print("no test image: cd image/mkosi && mkosi -f --profile test build", file=sys.stderr)
+        print("no test image: cd image/mkosi && test/make-test-keys && mkosi -f --profile test build", file=sys.stderr)
+        return 2
+    if not (HERE / "keys" / "test-current.key").exists():
+        print("no test keys: image/mkosi/test/make-test-keys, then build the test image again", file=sys.stderr)
         return 2
     work = Path(os.environ.get("SUVERYN_VM_WORK") or tempfile.mkdtemp(prefix="suveryn-vm-", dir="/var/tmp"))
     work.mkdir(parents=True, exist_ok=True)
@@ -227,9 +264,12 @@ def main() -> int:
         return 1
 
     machine_ids, identities = [], []
+    bundles = bundle_disk(work)
     for n in (2, 3):
-        note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it")
-        out, prompts = boot(work, f"boot{n - 1}", [target], tpm, work / "vars.fd")
+        note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it"
+             + ("; test bundles checked and one installed" if n == 2 else ""))
+        out, prompts = boot(work, f"boot{n - 1}", [target, bundles] if n == 2 else [target], tpm, work / "vars.fd",
+                            credential="suveryn.test=bundles" if n == 2 else None)
         r = selftest(out)
         machine_ids.append(r["machine_id"])
         identities.append(r["identity"])

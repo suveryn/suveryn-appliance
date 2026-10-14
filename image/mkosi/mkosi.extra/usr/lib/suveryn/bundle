@@ -1,0 +1,325 @@
+#!/usr/bin/python3
+"""Signed bundles: models now, system updates later (tracker #36). One verification path for both.
+
+    bundle verify DIR [--json]            check a bundle: signature by a trusted key, then every file
+    bundle install DIR [--to ROOT] [--json]   verify, copy into ROOT/<kind>/<name>/<version>, check the copy
+    bundle keys [--json]                  the keys this system trusts
+
+A bundle is a folder (on the stick's SUVERYN-BUNDLES partition, or downloaded):
+
+    manifest.json   what the bundle holds: format, kind, name, version, created, and per file its
+                    path, size and SHA-256
+    manifest.sig    which key signed it (fingerprint) and the Ed25519 signature
+    <the files>
+
+The signature covers a short fixed text with the manifest's SHA-256 (signed_text() below), so the
+signed message is always 108 bytes: any signer can sign it, a cloud key service included.
+The manifest in turn fixes every file's size and SHA-256.
+
+Trusted keys are the public keys in /usr/lib/suveryn/bundle-keys (*.pem), part of the read-only
+system: two per release, the current one and a spare kept elsewhere. A key is retired by a system
+update that leaves it out. A key's fingerprint is the SHA-256 of its raw 32-byte public key, in hex.
+
+Files in the folder that the manifest doesn't list are ignored (and reported): they are never read
+or copied. Exit codes: 0 valid / installed, 1 not valid, 2 usage, 3 already installed differently.
+"""
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path, PurePosixPath
+
+KEYS = Path(os.environ.get("SUVERYN_BUNDLE_KEYS", "/usr/lib/suveryn/bundle-keys"))
+ROOT = Path(os.environ.get("SUVERYN_BUNDLE_ROOT", "/var/lib/suveryn/bundles"))
+FORMAT = "suveryn-bundle/1"
+SIG_FORMAT = "suveryn-bundle-signature/1"
+KINDS = ("model", "system")
+NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+CHUNK = 8 * 2**20
+
+
+class Invalid(Exception):
+    """The bundle can't be trusted; the message says why, in a sentence an administrator can read."""
+
+
+def signed_text(manifest: bytes) -> bytes:
+    """What the key signs: the format and the manifest's SHA-256."""
+    return f"{SIG_FORMAT}\nmanifest-sha256 {hashlib.sha256(manifest).hexdigest()}\n".encode()
+
+
+# ---------------------------------------------------------------------------- keys
+def raw_public(pem: bytes) -> bytes:
+    r = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "DER"], input=pem, capture_output=True)
+    if r.returncode != 0 or len(r.stdout) != 44 or not r.stdout.startswith(ED25519_SPKI_PREFIX):
+        raise ValueError("not an Ed25519 public key")
+    return r.stdout[12:]
+
+
+def fingerprint(pem: bytes) -> str:
+    return hashlib.sha256(raw_public(pem)).hexdigest()
+
+
+def trusted_keys() -> dict[str, tuple[Path, bytes]]:
+    """fingerprint -> (file, PEM). A file that isn't an Ed25519 key is skipped."""
+    out = {}
+    for path in sorted(KEYS.glob("*.pem")) if KEYS.is_dir() else []:
+        pem = path.read_bytes()
+        try:
+            out[fingerprint(pem)] = (path, pem)
+        except ValueError:
+            print(f"bundle: {path} isn't an Ed25519 public key; skipped", file=sys.stderr)
+    return out
+
+
+def ed25519_verify(message: bytes, signature: bytes, pem: bytes) -> bool:
+    """openssl's -rawin needs to know each input's size: anonymous memory files, not pipes."""
+    fds = []
+    try:
+        for data in (pem, signature, message):
+            fd = os.memfd_create("suveryn-bundle")
+            os.write(fd, data)
+            os.lseek(fd, 0, os.SEEK_SET)
+            fds.append(fd)
+        r = subprocess.run(["openssl", "pkeyutl", "-verify", "-pubin", "-rawin", "-inkey", f"/dev/fd/{fds[0]}",
+                            "-sigfile", f"/dev/fd/{fds[1]}", "-in", f"/dev/fd/{fds[2]}"],
+                           stdin=subprocess.DEVNULL, capture_output=True, pass_fds=fds)
+    finally:
+        for fd in fds:
+            os.close(fd)
+    return r.returncode == 0
+
+
+# ---------------------------------------------------------------------------- the manifest
+def safe_path(p) -> PurePosixPath:
+    if not isinstance(p, str) or not p or "\\" in p or "\0" in p:
+        raise Invalid(f"the manifest lists an unusable file name: {p!r}")
+    path = PurePosixPath(p)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in p.split("/")):
+        raise Invalid(f"the manifest lists a file outside the bundle: {p!r}")
+    if path.parts[0] in ("manifest.json", "manifest.sig"):
+        raise Invalid(f"the manifest lists its own file: {p!r}")
+    return path
+
+
+def check_manifest(m) -> dict:
+    if not isinstance(m, dict) or m.get("format") != FORMAT:
+        raise Invalid(f"not a {FORMAT} manifest")
+    if m.get("kind") not in KINDS:
+        raise Invalid(f"unknown kind {m.get('kind')!r}")
+    for key, rx in (("name", NAME), ("version", VERSION)):
+        if not isinstance(m.get(key), str) or not rx.fullmatch(m[key]):
+            raise Invalid(f"unusable {key} {m.get(key)!r}")
+    files = m.get("files")
+    if not isinstance(files, list) or not files:
+        raise Invalid("the manifest lists no files")
+    seen = set()
+    for f in files:
+        if not isinstance(f, dict):
+            raise Invalid("a file entry isn't an object")
+        path = safe_path(f.get("path"))
+        key = str(path).casefold()  # exFAT and macOS don't tell case apart
+        if key in seen:
+            raise Invalid(f"the manifest lists {path} twice")
+        seen.add(key)
+        if not isinstance(f.get("size"), int) or isinstance(f.get("size"), bool) or f["size"] < 0:
+            raise Invalid(f"{path}: unusable size")
+        if not isinstance(f.get("sha256"), str) or not SHA256.fullmatch(f["sha256"]):
+            raise Invalid(f"{path}: unusable SHA-256")
+    for a in seen:  # a file and a folder of the same name
+        for b in seen:
+            if b.startswith(a + "/"):
+                raise Invalid(f"the manifest lists {a} both as a file and as a folder")
+    return m
+
+
+def read_signed_manifest(folder: Path) -> tuple[dict, str]:
+    """The manifest, once its signature is checked against the trusted keys. Returns (manifest, key)."""
+    try:
+        raw = (folder / "manifest.json").read_bytes()
+    except OSError:
+        raise Invalid("no manifest.json: not a bundle") from None
+    try:
+        sig = json.loads((folder / "manifest.sig").read_bytes())
+    except OSError:
+        raise Invalid("no manifest.sig: the bundle isn't signed") from None
+    except ValueError:
+        raise Invalid("manifest.sig is damaged") from None
+    if not isinstance(sig, dict) or sig.get("format") != SIG_FORMAT:
+        raise Invalid("manifest.sig is damaged")
+    keys = trusted_keys()
+    if not keys:
+        raise Invalid(f"this system trusts no bundle key ({KEYS} is empty)")
+    key = sig.get("key")
+    if key not in keys:
+        raise Invalid(f"signed by a key this system doesn't trust ({str(key)[:16]}…)")
+    try:
+        signature = base64.b64decode(sig.get("signature", ""), validate=True)
+    except (ValueError, TypeError):
+        raise Invalid("manifest.sig is damaged") from None
+    if len(signature) != 64 or not ed25519_verify(signed_text(raw), signature, keys[key][1]):
+        raise Invalid("the signature doesn't match: the manifest was changed, or signed with another key")
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        raise Invalid("manifest.json is damaged") from None
+    return check_manifest(manifest), key
+
+
+# ---------------------------------------------------------------------------- the files
+def progress(text: str) -> None:
+    print(f"bundle: {text}", file=sys.stderr, flush=True)
+
+
+def hash_file(src: Path, size: int, dst=None, name: str = "") -> str:
+    """SHA-256 of src, refusing a link or a size other than expected; copied into dst on the way."""
+    name = name or src.name
+    st = os.lstat(src)
+    if not os.path.isfile(src) or os.path.islink(src):
+        raise Invalid(f"{name} isn't a plain file")
+    if st.st_size != size:
+        raise Invalid(f"{name}: {st.st_size} bytes, the manifest says {size}")
+    h = hashlib.sha256()
+    done = 0
+    with open(src, "rb", buffering=0) as f:
+        while chunk := f.read(CHUNK):
+            h.update(chunk)
+            if dst:
+                dst.write(chunk)
+            done += len(chunk)
+    if done != size:
+        raise Invalid(f"{name} changed while it was read")
+    return h.hexdigest()
+
+
+def check_files(folder: Path, manifest: dict, copy_to: Path | None = None) -> None:
+    done = 0
+    start = time.time()
+    for n, f in enumerate(manifest["files"], 1):
+        src = folder / f["path"]
+        if not src.exists() and not src.is_symlink():
+            raise Invalid(f"{f['path']} is missing")
+        # Every folder on the way must be a real folder inside the bundle (no link out of it).
+        if folder.resolve() not in src.resolve().parents:
+            raise Invalid(f"{f['path']} leads outside the bundle")
+        progress(f"[{n}/{len(manifest['files'])}] {f['path']} ({f['size'] / 2**20:.0f} MiB)")
+        if copy_to:
+            target = copy_to / f["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "xb") as out:
+                digest = hash_file(src, f["size"], out, f["path"])
+                out.flush()
+                os.fsync(out.fileno())
+        else:
+            digest = hash_file(src, f["size"], name=f["path"])
+        if digest != f["sha256"]:
+            raise Invalid(f"{f['path']}: its SHA-256 doesn't match the manifest")
+        done += f["size"]
+    took = max(time.time() - start, 0.001)
+    progress(f"{len(manifest['files'])} file(s), {done / 2**30:.2f} GiB checked in {took:.0f} s")
+
+
+def unlisted(folder: Path, manifest: dict) -> list[str]:
+    listed = {str(PurePosixPath(f["path"])) for f in manifest["files"]} | {"manifest.json", "manifest.sig"}
+    out = []
+    for dirpath, dirnames, filenames in os.walk(folder):
+        for name in filenames:
+            rel = os.path.relpath(os.path.join(dirpath, name), folder)
+            if rel not in listed:
+                out.append(rel)
+    return sorted(out)
+
+
+def summary(folder: Path, manifest: dict, key: str) -> dict:
+    return {"valid": True, "kind": manifest["kind"], "name": manifest["name"], "version": manifest["version"],
+            "created": manifest.get("created"), "key": key, "files": len(manifest["files"]),
+            "size": sum(f["size"] for f in manifest["files"]), "ignored": unlisted(folder, manifest)}
+
+
+def verify(folder: Path) -> dict:
+    manifest, key = read_signed_manifest(folder)
+    check_files(folder, manifest)
+    return summary(folder, manifest, key)
+
+
+def install(folder: Path, root: Path) -> dict:
+    manifest, key = read_signed_manifest(folder)
+    if manifest["kind"] != "model":
+        raise Invalid(f"a {manifest['kind']} bundle isn't installed here (system bundles: the update, #40)")
+    dest = root / manifest["kind"] / manifest["name"] / manifest["version"]
+    raw = (folder / "manifest.json").read_bytes()
+    if dest.exists():
+        if (dest / "manifest.json").read_bytes() == raw:
+            progress(f"{manifest['name']} {manifest['version']} is already installed")
+            out = summary(folder, manifest, key)
+            out.update(installed=str(dest), already=True)
+            return out
+        raise FileExistsError(f"{dest} exists with another manifest")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    partial = dest.parent / f".{manifest['version']}.partial"
+    if partial.exists():
+        shutil.rmtree(partial)  # an earlier, interrupted install
+    partial.mkdir()
+    try:
+        # Copied and hashed in one read: what lands on the disk is what was checked.
+        check_files(folder, manifest, copy_to=partial)
+        shutil.copyfile(folder / "manifest.json", partial / "manifest.json")
+        shutil.copyfile(folder / "manifest.sig", partial / "manifest.sig")
+        os.rename(partial, dest)
+    except BaseException:
+        shutil.rmtree(partial, ignore_errors=True)
+        raise
+    out = summary(folder, manifest, key)
+    out.update(installed=str(dest), already=False)
+    return out
+
+
+# ---------------------------------------------------------------------------- command line
+USAGE = "usage: bundle verify DIR [--json] | install DIR [--to ROOT] [--json] | keys [--json]"
+
+
+def main(argv: list[str]) -> int:
+    as_json = "--json" in argv
+    args = [a for a in argv if a != "--json"]
+    if args[:1] == ["keys"] and len(args) == 1:
+        keys = [{"fingerprint": fp, "file": str(p)} for fp, (p, _) in trusted_keys().items()]
+        print(json.dumps(keys, indent=2) if as_json else "\n".join(f"{k['fingerprint']}  {k['file']}" for k in keys))
+        return 0
+    root = ROOT
+    if args[:1] == ["install"] and len(args) == 4 and args[2] == "--to":
+        root = Path(args[3])
+        args = args[:2]
+    if len(args) != 2 or args[0] not in ("verify", "install"):
+        print(USAGE, file=sys.stderr)
+        return 2
+    folder = Path(args[1])
+    try:
+        result = verify(folder) if args[0] == "verify" else install(folder, root)
+    except Invalid as e:
+        result = {"valid": False, "error": str(e)}
+    except FileExistsError as e:
+        result = {"valid": True, "error": str(e)}
+        print(json.dumps(result, indent=2) if as_json else f"bundle: NOT INSTALLED: {e}")
+        return 3
+    if as_json:
+        print(json.dumps(result, indent=2))
+    elif result["valid"]:
+        print(f"valid: {result['kind']} {result['name']} {result['version']}, {result['files']} file(s), "
+              f"signed by {result['key'][:16]}…" + (f"; installed in {result['installed']}" if "installed" in result else ""))
+        for name in result["ignored"]:
+            print(f"ignored (not in the manifest): {name}")
+    else:
+        print(f"NOT VALID: {result['error']}")
+    return 0 if result["valid"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

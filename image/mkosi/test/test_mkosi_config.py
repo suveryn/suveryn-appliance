@@ -186,7 +186,7 @@ def test_every_extra_tree_exists():
                 line = line.split("=", 1)[1]
             elif not line.startswith((" ", "\t")):
                 inside = False
-            if inside and line.strip():
+            if inside and line.strip() and not line.strip().startswith("#"):
                 out.append(line.strip().split(":")[0])
         return out
     for conf, base in [(MKOSI / "mkosi.conf.d" / "10-appliance.conf", MKOSI),
@@ -195,6 +195,8 @@ def test_every_extra_tree_exists():
         found = trees(conf)
         assert found, conf
         for t in found:
+            if t == "../../test/keys/public":  # made by test/make-test-keys, never committed
+                continue
             assert (base / t).is_dir(), f"{conf.name}: {t}"
 
 
@@ -221,5 +223,26 @@ def test_the_identity_is_sealed_without_pcrs():
 def test_every_python_tool_in_the_image_compiles():
     """A syntax error in a tool only shows when the system runs it; catch it here."""
     for path in (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn").iterdir():
-        if path.read_text().startswith("#!/usr/bin/python3"):
+        if path.is_file() and path.read_text().startswith("#!/usr/bin/python3"):
             compile(path.read_text(), str(path), "exec")  # raises SyntaxError
+
+
+def test_no_bytecode_in_the_image_tree():
+    """A test that imports a tool from mkosi.extra must not leave a __pycache__ for the image to pick up."""
+    assert not list((MKOSI / "mkosi.extra").rglob("__pycache__"))
+
+
+BUNDLE_KEYS = MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "bundle-keys"
+
+
+def test_the_test_bundle_keys_never_reach_the_appliance():
+    profile = (MKOSI / "mkosi.profiles" / "test" / "mkosi.conf").read_text()
+    assert "../../test/keys/public" in profile
+    assert "test/keys" not in (MKOSI / "mkosi.conf.d" / "10-appliance.conf").read_text()
+    assert "image/mkosi/test/keys/" in (REPO / ".gitignore").read_text()
+    assert all(p.name.startswith("release-") for p in BUNDLE_KEYS.glob("*.pem"))
+
+
+@pytest.mark.xfail(strict=True, reason="waiting for the two release keys from AWS KMS (bundle-keys/README.md)")
+def test_the_appliance_trusts_two_release_keys():
+    assert sorted(p.name for p in BUNDLE_KEYS.glob("*.pem")) == ["release-current.pem", "release-spare.pem"]

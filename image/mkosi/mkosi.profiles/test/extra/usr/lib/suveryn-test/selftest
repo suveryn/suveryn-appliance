@@ -5,6 +5,8 @@
 # Mode, from the credential suveryn.test (QEMU: -smbios type=11,value=io.systemd.credential:suveryn.test=…):
 #   install       the installer's disk step onto the second disk (/dev/vdb), then check what it made
 #   tpm-replaced  check the running system; the identity, sealed to the old TPM, must be unusable
+#   bundles       check the running system, then the test bundles on the second disk (/dev/vdb, #36):
+#                 the good one is installed, the changed and the untrusted ones are refused
 #   (none)        check the running system
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
@@ -94,5 +96,17 @@ assert re.fullmatch("[0-9a-f]{64}", s["pcr11"] or ""), s["pcr11"]
 assert s["identity"]["uuid"] == open("/var/lib/suveryn/identity/uuid").read().strip()
 img = s["image"]
 print("%s %s, slot %s, PCR 11 %s..." % (img["id"], img["version"], s["slot"], s["pcr11"][:16]))'
+# Signed bundles (#36), from the test bundle disk: verified and installed onto the data partition.
+bundle=/usr/lib/suveryn/bundle; installed=/var/lib/suveryn/bundles/model/test-model/1.0
+check "two bundle keys trusted"       bash -c "test \$($bundle keys | wc -l) -eq 2 && $bundle keys | cut -c1-16 | tr '\n' ' '"
+if [ "$mode" = bundles ]; then
+  mkdir -p /run/bundles && mount -o ro /dev/vdb /run/bundles
+  check "a signed bundle verifies"    bash -c "$bundle verify /run/bundles/good 2>/dev/null | grep -q '^valid: model test-model 1.0'"
+  check "a changed file is refused"   bash -c "! $bundle verify /run/bundles/changed 2>/dev/null >/tmp/b; grep -q \"SHA-256 doesn't match\" /tmp/b && cat /tmp/b"
+  check "an unknown key is refused"   bash -c "! $bundle verify /run/bundles/untrusted 2>/dev/null >/tmp/b; grep -q \"doesn't trust\" /tmp/b && cat /tmp/b"
+  check "a bundle installs onto /var" bash -c "$bundle install /run/bundles/good 2>/dev/null | grep -q 'installed in $installed' && test -f $installed/weights.bin && ! test -e $installed/notes.txt"
+  umount /run/bundles
+fi
+check "installed bundle verifies"     bash -c "$bundle verify $installed 2>/dev/null | grep -q '^valid:' && echo \$(du -sh $installed | cut -f1)"
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
 finish
