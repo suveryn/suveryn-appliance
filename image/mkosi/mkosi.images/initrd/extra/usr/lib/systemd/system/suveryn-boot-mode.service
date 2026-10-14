@@ -1,0 +1,19 @@
+[Unit]
+Description=sūveryn: installed appliance or installer, and /var for it
+Documentation=file:/usr/lib/suveryn/boot-mode
+DefaultDependencies=no
+ConditionPathExists=/etc/initrd-release
+# /sysroot is the verified system (slot A); /var goes on it before anything in it starts.
+After=initrd-root-fs.target systemd-udev-trigger.service tpm2.target
+Wants=tpm2.target
+Before=initrd-fs.target
+OnFailure=emergency.target
+OnFailureJobMode=isolate
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/suveryn/boot-mode
+StandardOutput=journal+console
+# The recovery-key prompt can take as long as the person at the console needs.
+TimeoutStartSec=infinity
