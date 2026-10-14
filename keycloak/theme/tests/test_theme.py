@@ -1,4 +1,4 @@
-"""Rules the Sūveryn Keycloak theme must keep. Run: uv run --with pytest pytest keycloak/theme/tests
+"""Rules the sūveryn Keycloak theme must keep. Run: uv run --with pytest pytest keycloak/theme/tests
 
 These check the sources in src/ (no Keycloak needed). The visual check against a running Keycloak
 is described in ../README.md.
