@@ -255,7 +255,8 @@ def make_stick(work: Path, image: Path) -> Path:
     (good / "config.json").write_text('{"test": true}\n')
     rel = lambda *a: subprocess.run([sys.executable, str(RELEASE), *map(str, a)], check=True, capture_output=True)  # noqa: E731
     rel("make", good, "--kind", "model", "--name", "test-model", "--version", "1.0", "--title", "Test Model 1B",
-        "--description", "A tiny model for the tests.", "--default")
+        "--description", "A tiny model for the tests.", "--description-nl", "Een klein model voor de tests.",
+        "--default")
     rel("sign", good, "--key-file", HERE / "keys" / "test-current.key")
     (good / "notes.txt").write_text("not in the manifest: never copied\n")
     shutil.copytree(good, src / "changed")
@@ -274,35 +275,39 @@ def make_stick(work: Path, image: Path) -> Path:
 
 
 def console_install(c: "Console") -> str:
-    """Steps C1 to C7 on the serial console, with the answers a person would give. Returns the recovery key."""
+    """Steps C1 to C7 on the serial console, with the answers a person would give, in Dutch. Returns the
+    recovery key."""
     c.wait("Language, keyboard and time zone", timeout=900)
     assert "(*) English" in c.text and "Belgian (AZERTY)" in c.text and "Europe/Brussels" in c.text
+    c.press("\x1b[B")  # Nederlands: the screens switch at once
+    s = c.wait("Taal, toetsenbord en tijdzone")
+    assert "Belgisch (AZERTY)" in s, s
     c.press("\t", "\t", "\t", "\t", "\r")
-    s = c.wait("Hardware and target disk")
-    assert "(*) vdb" in s and "√ Security" in s and "installation medium" in s, s
+    s = c.wait("Hardware en doelschijf")
+    assert "(*) vdb" in s and "√ Beveiliging" in s and "installatiemedium" in s, s
     c.press("\r")
-    s = c.wait("Found on this installation medium", timeout=300)
-    assert "[x]  Test Model 1B" in s and "A tiny model for the tests." in s, s
-    assert "Changed or damaged since it was signed." in s and "Signature not valid." in s, s
+    s = c.wait("Gevonden op dit installatiemedium", timeout=300)
+    assert "[x]  Test Model 1B" in s and "Een klein model voor de tests." in s, s
+    assert "Gewijzigd of beschadigd sinds de ondertekening." in s and "Handtekening ongeldig." in s, s
     c.press("\r")
-    c.wait("Interface")
+    c.wait("Netwerkpoort")
     c.press("\t")
     for ch in "test-appliance":
         c.press(ch, settle=0)
-    s = c.wait("Received ", timeout=90)
+    s = c.wait("Ontvangen: ", timeout=90)
     c.press("\r")
-    s = c.wait("Ready to install")
-    assert "test-appliance" in s and "Test Model 1B" in s and "All data on vdb will be permanently erased" in s, s
-    for ch in "ERASE":
+    s = c.wait("Klaar om te installeren")
+    assert "test-appliance" in s and "Test Model 1B" in s and "Alle gegevens op vdb worden definitief gewist" in s, s
+    for ch in "WISSEN":
         c.press(ch, settle=0)
     c.press("\r")
-    s = c.wait("Write down the disk recovery key", timeout=900)
+    s = c.wait("Schrijf de herstelsleutel van de schijf op", timeout=900)
     m = re.search(r"([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})\s*│?\s*\n.*?([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})", s, re.S)
     assert m, s
     key = f"{m.group(1)}-{m.group(2)}"
     for ch in key.split("-")[0]:
         c.press(ch, settle=0)
-    c.wait("√ matches")
+    c.wait("√ klopt")
     c.press("\r")
     return key
 
@@ -346,8 +351,8 @@ def main() -> int:
     ui = boot.ui
     key = ui.result if ui and not ui.error else None
     if key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key) and prompts == 0:
-        ok("C1 to C7 on the console: the signed model offered and the other two skipped, installed, the recovery "
-           "key shown and confirmed, restarted")
+        ok("C1 to C7 on the console, in Dutch: the signed model offered and the other two skipped, installed, the "
+           "recovery key shown and confirmed, restarted")
     else:
         bad(f"the console installer didn't finish: {ui.error if ui else 'no console'} (console: {work}/install.log)")
         print(f"\n{failed} FAILED (kept: {work})")
