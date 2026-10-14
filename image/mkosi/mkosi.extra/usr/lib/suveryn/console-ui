@@ -1,0 +1,386 @@
+#!/usr/bin/python3
+"""The installed appliance's own console (C8 of the approved design, docs/design/first-boot-setup; #37).
+
+Runs on the first console of an installed appliance (suveryn-console.service; never on the installer
+stick) and shows how to reach it: its addresses (https://<name>.local and the IP address), the web
+setup's certificate fingerprint while setup is open, the network, how the disk was unlocked, setup,
+the appliance ID, support and the time. Then a menu:
+
+    1  network details          3  the registration QR code (qrencode, half blocks)
+    2  change network settings  4  restart       5  shut down
+
+The words are the installer's (installer-text.json), in the language chosen at installation. Built on
+the installer's screens (installer-ui): the network change is its C4. For tests,
+SUVERYN_CONSOLE_FAKE names a JSON file that stands in for the machine (FakeConsole below).
+"""
+
+import curses
+import datetime
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
+# The portal's registration page; the QR code carries the appliance's ID and key fingerprint (#35).
+# The address is a placeholder until the portal exists.
+PORTAL_REGISTER = "https://portal.suveryn.com/r"
+SUPPORT_GRACE_DAYS = 14
+
+
+def load(name: str):
+    sys.dont_write_bytecode = True
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(LIB / name))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+ui = load("installer-ui")
+t = ui.t
+
+
+# ---------------------------------------------------------------------------- the machine
+class RealConsole(ui.RealSystem):
+    VAR = Path("/var/lib/suveryn")
+
+    def read(self, path: Path, default=""):
+        try:
+            return path.read_text().strip()
+        except OSError:
+            return default
+
+    def status(self) -> dict:
+        installed = {}
+        try:
+            installed = json.loads((self.VAR / "installed.json").read_text())
+        except (OSError, ValueError):
+            pass
+        identity = {}
+        try:
+            identity = json.loads((self.VAR / "identity" / "identity.json").read_text())
+        except (OSError, ValueError):
+            pass
+        ports = []
+        for p in self.interfaces():
+            lease = self.dhcp(p["name"]) or {}
+            v6 = json.loads(subprocess.run(["ip", "-j", "-6", "addr", "show", "dev", p["name"], "scope", "global"],
+                                           capture_output=True, text=True).stdout or "[]")
+            addrs = ([lease["address"]] if lease.get("address") else []) + \
+                [f"{a['local']}/{a['prefixlen']}" for d in v6 for a in d.get("addr_info", [])]
+            ports.append({**p, "addresses": addrs, "gateway": lease.get("gateway"), "dns": lease.get("dns", [])})
+        network = self.read(self.VAR / "network" / "10-suveryn.network")
+        cert = self.VAR / "etc" / "tls" / "setup-cert.pem"
+        fingerprint = None
+        if cert.exists():
+            out = subprocess.run(["openssl", "x509", "-in", str(cert), "-noout", "-fingerprint", "-sha256"],
+                                 capture_output=True, text=True).stdout
+            fingerprint = out.split("=", 1)[-1].strip() or None
+        zone = os.path.realpath("/etc/localtime").split("/usr/share/zoneinfo/")[-1]
+        return {"version": self.version(), "hostname": self.read(Path("/proc/sys/kernel/hostname")),
+                "ports": ports, "fixed": "Address=" in network,
+                "unlocked_by": self.read(Path("/run/suveryn/unlocked-by"), "tpm"),
+                "tpm_again": Path("/run/suveryn/tpm-enrolled").exists(),
+                "setup_complete": (self.VAR / "etc" / "setup-complete").exists(), "fingerprint": fingerprint,
+                "identity": {k: identity.get(k) for k in ("uuid", "fingerprint")} if identity else None,
+                "installed": installed.get("installed"), "language": installed.get("language", "en"),
+                "manifest": None, "timezone": zone, "now": time.time(), "tty": os.path.basename(os.ttyname(0))
+                if os.isatty(0) else ""}
+
+    def apply_network(self, name: str, network: str) -> None:
+        (self.VAR / "host" / "hostname").write_text(name + "\n")
+        target = self.VAR / "network" / "10-suveryn.network"
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(network)
+        os.replace(tmp, target)
+        subprocess.run(["hostname", name], check=True, capture_output=True)
+        subprocess.run(["networkctl", "reload"], check=True, capture_output=True)
+        subprocess.run(["networkctl", "reconfigure", *[p["name"] for p in self.interfaces()]],
+                       capture_output=True)
+        subprocess.run(["systemctl", "try-restart", "systemd-resolved.service"], capture_output=True)  # mDNS name
+
+    def qr(self, text: str) -> list[str]:
+        out = subprocess.run(["qrencode", "-t", "UTF8i", "-m", "1", text], capture_output=True, text=True)
+        return out.stdout.rstrip("\n").splitlines() if out.returncode == 0 else []
+
+    def power(self, action: str) -> None:
+        subprocess.run(["systemctl", action])
+
+
+class FakeConsole(ui.FakeSystem):
+    def status(self):
+        return {**self.d["status"], "now": self.d["status"].get("now", time.time())}
+
+    def apply_network(self, name, network):
+        self.record("apply_network", {"name": name, "network": network})
+        self.d["status"]["hostname"] = name
+
+    def qr(self, text):
+        self.record("qr", text)
+        return ["█▀▀▀█ ▄▀▄ █▀▀▀█", "█ █ █ ▀▄▀ █ █ █", "▀▀▀▀▀ ▀ ▀ ▀▀▀▀▀"]
+
+    def power(self, action):
+        self.record("power", action)
+        raise SystemExit(0)
+
+
+# ---------------------------------------------------------------------------- screens
+def when(ts: float, zone: str) -> str:
+    d = datetime.datetime.fromtimestamp(ts)
+    return t("date", weekday=t("weekdays").split(",")[d.weekday()], day=d.day,
+             month=t("months").split(",")[d.month - 1], year=d.year, time=d.strftime("%H:%M")) + f" · {zone}"
+
+
+class Status(ui.Screen):
+    step = 0
+    keys = [("1-5", "c8_choose")]
+
+    @property
+    def title(self):
+        return t("c8_running") if self.app.st["setup_complete"] else t("c8_waiting")
+
+    @property
+    def footer(self):
+        return [("1-5", t("c8_choose").rstrip(": ").rstrip())]
+
+    def body(self, c, focus):
+        st, ok, warn = self.app.st, ui.CHECK, ui.WARN
+        c.add((t("c8_sign_in") if st["setup_complete"] else t("c8_open_addresses"), "text"))
+        addrs = [f"https://{st['hostname']}.local"]
+        for p in st["ports"]:
+            addrs += [f"https://{a.split('/')[0]}" if ":" not in a else f"https://[{a.split('/')[0]}]"
+                      for a in p["addresses"][:1]]
+        for a in addrs:
+            c.add(("  › ", "accent"), (a, "strong"))
+        if st["setup_complete"]:
+            c.add((t("c8_setup_closed"), "dim"))
+        elif st.get("fingerprint"):
+            c.blank()
+            c.wrap(t("c8_cert_warning"), "dim")
+            fp = st["fingerprint"]
+            c.add(("  SHA-256  ", "dim"), (fp[:47], "strong"))
+            if len(fp) > 47:
+                c.add(("           ", "dim"), (fp[48:], "strong"))
+        c.blank()
+        rows = []
+        for p in st["ports"][:2]:
+            if not p["carrier"]:
+                continue
+            addr = p["addresses"][0] if p["addresses"] else t("c8_no_address")
+            how = t("c8_fixed") if st["fixed"] else "DHCP"
+            rows.append((t("c8_network"), [(f"{p['name']} · {addr} · {how} ", "text"), (f"{ok} {t('c8_connected')}", "ok")]))
+        if not rows:
+            rows.append((t("c8_network"), [(f"{warn} {t('c8_no_cable')}", "accent")]))
+        if st["unlocked_by"] == "tpm":
+            disk = [(t("c8_disk_tpm") + " ", "text"), (ok, "ok")]
+        else:
+            disk = [(t("c8_disk_key_again") if st["tpm_again"] else t("c8_disk_key"), "text")]
+        rows.append((t("c8_disk"), disk))
+        rows.append((t("c8_setup"), [(t("c8_setup_done") if st["setup_complete"] else t("c8_setup_open"), "text")]))
+        ident = st.get("identity") or {}
+        rows.append((t("c8_id"), [(ident.get("uuid") or t("c8_id_pending"), "text")]))
+        rows.append((t("c8_support"), [(self.support(), "text")]))
+        rows.append((t("c8_time"), [(when(st["now"], st["timezone"]), "text")]))
+        for label, pieces in rows:
+            c.add((label.ljust(20), "dim"), *pieces)
+        c.blank()
+        for n, key in enumerate(("c8_menu_details", "c8_menu_change", "c8_menu_qr", "c8_menu_restart",
+                                 "c8_menu_shutdown"), start=1):
+            c.add((f"  {n}  ", "accent"), (t(key), "text"))
+        c.blank()
+        c.add((t("c8_choose"), "strong"), ("█", "accent"))
+
+    def support(self) -> str:
+        st = self.app.st
+        if st.get("manifest"):
+            return st["manifest"]
+        try:
+            since = (time.time() - datetime.datetime.fromisoformat(st["installed"].replace("Z", "+00:00")).timestamp()) / 86400
+        except (TypeError, ValueError, AttributeError):
+            since = 0
+        left = SUPPORT_GRACE_DAYS - int(since)
+        return t("c8_no_manifest", days=left) if left > 0 else t("c8_no_manifest_now")
+
+
+class Details(ui.Screen):
+    step = 0
+    title_key = "c8_details_title"
+    keys = [("", "c8_any_key")]
+
+    def body(self, c, focus):
+        st = self.app.st
+        c.add((t("c8_mdns").ljust(22), "dim"), (f"{st['hostname']}.local", "strong"))
+        for p in st["ports"]:
+            c.blank()
+            state = t("c8_connected") if p["carrier"] else t("c8_no_cable")
+            c.add((p["name"], "strong"), (f"  {p.get('model', '')} · {state}", "dim"))
+            c.add((t("c8_mac").ljust(22), "dim"), (p["mac"], "text"))
+            c.add((t("c8_addresses").ljust(22), "dim"), (", ".join(p["addresses"]) or t("c8_no_address"), "text"))
+            if p.get("gateway"):
+                c.add((t("c8_gateway").ljust(22), "dim"), (p["gateway"], "text"))
+            if p.get("dns"):
+                c.add((t("c8_dns").ljust(22), "dim"), (", ".join(p["dns"]), "text"))
+        c.blank()
+        c.add((t("c8_settings").ljust(22), "dim"), (t("c8_fixed") if st["fixed"] else "DHCP", "text"))
+        c.blank()
+        c.add((t("c8_any_key"), "dim"))
+
+
+class Registration(ui.Screen):
+    step = 0
+    title_key = "c8_qr_title"
+    keys = [("", "c8_any_key")]
+
+    def body(self, c, focus):
+        ident = self.app.st.get("identity") or {}
+        if not ident.get("uuid"):
+            c.wrap(t("c8_qr_none"), "text")
+            return
+        # Short, so the code stays small enough for a 25-line console: the ID and the key's first 16.
+        url = f"{PORTAL_REGISTER}/{ident['uuid']}?k={ident['fingerprint'][:16]}"
+        c.wrap(t("c8_qr_text"), "text")
+        c.blank()
+        for line in self.app.system.qr(url):
+            c.lines.append([("  ", "text"), (line, "field")])  # as drawn, never wrapped
+        c.blank()
+        c.add((t("c8_id").ljust(22), "dim"), (ident["uuid"], "text"))
+        c.add((t("c8_fingerprint").ljust(22), "dim"), (ident["fingerprint"][:32], "text"))
+        c.add((" " * 22, "dim"), (ident["fingerprint"][32:], "text"))
+
+
+class Confirm(ui.Screen):
+    step = 0
+    keys = [("Enter", "key_continue"), ("Esc", "key_back")]
+
+    def __init__(self, app, action):
+        super().__init__(app)
+        self.action = action
+
+    @property
+    def title(self):
+        return t("c8_menu_restart" if self.action == "reboot" else "c8_menu_shutdown")
+
+    def body(self, c, focus):
+        c.wrap(t("c8_confirm_restart" if self.action == "reboot" else "c8_confirm_shutdown"), "text")
+
+
+class ChangeNetwork(ui.Network):
+    title_key = "c8_change_title"
+    step = 0
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.next = ui.Button(lambda: t("button_apply"), "next")
+
+
+# ---------------------------------------------------------------------------- the program
+class Console(ui.App):
+    def __init__(self, scr, system):
+        self.scr, self.system = scr, system
+        self.st = system.status()
+        ui.LANG = self.st.get("language", "en") if self.st.get("language") in ("en", "nl", "fr") else "en"
+        self.version = self.st["version"]
+        self.ink = ui.Ink()
+        self.focus, self.help_open = 0, False
+        self.screens: dict = {}
+        self.models, self.models_started = [], time.time()
+        port = next((p for p in self.st["ports"] if p["carrier"]), self.st["ports"][0] if self.st["ports"] else {})
+        self.answers = {"interface": port.get("name"), "name": self.st["hostname"],
+                        "address_mode": "fixed" if self.st["fixed"] else "dhcp"}
+        self.screen = Status(self)
+        self.refreshed = time.time()
+
+    def top_left(self):
+        return f"{self.version} · {self.st['hostname']}"
+
+    def top_right(self):
+        return f"{self.st.get('tty', '')} "
+
+    def show(self, screen):
+        self.screen, self.focus, self.help_open = screen, 0, False
+
+    def handle(self, k):
+        s = self.screen
+        if isinstance(s, Status):
+            choice = {ord("1"): lambda: Details(self), ord("2"): lambda: ChangeNetwork(self),
+                      ord("3"): lambda: Registration(self), ord("4"): lambda: Confirm(self, "reboot"),
+                      ord("5"): lambda: Confirm(self, "poweroff")}.get(k)
+            if choice:
+                self.show(choice())
+            elif k == 12:
+                self.scr.clear()
+            return
+        if isinstance(s, (Details, Registration)):
+            self.show(Status(self))
+            return
+        if isinstance(s, Confirm):
+            if k in (10, 13, curses.KEY_ENTER):
+                self.system.power(s.action)
+            elif k == 27:
+                self.show(Status(self))
+            return
+        super().handle(k)  # the network change: the installer's own keys
+
+    def act(self, action):
+        s = self.screen
+        if action == "back":
+            self.show(Status(self))
+        elif action == "retry":
+            s.key("retry")
+        elif action == "next":
+            err = s.leave()
+            if err:
+                s.error = err
+                return
+            a = self.answers
+            args = ui.Namespace(interface=a["interface"], address="dhcp", gateway=None, dns=None)
+            if a["address_mode"] == "fixed":
+                args = ui.Namespace(interface=a["interface"], address=a["fixed_address"],
+                                    gateway=a["fixed_gateway"] or None, dns=a["fixed_dns"] or None)
+            try:
+                text, _ = ui.ENGINE.network_file(args, ports={p["name"]: p["mac"] for p in self.st["ports"]})
+                self.system.apply_network(a["name"], text)
+            except Exception as e:  # noqa: BLE001 (shown on the screen)
+                s.error = t("c8_apply_failed", detail=str(e)[:80])
+                return
+            self.st = self.system.status()
+            self.show(Status(self))
+
+    def run(self):
+        curses.curs_set(0)
+        self.scr.keypad(True)
+        self.scr.timeout(1000)
+        while True:
+            if isinstance(self.screen, Status) and time.time() - self.refreshed > 5:
+                self.st, self.refreshed = self.system.status(), time.time()
+            self.screen.tick()
+            self.draw()
+            try:
+                k = self.scr.get_wch()
+            except curses.error:
+                continue
+            if isinstance(k, str) and len(k) == 1 and ord(k) < 128:
+                k = ord(k)
+            self.handle(k)
+
+
+def main() -> int:
+    os.environ.setdefault("ESCDELAY", "50")
+    fake = os.environ.get("SUVERYN_CONSOLE_FAKE")
+    system = FakeConsole(fake) if fake else RealConsole()
+    if not fake and Path("/run/suveryn/installer-mode").exists():
+        print("console-ui: this is the installer stick; the installer has the console", file=sys.stderr)
+        return 2
+    import locale
+    locale.setlocale(locale.LC_ALL, "C.UTF-8")
+    curses.wrapper(lambda scr: Console(scr, system).run())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

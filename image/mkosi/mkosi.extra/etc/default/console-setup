@@ -1,8 +1,10 @@
-# The console's font and character set (console-setup, at every start): Terminus with the Uni2
-# set, which has "ū" (sūveryn) and the box and block characters the console screens use (#37).
+# The console's font and character set (console-setup, at every start): Terminus with the set
+# console-setup calls "Vietnamese": of its 512-glyph Terminus fonts it is the one that has "ū"
+# (sūveryn), the French and Dutch letters, the box characters and the half blocks (▀ ▄) the
+# registration QR code is drawn with (#37). Uni2 lacks the half blocks.
 ACTIVE_CONSOLES="/dev/tty[1-6]"
 CHARMAP="UTF-8"
-CODESET="Uni2"
+CODESET="Vietnamese"
 FONTFACE="Terminus"
 FONTSIZE="8x16"
 VIDEOMODE=

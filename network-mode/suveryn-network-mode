@@ -201,6 +201,10 @@ def nft_ruleset(mode: str, outbound: str) -> str:
         f"    ip daddr {{ {v4} }} accept",
         f"    ip6 daddr {{ {v6} }} accept",
         f'    meta skuid "{DNS_USER}" meta l4proto {{ tcp, udp }} th dport 53 accept',
+        # mDNS: the appliance answers for <name>.local on the office's own link (#37). Link-local
+        # multicast never leaves the office network.
+        "    ip daddr 224.0.0.251 udp dport 5353 accept",
+        "    ip6 daddr ff02::fb udp dport 5353 accept",
     ]
     if mode == "connected" and outbound == "approved":
         tcp, udp = ", ".join(map(str, APPROVED_TCP)), ", ".join(map(str, APPROVED_UDP))

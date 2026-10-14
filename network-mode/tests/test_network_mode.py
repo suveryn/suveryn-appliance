@@ -207,6 +207,14 @@ def test_approved_destinations_only_lets_out_the_office_dns_and_the_approved_set
     assert body.strip().splitlines()[-3].strip() == "reject with icmpx admin-prohibited"  # everything else, refused at once
 
 
+def test_mdns_stays_on_the_office_link_in_every_limited_mode():
+    """<name>.local (#37): answers go to the mDNS multicast group, which is never routed."""
+    for mode, outbound in (("connected", "approved"), ("air-gapped", "none")):
+        rules = load().nft_ruleset(mode, outbound)
+        assert "ip daddr 224.0.0.251 udp dport 5353 accept" in rules
+        assert "ip6 daddr ff02::fb udp dport 5353 accept" in rules
+
+
 def test_air_gapped_lets_out_only_the_office_network():
     rules = load().nft_ruleset("air-gapped", "none")
     assert "@approved" not in rules.split("chain output", 1)[1] and "reject with icmpx admin-prohibited" in rules

@@ -36,7 +36,7 @@ systemctl mask apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 # The appliance's identity, made at first boot on the data partition (#35).
 systemctl enable suveryn-identity.service
 # The console installer, on the stick only (#37); the console's font and keyboard layout at every start.
-systemctl enable suveryn-installer.service
+systemctl enable suveryn-installer.service suveryn-console.service
 systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || true  # enabled by their packages already
 
 # 4. No pcrlock: the data partition is bound to PCR 7 (#34); pcrlock policies (and the TPM NV index
