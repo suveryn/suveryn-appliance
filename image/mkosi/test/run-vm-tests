@@ -1,0 +1,83 @@
+#!/bin/bash
+# Boots the test system (mkosi --profile test) in a virtual machine and checks the read-only
+# system's rules (docs/design/appliance-architecture.md; tracker #39, step 1):
+#
+#   1. first boot:  the self-test passes (image/mkosi/mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest)
+#   2. second boot: it passes again, with the same machine-id (kept on the data partition)
+#   3. a changed block in the system: verity refuses it
+#
+# Needs root, qemu-system-x86_64, OVMF and systemd-repart. Without KVM (software emulation) each boot
+# takes a few minutes.
+#
+#   sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
+set -uo pipefail
+HERE=$(cd "$(dirname "$0")" && pwd)
+MKOSI=$(dirname "$HERE")
+IMAGE=${1:-$(ls -t "$MKOSI"/mkosi.output/suveryn-test_*.raw 2>/dev/null | head -1)}
+WORK=${SUVERYN_VM_WORK:-$(mktemp -d /var/tmp/suveryn-vm-XXXXXX)}
+mkdir -p "$WORK"
+BOOT_TIMEOUT=${SUVERYN_VM_BOOT_TIMEOUT:-1200}
+OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
+failed=0
+
+note() { echo "== $*"; }
+pass() { echo "   ok   $*"; }
+fail() { echo "   FAIL $*"; failed=$((failed+1)); }
+
+[ -f "$IMAGE" ] || { echo "no test image: build it with: cd image/mkosi && mkosi -f --profile test build" >&2; exit 2; }
+ACCEL=tcg; [ -w /dev/kvm ] && ACCEL=kvm
+note "image $IMAGE, work folder $WORK, acceleration: $ACCEL"
+
+# The installer's part (#37): the release's partitions, plus slot B and the data partition.
+disk="$WORK/disk.raw"
+cp --sparse=always "$IMAGE" "$disk"
+truncate -s 4G "$disk"
+# repart copies files for the new partitions from the system being installed, as the installer will.
+mkdir -p "$WORK/source/usr/lib/suveryn" && : > "$WORK/source/usr/lib/suveryn/empty-machine-id"
+systemd-repart --dry-run=no --definitions="$MKOSI/target/test" --copy-source="$WORK/source" "$disk" > "$WORK/repart.log" 2>&1 \
+  || { cat "$WORK/repart.log"; echo "systemd-repart failed" >&2; exit 2; }
+note "partitions: $(sfdisk -l "$disk" 2>/dev/null | awk '/^\// {print $NF}' | tr '\n' ' ')"
+cp "$OVMF_VARS" "$WORK/vars.fd"
+
+boot() {  # boot <disk> <log>: boots until the self-test powers the machine off (or the timeout)
+  timeout "$BOOT_TIMEOUT" qemu-system-x86_64 -machine q35 -accel "$ACCEL" -cpu max -smp 2 -m 2048 \
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" -drive if=pflash,format=raw,file="$WORK/vars.fd" \
+    -drive file="$1",format=raw,if=virtio -nic user,model=virtio-net-pci \
+    -display none -serial file:"$2" -no-reboot > "$2.qemu" 2>&1
+}
+result() { grep -a "SUVERYN-SELFTEST RESULT" "$1" | tail -1 | sed 's/.*RESULT //' | tr -d '\r'; }
+field() { grep -a "SUVERYN-SELFTEST" "$1" | grep -a "$2" | head -1 | sed 's/.*: //' | tr -d '\r'; }
+
+for n in 1 2; do
+  note "boot $n"
+  start=$(date +%s); boot "$disk" "$WORK/boot$n.log"; secs=$(( $(date +%s) - start ))
+  grep -a "SUVERYN-SELFTEST" "$WORK/boot$n.log" | sed 's/^.*SUVERYN-SELFTEST /   /' | tr -d '\r'
+  [ "$(result "$WORK/boot$n.log")" = PASS ] && pass "boot $n: self-test passed (${secs}s)" \
+    || fail "boot $n: self-test didn't pass (${secs}s; console: $WORK/boot$n.log)"
+done
+id1=$(field "$WORK/boot1.log" "machine-id kept on /var"); id2=$(field "$WORK/boot2.log" "machine-id kept on /var")
+[ -n "$id1" ] && [ "$id1" = "$id2" ] && pass "the machine-id survives a restart ($id1)" \
+  || fail "the machine-id changed between boots ('$id1' / '$id2')"
+
+note "a changed block in the system"
+bad="$WORK/disk-changed.raw"
+cp --sparse=always "$disk" "$bad"
+# Slot A is partition 2. Change one byte in the middle of it, where the system's files are.
+read -r start size < <(sfdisk --json "$bad" | python3 -c 'import json,sys; p=json.load(sys.stdin)["partitiontable"]["partitions"][1]; print(p["start"], p["size"])')
+offset=$(( (start + size / 2) * 512 + 123 ))
+orig=$(dd if="$bad" bs=1 skip="$offset" count=1 status=none | od -An -tu1 | tr -d ' ')
+printf "\\$(printf '%03o' $(( (orig + 1) % 256 )))" | dd of="$bad" bs=1 seek="$offset" conv=notrunc status=none
+cp "$OVMF_VARS" "$WORK/vars.fd"
+boot "$bad" "$WORK/changed.log"
+if grep -aq "SUVERYN-SELFTEST RESULT PASS" "$WORK/changed.log"; then
+  fail "the changed system passed: verity didn't notice (console: $WORK/changed.log)"
+elif grep -aiq "verity.*corrupt\|data block .* is corrupted\|verity.*error" "$WORK/changed.log"; then
+  pass "verity refused the changed block: $(grep -ai -m1 'corrupt' "$WORK/changed.log" | tr -d '\r' | cut -c1-120)"
+else
+  fail "the changed system didn't pass, but no verity error was seen (console: $WORK/changed.log)"
+fi
+
+echo
+if [ "$failed" -eq 0 ]; then echo "ALL PASSED"; rm -rf "$WORK"; exit 0; fi
+echo "$failed FAILED (kept: $WORK)"; exit 1

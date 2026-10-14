@@ -1,5 +1,9 @@
 # The appliance image
 
+> **Being replaced.** The read-only, verified system of the approved design
+> ([`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)) is built with mkosi in
+> [`mkosi/`](mkosi/README.md). This Packer build stays until that system carries the sūveryn services.
+
 A **bare-metal disk image**: flashed onto the office's own server, which then runs sūveryn directly
 on its hardware (like pfSense or TrueNAS). It is not a VM image. GPU passthrough into a VM is
 unreliable across arbitrary office hardware, and NVIDIA's GeForce driver licence is written for
