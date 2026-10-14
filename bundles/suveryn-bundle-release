@@ -2,7 +2,8 @@
 """Making and signing bundles, at Sūveryn Labs (tracker #36). The appliance side, which checks them, is
 image/mkosi/mkosi.extra/usr/lib/suveryn/bundle; this tool uses its format, so the two can't drift.
 
-    suveryn-bundle-release make DIR --kind model --name NAME --version VERSION
+    suveryn-bundle-release make DIR --kind model --name NAME --version VERSION [--title T]
+                                [--description D] [--default]
         write DIR/manifest.json: every file in DIR with its size and SHA-256
     suveryn-bundle-release sign DIR (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
         write DIR/manifest.sig, then check it with the public key
@@ -44,7 +45,8 @@ def fail(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------- make
-def make(folder: Path, kind: str, name: str, version: str) -> dict:
+def make(folder: Path, kind: str, name: str, version: str, title: str | None = None,
+         description: str | None = None, default: bool = False) -> dict:
     if not folder.is_dir():
         fail(f"{folder} isn't a folder")
     files = []
@@ -68,6 +70,12 @@ def make(folder: Path, kind: str, name: str, version: str) -> dict:
     manifest = {"format": bundle.FORMAT, "kind": kind, "name": name, "version": version,
                 "created": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "files": files}
+    if title:
+        manifest["title"] = title
+    if description:
+        manifest["description"] = description
+    if default:
+        manifest["default"] = True
     try:
         bundle.check_manifest(manifest)
     except bundle.Invalid as e:
@@ -162,6 +170,9 @@ def main(argv: list[str]) -> int:
     m.add_argument("--kind", required=True, choices=bundle.KINDS)
     m.add_argument("--name", required=True)
     m.add_argument("--version", required=True)
+    m.add_argument("--title", help="shown by the installer (C3), e.g. 'Qwen3.8-27B'")
+    m.add_argument("--description", help="one line the installer shows under the title")
+    m.add_argument("--default", action="store_true", help="selected by default in the installer")
     for name in ("sign", "public-key"):
         s = sub.add_parser(name)
         if name == "sign":
@@ -174,7 +185,7 @@ def main(argv: list[str]) -> int:
     t.add_argument("file", type=Path)
     a = p.parse_args(argv)
     if a.cmd == "make":
-        m = make(a.dir, a.kind, a.name, a.version)
+        m = make(a.dir, a.kind, a.name, a.version, a.title, a.description, a.default)
         print(f"manifest written: {m['kind']} {m['name']} {m['version']}, {len(m['files'])} file(s)")
     elif a.cmd == "sign":
         sig = sign(a.dir, signer(a))

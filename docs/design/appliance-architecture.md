@@ -70,6 +70,7 @@ in it are links into the data partition, because they belong to this office:
 | `/etc/nginx/sites-enabled/suveryn` | `/var/lib/suveryn/nginx/suveryn` | The office's site (its name) |
 | `/etc/hostname`, `/etc/hosts` | `/var/lib/suveryn/host/…` | The appliance's name (set in the installer) |
 | `/etc/localtime` | `/var/lib/suveryn/host/localtime` | The time zone (set in the installer, C1) |
+| `/etc/default/keyboard` | `/var/lib/suveryn/host/keyboard` | The console keyboard layout (set in the installer, C1) |
 | `/etc/machine-id` | `/var/lib/suveryn/host/machine-id`, mounted over it in the initrd (systemd won't follow a link for this one) | Unique per appliance |
 | `/etc/systemd/network/` office part | `/var/lib/suveryn/network` | Fixed address or DHCP (#37, C4) |
 

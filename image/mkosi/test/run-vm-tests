@@ -38,6 +38,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -98,11 +99,58 @@ class TPM:
             self.proc.wait()
 
 
+class Console:
+    """The serial console as a screen (pyte, a terminal emulator), for driving the console installer
+    the way a person would: wait for text, press keys. Its script runs in a thread beside boot()."""
+
+    def __init__(self, conn, cols=100, rows=30):
+        import pyte
+        self.conn, self.lock = conn, threading.Lock()
+        self.screen = pyte.Screen(cols, rows)
+        self.stream = pyte.ByteStream(self.screen)
+        self.result, self.error, self.done = None, None, False
+
+    def feed(self, data: bytes):
+        with self.lock:
+            self.stream.feed(data)
+
+    @property
+    def text(self) -> str:
+        with self.lock:
+            return "\n".join(line.rstrip() for line in self.screen.display)
+
+    def wait(self, what: str, timeout=120):
+        end, redraw = time.time() + timeout, time.time() + 20
+        while time.time() < end:
+            if what in self.text:
+                return self.text
+            if time.time() > redraw:  # a stray console message may have overwritten the screen
+                self.conn.sendall(b"\x0c")
+                redraw = time.time() + 20
+            time.sleep(0.5)
+        raise AssertionError(f"{what!r} didn't appear; the console shows:\n{self.text}")
+
+    def press(self, *keys, settle=1.0):
+        for k in keys:
+            self.conn.sendall(k.encode())
+            time.sleep(0.3)
+        time.sleep(settle)
+
+    def run(self, script):
+        try:
+            self.result = script(self)
+        except Exception as e:  # noqa: BLE001 (reported by the step)
+            self.error = e
+        self.done = True
+
+
 def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, credential: str | None = None,
-         keys: list[str] = (), quiet_after_keys: int = 0, stop_when_given_up: bool = False) -> tuple[str, int]:
+         keys: list[str] = (), quiet_after_keys: int = 0, stop_when_given_up: bool = False,
+         ui=None) -> tuple[str, int]:
     """Boot until the machine powers off (or the timeout). Answers recovery-key prompts with `keys`, in
     order. With quiet_after_keys, stops once all keys are used and no new prompt came for that many
-    seconds. Returns (console output, number of prompts seen)."""
+    seconds. With ui, a script that drives the console (Console); its result is in boot.ui.
+    Returns (console output, number of prompts seen)."""
     log = work / f"{name}.log"
     sersock = work / f"{name}.serial"
     tpmsock = tpm.start()
@@ -134,6 +182,11 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
     failed_after = None  # how many prompts came before the unlock service first gave up
     start = time.time()
     conn.settimeout(1)
+    console = None
+    if ui:
+        console = Console(conn)
+        threading.Thread(target=console.run, args=(ui,), daemon=True).start()
+    boot.ui = console
     with open(log, "wb") as out:
         while qemu.poll() is None and time.time() - start < BOOT_TIMEOUT:
             try:
@@ -146,6 +199,10 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
                 out.write(chunk)
                 out.flush()
                 buf += chunk
+                if console:
+                    console.feed(chunk)
+            if console and console.error:
+                break
             tail = bytes(buf[-4096:])
             if failed_after is None and GAVE_UP.search(tail):
                 failed_after = prompts
@@ -197,7 +254,8 @@ def make_stick(work: Path, image: Path) -> Path:
     (good / "weights.bin").write_bytes(os.urandom(8 * 2**20))
     (good / "config.json").write_text('{"test": true}\n')
     rel = lambda *a: subprocess.run([sys.executable, str(RELEASE), *map(str, a)], check=True, capture_output=True)  # noqa: E731
-    rel("make", good, "--kind", "model", "--name", "test-model", "--version", "1.0")
+    rel("make", good, "--kind", "model", "--name", "test-model", "--version", "1.0", "--title", "Test Model 1B",
+        "--description", "A tiny model for the tests.", "--default")
     rel("sign", good, "--key-file", HERE / "keys" / "test-current.key")
     (good / "notes.txt").write_text("not in the manifest: never copied\n")
     shutil.copytree(good, src / "changed")
@@ -213,6 +271,40 @@ def make_stick(work: Path, image: Path) -> Path:
     subprocess.run([sys.executable, str(MKOSI / "make-stick"), str(image), str(stick), "--size", "2G", "--fs", "vfat",
                     "--bundles", str(good), str(src / "changed"), str(src / "untrusted")], check=True, capture_output=True)
     return stick
+
+
+def console_install(c: "Console") -> str:
+    """Steps C1 to C7 on the serial console, with the answers a person would give. Returns the recovery key."""
+    c.wait("Language, keyboard and time zone", timeout=900)
+    assert "(*) English" in c.text and "Belgian (AZERTY)" in c.text and "Europe/Brussels" in c.text
+    c.press("\t", "\t", "\t", "\t", "\r")
+    s = c.wait("Hardware and target disk")
+    assert "(*) vdb" in s and "√ Security" in s and "installation medium" in s, s
+    c.press("\r")
+    s = c.wait("Found on this installation medium", timeout=300)
+    assert "[x]  Test Model 1B" in s and "A tiny model for the tests." in s, s
+    assert "Changed or damaged since it was signed." in s and "Signature not valid." in s, s
+    c.press("\r")
+    c.wait("Interface")
+    c.press("\t")
+    for ch in "test-appliance":
+        c.press(ch, settle=0)
+    s = c.wait("Received ", timeout=90)
+    c.press("\r")
+    s = c.wait("Ready to install")
+    assert "test-appliance" in s and "Test Model 1B" in s and "All data on vdb will be permanently erased" in s, s
+    for ch in "ERASE":
+        c.press(ch, settle=0)
+    c.press("\r")
+    s = c.wait("Write down the disk recovery key", timeout=900)
+    m = re.search(r"([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})\s*│?\s*\n.*?([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})", s, re.S)
+    assert m, s
+    key = f"{m.group(1)}-{m.group(2)}"
+    for ch in key.split("-")[0]:
+        c.press(ch, settle=0)
+    c.wait("√ matches")
+    c.press("\r")
+    return key
 
 
 def main() -> int:
@@ -235,30 +327,46 @@ def main() -> int:
     shutil.copyfile(OVMF_VARS, work / "vars-install.fd")
     shutil.copyfile(OVMF_VARS, work / "vars.fd")
 
-    note("1. install from the stick onto the empty disk")
-    out, prompts = boot(work, "install", [stick, target], tpm, work / "vars-install.fd", credential="suveryn.test=install")
+    note("1. the installer's checks, on an empty disk")
+    scratch = work / "scratch.raw"
+    with open(scratch, "wb") as f:
+        f.truncate(6 * 2**30)
+    out, prompts = boot(work, "checks", [stick, scratch], tpm, work / "vars.fd", credential="suveryn.test=install-checks")
     r = selftest(out)
-    key = r["recovery_key"]
-    if r["result"] == "PASS" and prompts == 0 and key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key):
-        ok("installer mode without a prompt; installed: slot A copied, data partition encrypted with the "
-           "settings and the signed model on it, TPM and recovery key enrolled")
+    if r["result"] == "PASS" and prompts == 0:
+        ok("installer mode without a prompt; the stick's bundles checked; a bad name and a changed bundle refused, "
+           "nothing written")
     else:
-        bad(f"install didn't pass (console: {work}/install.log)")
+        bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/checks.log)")
+    scratch.unlink()
+
+    note("2. install with the console installer, as a person would")
+    out, prompts = boot(work, "install", [stick, target], tpm, work / "vars-install.fd",
+                        credential="suveryn.installer-on-serial=1", ui=console_install)
+    ui = boot.ui
+    key = ui.result if ui and not ui.error else None
+    if key and re.fullmatch(r"([cbdefghijklnrtuv]{8}-){7}[cbdefghijklnrtuv]{8}", key) and prompts == 0:
+        ok("C1 to C7 on the console: the signed model offered and the other two skipped, installed, the recovery "
+           "key shown and confirmed, restarted")
+    else:
+        bad(f"the console installer didn't finish: {ui.error if ui else 'no console'} (console: {work}/install.log)")
         print(f"\n{failed} FAILED (kept: {work})")
         return 1
 
     machine_ids, identities = [], []
-    for n in (2, 3):
-        note(f"{n}. boot {n - 1} of the installed disk: the TPM unlocks it"
-             + ("; the stick attached too" if n == 3 else ""))
-        out, prompts = boot(work, f"boot{n - 1}", [target, stick] if n == 3 else [target], tpm, work / "vars.fd")
+    for n in (3, 4):
+        note(f"{n}. boot {n - 2} of the installed disk: the TPM unlocks it"
+             + ("; the stick attached too" if n == 4 else "; the installer's boot entry"))
+        out, prompts = boot(work, f"boot{n - 2}", [target, stick] if n == 4 else [target], tpm,
+                            work / ("vars.fd" if n == 4 else "vars-install.fd"),
+                            credential=None if n == 4 else "suveryn.test=first-boot")
         r = selftest(out)
         machine_ids.append(r["machine_id"])
         identities.append(r["identity"])
         if r["result"] == "PASS" and prompts == 0:
             ok("every rule passed, unlocked by the TPM without a prompt")
         else:
-            bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/boot{n - 1}.log)")
+            bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/boot{n - 2}.log)")
     if machine_ids[0] and machine_ids[0] == machine_ids[1]:
         ok(f"the machine-id survives a restart ({machine_ids[0]})")
     else:
@@ -268,7 +376,7 @@ def main() -> int:
     else:
         bad(f"the identity changed between boots, or is missing ({identities})")
 
-    note("4. the stick started on the machine with the installed disk")
+    note("5. the stick started on the machine with the installed disk")
     out, prompts = boot(work, "beside", [stick, target], tpm, work / "vars.fd", credential="suveryn.test=stick-beside")
     r = selftest(out)
     if r["result"] == "PASS" and prompts == 0:
@@ -276,7 +384,7 @@ def main() -> int:
     else:
         bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/beside.log)")
 
-    note("5. TPM replaced: the recovery key opens the data partition")
+    note("6. TPM replaced: the recovery key opens the data partition")
     out, prompts = boot(work, "recovery", [target], TPM(work / "tpm-new"), work / "vars.fd",
                         credential="suveryn.test=tpm-replaced", keys=[WRONG_KEY, key])
     r = selftest(out)
@@ -286,7 +394,7 @@ def main() -> int:
     else:
         bad(f"{prompts} prompt(s), result {r['result']} (console: {work}/recovery.log)")
 
-    note("6. wrong keys: after five the unlock gives up, and the data partition stays closed")
+    note("7. wrong keys: after five the unlock gives up, and the data partition stays closed")
     out, prompts = boot(work, "tries", [target], TPM(work / "tpm-other"), work / "vars.fd",
                         keys=[WRONG_KEY] * 6, stop_when_given_up=True)
     if boot.failed_after == 5 and "RESULT" not in out:
@@ -295,7 +403,7 @@ def main() -> int:
         bad(f"the unlock gave up after {boot.failed_after} prompt(s) of {prompts}; "
             f"result seen: {'RESULT' in out} (console: {work}/tries.log)")
 
-    note("7. a changed block in slot A")
+    note("8. a changed block in slot A")
     changed = work / "target-changed.raw"
     shutil.copyfile(target, changed)
     layout = subprocess.run(["sfdisk", "--json", str(changed)], capture_output=True, text=True, check=True).stdout
