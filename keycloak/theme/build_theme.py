@@ -2,7 +2,7 @@
 # requires-python = ">=3.11"
 # dependencies = ["defusedxml==0.7.1", "fonttools==4.66.1"]
 # ///
-"""Build the Sūveryn Keycloak theme: sources from src/, brand assets from suveryn-brand.
+"""Build the sūveryn Keycloak theme: sources from src/, brand assets from suveryn-brand.
 
     uv run keycloak/theme/build_theme.py            # build at the commit in brand-lock.json
     uv run keycloak/theme/build_theme.py --update <commit-or-tag>   # move to another brand commit
@@ -11,7 +11,7 @@ Output (build/, not committed):
     build/theme/suveryn/                 the theme folder (login, account, email)
     build/suveryn-keycloak-theme.jar     the same, packaged for Keycloak's providers/ folder
 
-Brand assets are fetched at build time, never committed here: the Sūveryn mark is all rights
+Brand assets are fetched at build time, never committed here: the sūveryn mark is all rights
 reserved (suveryn-brand's TRADEMARK_POLICY.md), while this repository is Apache-2.0. The fonts are
 SIL Open Font Licence and travel with their licence texts. Every fetched file must match the
 SHA-256 in brand-lock.json, so a build is reproducible and a changed asset is noticed.
@@ -174,8 +174,8 @@ def email_icon(svg_path: Path) -> str:
 
 
 def notices(brand: Path) -> str:
-    parts = ["Third-party material in the Sūveryn Keycloak theme.\n",
-             ("The Sūveryn mark (logotype, favicon) is not open source: all rights reserved, see\n"
+    parts = ["Third-party material in the sūveryn Keycloak theme.\n",
+             ("The sūveryn mark (logotype, favicon) is not open source: all rights reserved, see\n"
               "https://github.com/suveryn/suveryn-brand/blob/main/TRADEMARK_POLICY.md\n")]
     for family, folder in (("Inter", "Inter"), ("Space Grotesk", "SpaceGrotesk"), ("IBM Plex Mono", "IBMPlexMono")):
         parts.append(f"{'=' * 72}\n{family} font (SIL Open Font Licence 1.1)\n{'=' * 72}\n{(brand / 'fonts' / folder / 'OFL.txt').read_text().strip()}\n")

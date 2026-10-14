@@ -201,7 +201,7 @@ Decided 14 October 2026: remote support is possible, but never on an air-gapped 
 - **Off by default.** The office's administrator starts a support session from the admin dashboard
   or the console, for a fixed time (proposed: up to 8 hours), tied to a support request in the
   portal (#35's single-use code).
-- **The appliance connects outwards** to Sūveryn's support relay. No port is opened on the office
+- **The appliance connects outwards** to sūveryn's support relay. No port is opened on the office
   network, and the relay is an approved destination only while a session runs (#38).
 - **The engineer signs in with a short-lived credential** issued by the portal for that request, to a
   support account that can read the system's state and logs (never document text) and run the
@@ -213,7 +213,7 @@ Decided 14 October 2026: remote support is possible, but never on an air-gapped 
 - **Air-gapped:** no session can be started. The administrator exports a diagnostics file (counts,
   versions, logs without content) for the partner or Sūveryn Labs.
 
-Building it needs a relay service on Sūveryn's side, next to the portal. The appliance part (the
+Building it needs a relay service on sūveryn's side, next to the portal. The appliance part (the
 tunnel client and the support account) is in the image from the start, inert until a session runs.
 Details are #43's.
 
@@ -253,7 +253,7 @@ the chat UI) are copied in as they are now. Packer can then go (decision D1).
 | # | Decision | Outcome |
 |---|---|---|
 | D1 | Build the image with mkosi instead of Packer | **Yes**: mkosi builds the read-only system directly; Packer goes |
-| D2 | Bind the data partition to Sūveryn's signed boot measurement (PCR 11) | **Postponed**: PCR 7 as decided in #34; revisit before the first customer |
+| D2 | Bind the data partition to sūveryn's signed boot measurement (PCR 11) | **Postponed**: PCR 7 as decided in #34; revisit before the first customer |
 | D3 | Ubuntu security fixes only through sūveryn updates (no apt on the appliance) | **Yes**, with a commitment: a monthly update, and urgent fixes within days |
 | D4 | A machine with KVM for the image tests | **Not available yet.** Until it is, the tests run in Claude's workspace with a small test system (slow, without hardware acceleration); the full image waits for KVM or real hardware |
 | D5 | No swap on disk | **Yes** (zram if memory runs short) |
