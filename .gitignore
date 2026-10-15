@@ -153,3 +153,4 @@ image/mkosi/mkosi.cache/
 image/mkosi/mkosi.tools/
 # Test signing keys, made by image/mkosi/test/make-test-keys: never committed
 image/mkosi/test/keys/
+.DS_Store
