@@ -12,7 +12,8 @@ kc.sh import --file /root/suveryn-realm/suveryn-realm.json   # or the admin cons
 ```
 
 It writes two files, both 0600 and git-ignored here:
-- `suveryn-realm.json`: to import once, then delete, because it holds the client secret;
+- `suveryn-realm.json`: to import once, then delete, because it holds the client secret (and, with
+  `--administrator FILE`, the office's administrator from the web setup);
 - `gateway-oidc.env`: `SUVERYN_OIDC_ISSUER`, `SUVERYN_OIDC_CLIENT_ID`, `SUVERYN_OIDC_CLIENT_SECRET` and
   `SUVERYN_PUBLIC_URL` for the gateway's environment file.
 
@@ -26,15 +27,17 @@ It writes two files, both 0600 and git-ignored here:
 | Redirect, base and logout URLs | `http://localhost:5173/…` | exactly `<public-url>/…` | No wildcards: a wildcard lets a crafted link send the sign-in code elsewhere |
 | Themes | Keycloak's | `suveryn` (login, account, email) | This repository's [theme](../theme/README.md) |
 | Client secret | none in the file | new random one per build | Rotation: build again and re-import the client |
+| Password policy | at least 12 characters, not the user name or email | at least **15**, not the user name or email | The web setup's rule for the administrator (#37), for every account. The leaked-password list (`passwordBlacklist`) joins once it is on the appliance |
+| The office's administrator | none | with `--administrator FILE` (`{name, email, password}`, from the web setup): signs in with the email address; realm role `suveryn-admin` and user management in the admin console (`manage-users`, `view-users`, `query-users`, `query-groups`), nothing on the realm's settings | Made by the realm import, so no password passes through Keycloak's admin API. The file holds only a pbkdf2-sha512 hash (210,000 iterations), which Keycloak 26 reads; checked by signing in with Keycloak 26.8 |
 
 Everything else comes unchanged from the development realm:
 - the authorisation-code flow with PKCE S256 only;
 - no password grant;
 - brute-force protection;
-- password length at least 12;
 - no self-registration and no external identity providers.
 
-`build_realm.py` refuses to build if the development realm ever loses one of these.
+`build_realm.py` refuses to build if the development realm ever loses one of these, or the password
+policy drops below 15 characters.
 
 Event retention is 180 days, decided on 2026-10-11. Long enough to investigate an incident found months later, short enough for data minimisation. Keycloak deletes older events itself: sign-in events through the realm's `eventsExpiration`, admin events through its `adminEventsExpiration` attribute, which Keycloak 26.8's event store reads. Keycloak's own log (the `jboss-logging` listener) goes to the journal, whose retention the appliance sets.
 
