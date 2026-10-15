@@ -616,6 +616,7 @@ def tls(host: str, cert: Path | None, key: Path | None, ips: list[str] | None = 
         if server_crt.exists() else ""
     if f"DNS:{host}" in names:
         note(f"kept: the local CA's certificate for {host}")
+        trust_local_ca()
         return
     # A local certificate authority made on this machine, its key never leaving it. Workstations trust
     # it once (ca.crt); the machine itself trusts it too, so the gateway can reach Keycloak over https.
@@ -638,22 +639,61 @@ def tls(host: str, cert: Path | None, key: Path | None, ips: list[str] | None = 
     csr.unlink()
     ext.unlink()
     os.chmod(server_key, 0o600)
-    shutil.copyfile(ca_crt, LOCAL_CA)
-    run("update-ca-certificates", capture=True)
+    trust_local_ca()
     note(f"a local CA ({ca_crt}; give it to the office's workstations to trust) and a certificate for {host}, "
          "valid 397 days")
 
 
+def trust_local_ca() -> None:
+    """The machine trusts its own local CA, so the gateway can reach Keycloak at the public https URL.
+    On the read-only system (image/mkosi) /usr/local can't be written: there the trust bundle on the
+    data partition takes its place (#39, not built yet), and this says so."""
+    ca = TLS / "ca.crt"
+    if not ca.exists():
+        return
+    if LOCAL_CA.exists() and LOCAL_CA.read_bytes() == ca.read_bytes():
+        return
+    try:
+        shutil.copyfile(ca, LOCAL_CA)
+    except OSError as e:
+        note(f"the local CA isn't added to the system's trust store ({e.strerror}: a read-only system)")
+        return
+    run("update-ca-certificates", capture=True)
+
+
+NGINX = Path("/etc/nginx")
+
+
+def site_file() -> Path:
+    """Where the office's site goes: sites-available, or, on the read-only system, where its
+    sites-enabled link points on the data partition (/var/lib/suveryn/nginx)."""
+    enabled = NGINX / "sites-enabled" / "suveryn"
+    if enabled.is_symlink() and str(os.readlink(enabled)).startswith("/var/"):
+        target = Path(os.readlink(enabled))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+    return NGINX / "sites-available" / "suveryn"
+
+
+def snippets() -> None:
+    """The header snippets, unless they are there already (the read-only system has them built in)."""
+    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
+        src, dest = REPO / "reverse-proxy" / name, NGINX / "snippets" / name
+        if not (dest.exists() and dest.read_bytes() == src.read_bytes()):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+
+
 def reverse_proxy(host: str) -> None:
     step("Reverse proxy (nginx)")
-    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
-        shutil.copyfile(REPO / "reverse-proxy" / name, Path("/etc/nginx/snippets") / name)
+    snippets()
     site = (REPO / "reverse-proxy" / "suveryn.conf.template").read_text().replace("@HOST@", host)
-    Path("/etc/nginx/sites-available/suveryn").write_text(site)
-    enabled = Path("/etc/nginx/sites-enabled/suveryn")
-    if not enabled.exists():
-        enabled.symlink_to("/etc/nginx/sites-available/suveryn")
-    Path("/etc/nginx/sites-enabled/default").unlink(missing_ok=True)
+    site_file().write_text(site)
+    enabled = NGINX / "sites-enabled" / "suveryn"
+    if not enabled.exists() and not enabled.is_symlink():
+        enabled.symlink_to(NGINX / "sites-available" / "suveryn")
+    if (NGINX / "sites-enabled" / "default").exists():
+        (NGINX / "sites-enabled" / "default").unlink()
     # The machine reaches its own public name locally (the gateway asks Keycloak through it).
     hosts = Path("/etc/hosts").read_text()
     if not re.search(rf"^127\.0\.0\.1\s.*\b{re.escape(host)}\b", hosts, re.M):
@@ -678,7 +718,10 @@ def _nginx_running() -> bool:
 
 def start_nginx() -> None:
     if systemd_running():
-        run("systemctl", "enable", "--now", "nginx")
+        # Enabled once (the read-only system's is, in the image: enabling there would write /etc).
+        if subprocess.run(["systemctl", "is-enabled", "--quiet", "nginx"]).returncode != 0:
+            run("systemctl", "enable", "nginx")
+        run("systemctl", "start", "nginx")
         run("systemctl", "reload", "nginx")
     elif _nginx_running():
         run("nginx", "-s", "reload")
@@ -1155,8 +1198,7 @@ def image(with_web_setup: bool = True) -> None:
     keycloak_software()
     reader_sandbox()
     chat_ui()
-    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
-        shutil.copyfile(REPO / "reverse-proxy" / name, Path("/etc/nginx/snippets") / name)
+    snippets()
     if with_web_setup:
         web_setup()
 
@@ -1236,6 +1278,9 @@ def main() -> None:
     sub.add_parser("image", help="build-time steps: everything the same for every office (needs network)")
     f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
     office_args(f, False)
+    f.add_argument("--test-machine", action="store_true",
+                   help="a test machine without a firewall of its own (a container such as the Pod): as install does; "
+                        "needs --site test")
     f.add_argument("--administrator", type=Path, metavar="FILE",
                    help="JSON {name, email, password}: the office's administrator (the web setup passes it)")
     f.add_argument("--config", type=Path,
@@ -1276,7 +1321,10 @@ def main() -> None:
             for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
                 if not getattr(a, attr) and c.get(key):
                     setattr(a, attr, Path(c[key]))
-        first_boot(a, staging=False)
+        if a.test_machine and a.site != "test":
+            fail("--test-machine is for a test machine: it needs --site test")
+        first_boot(a, staging=a.test_machine)
+        return
     image(with_web_setup=False)
     first_boot(a, staging=True)
 

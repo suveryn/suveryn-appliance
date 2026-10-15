@@ -6,6 +6,8 @@ Description=sūveryn web setup: provisioning
 Documentation=file:/opt/suveryn/appliance/setup/README.md
 After=network-online.target suveryn-setup.service
 ConditionPathExists=!/etc/suveryn/setup-complete
+# Not on the installer stick (image/mkosi): there /var is in memory.
+ConditionPathExists=!/run/suveryn/installer-mode
 
 [Service]
 Type=simple

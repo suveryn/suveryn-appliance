@@ -2,6 +2,8 @@
 [Unit]
 Description=sūveryn web setup: provisioning requested
 ConditionPathExists=!/etc/suveryn/setup-complete
+# Not on the installer stick (image/mkosi): there /var is in memory.
+ConditionPathExists=!/run/suveryn/installer-mode
 
 [Path]
 PathExists=/var/lib/suveryn/setup/answers/start
