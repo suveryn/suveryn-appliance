@@ -13,6 +13,8 @@
 #   tpm-replaced     check the running system; the identity, sealed to the old TPM, must be unusable;
 #                    the data partition opened with the recovery key (C8b) and the TPM enrolled again
 #   tpm-again        the next start with that TPM: unlocked by the TPM again, without a prompt
+#   web-setup        the web setup (#37): open, then (run-vm-tests drives its screens from a browser
+#                    through a forwarded port) wait until it has closed, and check what it left
 #   (none)           check the running system (the installed appliance)
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
@@ -103,7 +105,7 @@ assert re.fullmatch("[0-9a-f]{64}", d["fingerprint"]) and d["algorithm"] == "ed2
 assert open("/var/lib/suveryn/identity/public.pem").read() == d["public_key"]
 print(d["uuid"])'
 check "fingerprint is the key's"      bash -c "f=\$(openssl pkey -pubin -in $iddir/public.pem -outform DER | tail -c 32 | sha256sum | cut -c1-64); grep -q \"\$f\" $iddir/identity.json && echo \${f:0:16}…"
-check "private key not stored plain"  bash -c "test \"\$(stat -c %a $iddir/private.cred)\" = 600 && ! grep -qa 'PRIVATE KEY' $iddir/private.cred && ! openssl pkey -in $iddir/private.cred -noout 2>/dev/null && ! grep -rqa 'PRIVATE KEY' $iddir /var/lib/suveryn/etc"
+check "private key not stored plain"  bash -c "test \"\$(stat -c %a $iddir/private.cred)\" = 600 && ! grep -qa 'PRIVATE KEY' $iddir/private.cred && ! openssl pkey -in $iddir/private.cred -noout 2>/dev/null && ! grep -rqa 'PRIVATE KEY' $iddir && ! grep -rla 'PRIVATE KEY' /var/lib/suveryn/etc | grep -vx '/var/lib/suveryn/etc/tls/\\(ca\\|server\\)\\.key'"
 if [ "$mode" = tpm-replaced ] || [ "$mode" = tpm-again ]; then
   check "identity sealed to the TPM"  bash -c "grep -q '\"sealed\": \"host+tpm2\"' $iddir/identity.json"
   check "identity unusable with another TPM" bash -c "! $id show >/tmp/show 2>&1 && grep -q 'Usable: *NO' /tmp/show && ! $id sign /etc/os-release >/dev/null 2>&1 && echo refused"
@@ -139,5 +141,49 @@ if [ "$mode" = first-boot ]; then
   check "the installer's boot entry"   bash -c 'efibootmgr | grep -i suveryn && efibootmgr | sed -n "s/^BootOrder: //p"'
 fi
 check "installed bundle verifies"     bash -c "$bundle verify $installed 2>/dev/null | grep -q '^valid:' && echo \$(du -sh $installed | cut -f1)"
+# The web setup (#37): open until setup is complete, then closed for good.
+setup_open() {
+  check "web setup open: its service up, unprivileged" bash -c 'for i in $(seq 180); do systemctl is-active --quiet suveryn-setup.service && break; sleep 1; done
+    pid=$(systemctl show -p MainPID --value suveryn-setup.service); u=$(id -nu "$(sed -n "s/^Uid:\t\([0-9]*\).*/\1/p" /proc/$pid/status)"); cap=$(sed -n "s/^CapEff:\t//p" /proc/$pid/status)
+    echo "pid $pid as $u, capabilities $cap"; [ "$u" = suveryn-setup ] && [ "$cap" = 0000000000000000 ]'
+  check "web setup open: the page at /, the API answers" python3 -c '
+import subprocess
+out = subprocess.run(["/usr/lib/suveryn-test/web-get", "--wait-for", "setup", "/", "/setup/v1/state"], capture_output=True, text=True).stdout.split("\n")
+print("; ".join(out[:2]))
+assert out[0].startswith("/ 200 ") and "setup" in out[0] and out[1].startswith("/setup/v1/state 200"), out'
+  check "web setup open: it sees the address, name and identity" /usr/lib/suveryn-test/setup-state
+  check "web setup open: its certificate for the console" bash -c 'openssl x509 -in /etc/suveryn/tls/setup-cert.pem -noout -ext subjectAltName | grep -q "DNS:$(hostname).local" && openssl x509 -in /etc/suveryn/tls/setup-cert.pem -noout -fingerprint -sha256 | cut -c1-40'
+  check "web setup open: answers folder 0700, its own" bash -c 'test "$(stat -c "%a %U" /var/lib/suveryn/setup/answers)" = "700 suveryn-setup"'
+}
+setup_closed() {
+  check "web setup closed: units stopped, not started again" bash -c '! systemctl is-active --quiet suveryn-setup.service && ! systemctl is-active --quiet suveryn-setup-provision.path && cat /etc/suveryn/setup-complete'
+  check "web setup closed: / is the chat, /setup/ is gone" python3 -c '
+import subprocess
+out = subprocess.run(["/usr/lib/suveryn-test/web-get", "/", "/setup/v1/state", "/setup.html"], capture_output=True, text=True).stdout.split("\n")
+print("; ".join(out[:3]))
+assert out[0].startswith("/ 200 ") and "etup" not in out[0], out
+assert out[1] == "/setup/v1/state 404 " or out[1].startswith("/setup/v1/state 404"), out
+assert out[2].startswith("/setup.html 404"), out'
+  check "web setup closed: answers and secrets gone, choices kept" python3 -c '
+import json, os, stat
+assert not os.path.exists("/var/lib/suveryn/setup/answers") and not os.path.exists("/etc/suveryn/nginx-setup.conf")
+assert not os.path.exists("/etc/suveryn/tls/setup-cert.pem")
+kept = json.load(open("/etc/suveryn/setup-answers.json"))
+assert set(kept["administrator"]) == {"name", "email"} and kept["support"]["edition"] == "Sūveryn Enterprise", kept
+assert stat.S_IMODE(os.stat("/etc/suveryn/backups-share.secret").st_mode) == 0o600
+assert json.load(open("/etc/suveryn/backups.json"))["recipient"].startswith("age1")
+print(kept["administrator"]["email"], kept["backups"]["target"], kept["completed"])'
+}
+if [ "$mode" = web-setup ]; then
+  setup_open
+  say "web-setup ready"
+  check "web setup: completed from the browser" bash -c 'for i in $(seq 2400); do test -e /etc/suveryn/setup-complete && ! systemctl is-active --quiet suveryn-setup.service && exit 0; sleep 1; done; journalctl -b -u suveryn-setup -u suveryn-setup-provision --no-pager | tail -5; exit 1'
+  sleep 3
+  setup_closed
+elif [ -e /etc/suveryn/setup-complete ]; then
+  setup_closed
+else
+  setup_open
+fi
 check "network up (DHCP)"             sh -c 'for i in $(seq 60); do ip -4 -o addr show scope global | grep -q inet && exit 0; sleep 1; done; networkctl --no-pager --no-legend 2>&1 | tr "\n" ";"; systemctl is-active systemd-networkd; exit 1'
 finish

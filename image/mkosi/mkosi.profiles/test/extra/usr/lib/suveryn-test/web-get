@@ -1,0 +1,34 @@
+#!/usr/bin/python3
+"""The test system: what https://localhost answers for each path, as `<path> <status> <title>` lines
+(the self-test's web setup checks). With --wait-for TEXT, first waits until / answers with a title
+containing it (up to a minute)."""
+import re, socket, ssl, sys, time, urllib.error, urllib.request
+
+ctx = ssl._create_unverified_context()
+host = socket.gethostname() + ".local"
+
+
+def get(path):
+    try:
+        r = urllib.request.urlopen(urllib.request.Request("https://localhost" + path, headers={"Host": host}),
+                                   context=ctx, timeout=20)
+        body, code = r.read().decode(errors="replace"), r.status
+    except urllib.error.HTTPError as e:
+        body, code = "", e.code
+    except OSError:
+        body, code = "", 0
+    t = re.search(r"<title>(.*?)</title>", body)
+    return code, t.group(1) if t else ""
+
+
+args = sys.argv[1:]
+if args[:1] == ["--wait-for"]:
+    want, args = args[1], args[2:]
+    for _ in range(60):
+        code, title = get("/")
+        if code == 200 and want in title:
+            break
+        time.sleep(1)
+for path in args:
+    code, title = get(path)
+    print(path, code, title)

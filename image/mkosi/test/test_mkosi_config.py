@@ -133,7 +133,8 @@ def test_the_machine_id_is_mounted_from_the_data_partition_in_the_initrd():
 def test_only_the_listed_etc_paths_link_into_the_data_partition():
     links = dict(re.findall(r"^link (\S+)\s+(\S+)$", POSTINST, re.M))
     into_var = {target: dest for target, dest in links.items() if target.startswith("/var/")}
-    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/default/keyboard", "/etc/systemd/network"}
+    assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/default/keyboard",
+                                      "/etc/systemd/network", "/etc/nginx/sites-enabled/suveryn"}
     for path in into_var.values():
         assert f"`{path}" in DESIGN, f"{path} isn't in the design note's list"
     assert links["/run/systemd/resolve/stub-resolv.conf"] == "/etc/resolv.conf"
@@ -201,12 +202,13 @@ def test_every_extra_tree_exists():
                 out.append(line.strip().split(":")[0])
         return out
     for conf, base in [(MKOSI / "mkosi.conf.d" / "10-appliance.conf", MKOSI),
+                       (MKOSI / "mkosi.conf.d" / "20-web-setup.conf", MKOSI),
                        (MKOSI / "mkosi.profiles" / "test" / "mkosi.conf", MKOSI / "mkosi.profiles" / "test"),
                        (MKOSI / "mkosi.images" / "initrd" / "mkosi.conf", MKOSI / "mkosi.images" / "initrd")]:
         found = trees(conf)
         assert found, conf
         for t in found:
-            if t == "../../test/keys/public":  # made by test/make-test-keys, never committed
+            if t in ("../../test/keys/public", "../../test/ui"):  # made by test/make-test-keys and make-test-ui, never committed
                 continue
             assert (base / t).is_dir(), f"{conf.name}: {t}"
 
@@ -316,3 +318,17 @@ def test_mdns_answers_for_the_name():
     assert "MulticastDNS=yes" in (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "network" /
                                   "80-suveryn-dhcp.network").read_text()
     assert '"MulticastDNS=yes"' in (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "install").read_text()
+
+
+def test_the_web_setup_runs_on_the_installed_appliance_from_the_image():
+    """#37: the setup units from setup/, its user made at build time (/etc/passwd is read-only), nginx
+    with the snippets built in and the office's site on the data partition."""
+    assert "systemctl enable suveryn-setup.service suveryn-setup-provision.path" in POSTINST
+    assert "systemd-sysusers /usr/lib/sysusers.d/suveryn-setup.conf" in POSTINST
+    assert "rm -f /etc/nginx/sites-enabled/default" in POSTINST and "ConditionPathExists=/etc/nginx/sites-enabled/suveryn" in POSTINST
+    conf = (MKOSI / "mkosi.conf.d" / "20-web-setup.conf").read_text()
+    assert "nginx" in conf and "../../setup:/opt/suveryn/appliance/setup" in conf
+    for unit in ("suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"):
+        text = (MKOSI.parent.parent / "setup" / "systemd" / unit).read_text()
+        assert "ConditionPathExists=!/run/suveryn/installer-mode" in text, unit
+        assert "/opt/suveryn/appliance/setup/suveryn-setup" in text or unit.endswith(".path"), unit

@@ -1,0 +1,16 @@
+#!/usr/bin/python3
+"""The test system: what the web setup's service reports (GET setup/v1/state), checked against the
+machine; on a mismatch, the service's own last complaint from the journal."""
+import json, socket, ssl, subprocess, sys, urllib.request
+
+r = urllib.request.urlopen(urllib.request.Request("https://localhost/setup/v1/state", headers={"Host": socket.gethostname() + ".local"}),
+                           context=ssl._create_unverified_context(), timeout=30)
+s = json.load(r)
+ident = json.load(open("/var/lib/suveryn/identity/identity.json"))
+print(s["address"] or "no address", s["name"], s["language"], (s["appliance"] or {}).get("id", "")[:8])
+ok = (s["address"].startswith("10.0.2.15/") and s["name"] == socket.gethostname() and s["language"] == "nl"
+      and s["appliance"] == {"id": ident["uuid"], "fingerprint": ident["fingerprint"]})
+if not ok:
+    log = subprocess.run(["journalctl", "-b", "-u", "suveryn-setup", "--no-pager", "-o", "cat"], capture_output=True, text=True).stdout
+    print([ln for ln in log.splitlines() if "failed" in ln][-1:])
+sys.exit(0 if ok else 1)
