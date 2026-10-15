@@ -4,6 +4,7 @@
 #   /            the chat UI's built files (/opt/suveryn/ui)
 #   /v1/ /auth/ /health   suveryn-core's gateway (127.0.0.1:8000)
 #   /idp/        Keycloak (127.0.0.1:8180, keycloak.conf: hostname https://@HOST@/idp)
+#   while the web setup is open (/etc/suveryn/nginx-setup.conf): / is the setup page, /setup/v1/ its API
 # Nothing else reaches the gateway: FastAPI's /docs, /redoc and /openapi.json are not routed (and
 # /docs is off in the gateway as well, SUVERYN_API_DOCS unset).
 #
@@ -123,4 +124,14 @@ server {
     location ~ ^/idp/(health|metrics) {   # on Keycloak's management port anyway; never through the proxy
         return 404;
     }
+
+    # The web setup (setup/): its page and API while setup is open; the file is gone once it closes,
+    # and the page itself is never served directly.
+    location = /setup.html {
+        return 404;
+    }
+    location /setup/ {                    # while setup is open, its /setup/v1/ (longer) wins
+        return 404;
+    }
+    include /etc/suveryn/nginx-setup*.conf;
 }

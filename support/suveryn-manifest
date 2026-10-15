@@ -1,0 +1,244 @@
+#!/usr/bin/python3
+"""Support manifests: Sūveryn Labs' signed statement of what an appliance's support agreement covers
+(design note first-boot-setup, "Support agreement"; tracker #35, #37).
+
+    suveryn-manifest verify FILE --appliance UUID [--json]   on the appliance: may this manifest be used here?
+    suveryn-manifest make OUT --appliance UUID --edition TEXT --users N --valid-until DATE \\
+                         --next-check-in DATE [--connectors N] [--playbooks N]
+    suveryn-manifest sign FILE (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
+    suveryn-manifest public-key (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
+
+A manifest is one small text file, readable by a person and valid YAML (a flat list of `key: value`
+lines), e.g. `suveryn-manifest-7f3c9a2e.yaml`:
+
+    # sūveryn support manifest. Signed by Sūveryn Labs: changing any line voids it.
+    format: suveryn-manifest/1
+    appliance_id: 7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41
+    edition: Sūveryn Enterprise
+    users: 15
+    valid_until: 2027-09-30
+    next_check_in: 2026-12-31
+    connectors: 3
+    playbooks: 4
+    issued: 2026-10-15
+    signature: <key fingerprint, hex> <Ed25519 signature, base64>
+
+The signature covers every byte before the `signature:` line, the same way a bundle's does (one
+verification path, bundles/README.md): the key signs a fixed text with those bytes' SHA-256
+(`suveryn-manifest-signature/1`, `manifest-sha256 <hex>`), so a cloud key service only ever sees
+that text. The appliance trusts the public keys in its portal-keys folder (*.pem; Ed25519). Only
+these keys, and only this exact layout: no other YAML (quotes, lists, anchors) is read.
+
+`verify` refuses, with one code the web setup shows in the office's language:
+manifest_format (not this layout), manifest_signature (no trusted signature, or changed after
+signing), manifest_other_appliance, manifest_expired. Python 3 standard library and openssl only.
+"""
+
+import argparse
+import base64
+import datetime
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+sys.dont_write_bytecode = True  # never a __pycache__ in the image's tree (it loads bundle from there)
+KEYS = Path(os.environ.get("SUVERYN_PORTAL_KEYS", str(HERE / "portal-keys")))
+FORMAT = "suveryn-manifest/1"
+SIG_FORMAT = "suveryn-manifest-signature/1"
+MAX_SIZE = 16 * 1024
+HEADER = "# sūveryn support manifest. Signed by Sūveryn Labs: changing any line voids it.\n"
+
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+TEXT = re.compile(r"(?=\w)[^\x00-\x1f\x7f-\x9f:#'\"{}\[\],&*!|>%@`]{1,64}")
+# The fields, in order, and what each must look like. All required.
+FIELDS = {
+    "format": re.compile(re.escape(FORMAT)),
+    "appliance_id": UUID,
+    "edition": TEXT,
+    "users": re.compile(r"[1-9]\d{0,5}"),
+    "valid_until": DATE,
+    "next_check_in": DATE,
+    "connectors": re.compile(r"\d{1,4}"),
+    "playbooks": re.compile(r"\d{1,4}"),
+    "issued": DATE,
+}
+INTEGERS = ("users", "connectors", "playbooks")
+
+
+class Refused(Exception):
+    """The manifest can't be used here; `code` says why (the web setup's error codes)."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+
+
+def load(name: str, path: Path):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+# The bundles' checker: the same fingerprint and Ed25519 verification (bundles/README.md).
+bundle = load("suveryn_bundle", REPO / "image" / "mkosi" / "mkosi.extra" / "usr" / "lib" / "suveryn" / "bundle")
+
+
+def signed_text(body: bytes) -> bytes:
+    return f"{SIG_FORMAT}\nmanifest-sha256 {hashlib.sha256(body).hexdigest()}\n".encode()
+
+
+def split(raw: bytes) -> tuple[bytes, str | None]:
+    """The signed body and the signature line's value (None when there is none)."""
+    m = re.search(rb"^signature: ([^\n]*)\n?\Z", raw, re.M)
+    return (raw[:m.start()], m.group(1).decode("ascii", "replace")) if m else (raw, None)
+
+
+def parse(body: bytes) -> dict:
+    """The fields, checked against FIELDS. Raises Refused(manifest_format)."""
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise Refused("manifest_format", "not UTF-8 text") from None
+    values: dict = {}
+    for line in text.splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        m = re.fullmatch(r"([a-z_]+): (.+)", line)
+        if not m or m.group(1) not in FIELDS or m.group(1) in values:
+            raise Refused("manifest_format", f"unexpected line {line[:40]!r}")
+        key, value = m.groups()
+        if not FIELDS[key].fullmatch(value) or value != value.strip():
+            raise Refused("manifest_format", f"unusable {key}")
+        values[key] = int(value) if key in INTEGERS else value
+    missing = [k for k in FIELDS if k not in values]
+    if missing:
+        raise Refused("manifest_format", f"missing {', '.join(missing)}")
+    for key in ("valid_until", "next_check_in", "issued"):
+        try:
+            datetime.date.fromisoformat(values[key])
+        except ValueError:
+            raise Refused("manifest_format", f"unusable {key}") from None
+    return values
+
+
+def check(raw: bytes, appliance: str, today: datetime.date | None = None, keys: Path | None = None) -> dict:
+    """The manifest's fields when it may be used on this appliance; otherwise Refused with a code."""
+    if len(raw) > MAX_SIZE:
+        raise Refused("manifest_format", "larger than a manifest")
+    body, sig = split(raw)
+    values = parse(body)
+    if sig is None:
+        raise Refused("manifest_signature", "not signed")
+    m = re.fullmatch(r"([0-9a-f]{64}) ([A-Za-z0-9+/]{86}==)", sig)
+    if not m:
+        raise Refused("manifest_signature", "unusable signature line")
+    trusted = {}
+    folder = keys or KEYS
+    for path in sorted(folder.glob("*.pem")) if folder.is_dir() else []:
+        pem = path.read_bytes()
+        try:
+            trusted[bundle.fingerprint(pem)] = pem
+        except ValueError:
+            continue
+    pem = trusted.get(m.group(1))
+    if pem is None or not bundle.ed25519_verify(signed_text(body), base64.b64decode(m.group(2)), pem):
+        raise Refused("manifest_signature", "no trusted signature, or changed after signing")
+    if values["appliance_id"] != appliance:
+        raise Refused("manifest_other_appliance", "for another appliance")
+    if datetime.date.fromisoformat(values["valid_until"]) < (today or datetime.date.today()):
+        raise Refused("manifest_expired", "expired")
+    out = {k: v for k, v in values.items() if k != "format"}
+    out["key"] = m.group(1)
+    return out
+
+
+def make(appliance: str, edition: str, users: int, valid_until: str, next_check_in: str, connectors: int = 0,
+         playbooks: int = 0, issued: str | None = None) -> bytes:
+    values = {"format": FORMAT, "appliance_id": appliance, "edition": edition, "users": users,
+              "valid_until": valid_until, "next_check_in": next_check_in, "connectors": connectors,
+              "playbooks": playbooks, "issued": issued or datetime.date.today().isoformat()}
+    body = (HEADER + "".join(f"{k}: {v}\n" for k, v in values.items())).encode()
+    parse(body)  # what the appliance would refuse never leaves here
+    return body
+
+
+def sign(raw: bytes, signer) -> bytes:
+    body, _ = split(raw)
+    parse(body)
+    pem = signer.public_pem()
+    text = signed_text(body)
+    signature = signer.sign(text)
+    if len(signature) != 64 or not bundle.ed25519_verify(text, signature, pem):
+        raise SystemExit("suveryn-manifest: the signer's signature doesn't verify with its public key")
+    return body + f"signature: {bundle.fingerprint(pem)} {base64.b64encode(signature).decode()}\n".encode()
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(prog="suveryn-manifest", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    v = sub.add_parser("verify")
+    v.add_argument("file", type=Path)
+    v.add_argument("--appliance", required=True)
+    v.add_argument("--json", action="store_true")
+    mk = sub.add_parser("make")
+    mk.add_argument("out", type=Path)
+    mk.add_argument("--appliance", required=True)
+    mk.add_argument("--edition", required=True)
+    mk.add_argument("--users", type=int, required=True)
+    mk.add_argument("--valid-until", required=True)
+    mk.add_argument("--next-check-in", required=True)
+    mk.add_argument("--connectors", type=int, default=0)
+    mk.add_argument("--playbooks", type=int, default=0)
+    for name in ("sign", "public-key"):
+        p = sub.add_parser(name)
+        if name == "sign":
+            p.add_argument("file", type=Path)
+        g = p.add_mutually_exclusive_group(required=True)
+        g.add_argument("--aws-kms", metavar="KEY")
+        g.add_argument("--key-file", metavar="PRIVATE.pem", help="tests and development only")
+        p.add_argument("--region")
+    a = ap.parse_args(argv)
+    if a.command == "verify":
+        try:
+            out = {"valid": True, **check(a.file.read_bytes(), a.appliance)}
+        except Refused as e:
+            out = {"valid": False, "error": e.code, "detail": str(e)}
+        print(json.dumps(out, indent=2, ensure_ascii=False) if a.json else
+              ("valid: " + ", ".join(f"{k} {v}" for k, v in out.items() if k != "valid")) if out["valid"]
+              else f"NOT valid ({out['error']}): {out['detail']}")
+        return 0 if out["valid"] else 1
+    if a.command == "make":
+        try:
+            a.out.write_bytes(make(a.appliance, a.edition, a.users, a.valid_until, a.next_check_in, a.connectors,
+                                   a.playbooks))
+        except Refused as e:
+            print(f"suveryn-manifest: {e}", file=sys.stderr)
+            return 1
+        print(f"{a.out}: made; sign it next")
+        return 0
+    release = load("suveryn_bundle_release", REPO / "bundles" / "suveryn-bundle-release")
+    s = release.KeyFile(Path(a.key_file)) if a.key_file else release.AwsKms(a.aws_kms, a.region)
+    if a.command == "public-key":
+        sys.stdout.write(s.public_pem().decode())
+        return 0
+    try:
+        a.file.write_bytes(sign(a.file.read_bytes(), s))
+    except Refused as e:
+        print(f"suveryn-manifest: {a.file}: {e}", file=sys.stderr)
+        return 1
+    print(f"{a.file}: signed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

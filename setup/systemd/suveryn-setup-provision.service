@@ -1,0 +1,15 @@
+# Provisioning with the web setup's answers (setup/suveryn-setup provision), as root: it checks the
+# answers again, runs suveryn-provision first-boot, reports progress to the screen and, once the
+# browser has shown Complete, closes setup. Started by suveryn-setup-provision.path.
+[Unit]
+Description=sūveryn web setup: provisioning
+Documentation=file:/opt/suveryn/appliance/setup/README.md
+After=network-online.target suveryn-setup.service
+ConditionPathExists=!/etc/suveryn/setup-complete
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/setup/suveryn-setup provision
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
