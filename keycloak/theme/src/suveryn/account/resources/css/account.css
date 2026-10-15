@@ -46,3 +46,71 @@ body { font-family: "Inter", system-ui, sans-serif; color: #020205; background: 
 .pf-v5-c-nav__link:hover { background-color: #F1F1F3; color: #020205; }
 .pf-v5-c-form-control:focus-within { --pf-v5-c-form-control--after--BorderBottomColor: #0F8A82; }
 .pf-v5-c-card { border-radius: 14px; }
+
+/* ---------------------------------------------------------------- fields, buttons and sizes
+   As the sign-in (login/resources/css/suveryn.css) and the web setup and chat UI (suveryn-core
+   packages/chat-ui/src/ui/ui.css, "sizes"): fields and buttons 44px, the menu in the masthead 32px;
+   fields with a full hairline border and 6px corners, a teal focus ring, no PatternFly underline.
+   Measured on Keycloak 26.8: PatternFly's own were 36px for all of them. */
+.pf-v5-c-form-control {
+  --pf-v5-c-form-control--PaddingTop: 11px; --pf-v5-c-form-control--PaddingBottom: 11px;
+  --pf-v5-c-form-control--PaddingLeft: 14px; --pf-v5-c-form-control--PaddingRight: 14px;
+  --pf-v5-c-form-control--BorderRadius: 6px;
+  --pf-v5-c-form-control--before--BorderColor: rgba(2, 2, 5, 0.12);
+  --pf-v5-c-form-control--after--BorderColor: transparent;
+  --pf-v5-c-form-control--hover--after--BorderBottomColor: transparent;
+  --pf-v5-c-form-control--focus--after--BorderBottomColor: transparent;
+  border-radius: 6px; font-size: 15px; min-height: 44px;
+}
+.pf-v5-c-form-control > :is(input, select, textarea) { line-height: 20px; }
+.pf-v5-c-form-control::before { border: 1px solid rgba(2, 2, 5, 0.12); border-radius: 6px; }
+.pf-v5-c-form-control::after { display: none; }
+.pf-v5-c-form-control:focus-within::before { border-color: #0F8A82; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.pf-v5-c-form-control > :is(input, select, textarea):focus { outline: none; }
+.pf-v5-c-form-control.pf-m-disabled { background: #F1F1F3; color: rgba(2, 2, 5, 0.62); }
+
+/* a select in a form is a menu toggle: the same as a field */
+.pf-v5-c-form .pf-v5-c-menu-toggle {
+  min-height: 44px; padding: 11px 14px; font-size: 15px; line-height: 20px; border-radius: 6px; background: #FFFFFF;
+}
+:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain)::before { border: 1px solid rgba(2, 2, 5, 0.12); border-radius: 6px; }
+:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain)::after { display: none; }
+:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain):focus-visible::before { border-color: #0F8A82; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+/* the user menu in the masthead: small, as the sign-in's language menu */
+.pf-v5-c-masthead .pf-v5-c-menu-toggle:not(.pf-m-plain) { min-height: 32px; padding: 7px 10px; font-size: 13px; line-height: 16px; border-radius: 6px; }
+
+/* buttons with text */
+.pf-v5-c-button:is(.pf-m-primary, .pf-m-secondary, .pf-m-tertiary, .pf-m-danger, .pf-m-link):not(.pf-m-inline) {
+  min-height: 44px; padding: 12px 20px; font-size: 14.5px; line-height: 1.2; font-weight: 600;
+}
+
+/* labels as the sign-in's; the required mark in accent-ink (the brand has no separate red) */
+.pf-v5-c-form__label-text { font-size: 13.5px; font-weight: 600; }
+.pf-v5-c-form__label-required { color: #C42F00; }
+
+/* the sidebar's dividers: the hairline, not the dark line of PatternFly's dark sidebar (#3c3f42, on
+   the links' ::before) */
+.pf-v5-c-nav { --pf-v5-c-nav__link--before--BorderColor: rgba(2, 2, 5, 0.12); --pf-v5-c-nav__item--before--BorderColor: rgba(2, 2, 5, 0.12); }
+.pf-v5-c-nav__link::before, .pf-v5-c-nav__item::before, .pf-v5-c-nav__item.pf-m-expandable::before { border-color: rgba(2, 2, 5, 0.12); }
+/* the current item's bar in the accent, in sub-menus too (PatternFly's is light blue there) */
+.pf-v5-c-nav__subnav { --pf-v5-c-nav__subnav__link--m-current--after--BorderColor: #FA5B35; }
+.pf-v5-c-nav__link.pf-m-current::after { border-color: #FA5B35; }
+
+/* Link and secondary buttons in the brand's colours, set on the buttons themselves: PatternFly's own
+   blue (#0066cc) came back on some pages, its variables being set again after this stylesheet. */
+.pf-v5-c-button.pf-m-link {
+  --pf-v5-c-button--m-link--Color: #C42F00; --pf-v5-c-button--m-link--hover--Color: #AC2800;
+  --pf-v5-c-button--m-link--focus--Color: #AC2800; --pf-v5-c-button--m-link--active--Color: #AC2800;
+  color: #C42F00;
+}
+.pf-v5-c-button.pf-m-link:hover { color: #AC2800; }
+.pf-v5-c-button.pf-m-secondary {
+  --pf-v5-c-button--m-secondary--Color: #020205; --pf-v5-c-button--m-secondary--hover--Color: #020205;
+  --pf-v5-c-button--m-secondary--focus--Color: #020205; --pf-v5-c-button--m-secondary--active--Color: #020205;
+  --pf-v5-c-button--m-secondary--after--BorderColor: rgba(2, 2, 5, 0.12);
+  --pf-v5-c-button--m-secondary--hover--after--BorderColor: rgba(2, 2, 5, 0.62);
+  --pf-v5-c-button--m-secondary--focus--after--BorderColor: rgba(2, 2, 5, 0.62);
+  color: #020205;
+}
+.pf-v5-c-button.pf-m-secondary::after { border-color: rgba(2, 2, 5, 0.12); }
+.pf-v5-c-button.pf-m-secondary:hover::after { border-color: rgba(2, 2, 5, 0.62); }
