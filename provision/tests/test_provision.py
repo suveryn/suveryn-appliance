@@ -125,3 +125,21 @@ def test_the_sandbox_boundary_check_flags_every_way_out():
     leaks = {**held, "uid": 0, "inet_socket": "allowed", "read_secret": "allowed", "seccomp": "0"}
     found = " ".join(p.sandbox_boundary(leaks, 997))
     assert "uid 0" in found and "inet_socket" in found and "secrets" in found and "seccomp 0" in found
+
+
+def test_a_server_started_without_systemd_never_holds_a_pipe(tmp_path):
+    """#37 6b on the Pod: nginx, started directly, kept the error output pipe it was given open, and
+    whoever started it waited for that pipe to close, forever. A stand-in that does the same: it
+    leaves a child in the background holding everything it was given."""
+    import time
+    daemon = tmp_path / "fake-daemon"
+    daemon.write_text("#!/bin/sh\necho starting >&2\n(sleep 30 &)\nexit 0\n")
+    daemon.chmod(0o755)
+    start = time.time()
+    p.start_daemon([str(daemon)], "the stand-in")
+    assert time.time() - start < 10
+    failing = tmp_path / "failing-daemon"
+    failing.write_text("#!/bin/sh\necho 'bind() to 0.0.0.0:443 failed' >&2\nexit 1\n")
+    failing.chmod(0o755)
+    with pytest.raises(SystemExit):
+        p.start_daemon([str(failing)], "the stand-in")
