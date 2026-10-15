@@ -1,0 +1,11 @@
+# Starts provisioning when the web setup asks for it (suveryn-setup serve writes answers/start).
+[Unit]
+Description=sūveryn web setup: provisioning requested
+ConditionPathExists=!/etc/suveryn/setup-complete
+
+[Path]
+PathExists=/var/lib/suveryn/setup/answers/start
+Unit=suveryn-setup-provision.service
+
+[Install]
+WantedBy=multi-user.target

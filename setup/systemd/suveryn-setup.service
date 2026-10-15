@@ -1,0 +1,47 @@
+# The web setup's API (setup/suveryn-setup serve), until setup is complete (suveryn-tracker#37).
+# Unprivileged: it can only write its own answers folder. prepare runs first as root ("+"): the
+# appliance's facts, its own certificate and the setup site in nginx.
+[Unit]
+Description=sūveryn web setup (until setup is complete)
+Documentation=file:/opt/suveryn/appliance/setup/README.md
+After=network-online.target suveryn-identity.service
+Wants=network-online.target
+ConditionPathExists=!/etc/suveryn/setup-complete
+# An appliance set up from first-boot.env (the earlier way) has no web setup.
+ConditionPathExists=!/var/lib/suveryn/.first-boot-done
+ConditionPathExists=!/boot/efi/suveryn/first-boot.env
+
+[Service]
+User=suveryn-setup
+Group=suveryn-setup
+ExecStartPre=+/usr/bin/python3 -I /opt/suveryn/appliance/setup/suveryn-setup prepare
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/setup/suveryn-setup serve
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+# Its answers folder, made by systemd as suveryn-setup (0700): the only place it can write.
+StateDirectory=suveryn/setup/answers
+StateDirectoryMode=0700
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# The share test connects out (IPv4/6); ip reads the addresses (netlink); lsblk reads sysfs.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

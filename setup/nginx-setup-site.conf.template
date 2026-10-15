@@ -1,0 +1,57 @@
+# sūveryn web setup site
+# The site before provisioning (suveryn-setup prepare writes it, replacing @HOST@). Only the setup
+# page, its files and its API (/etc/suveryn/nginx-setup.conf); provisioning replaces this with the
+# real site (reverse-proxy/suveryn.conf.template), which includes the same setup locations until
+# setup closes. Same TLS and headers as the real site; the certificate is the appliance's own, for
+# <name>.local and its address.
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2 default_server;
+    listen [::]:443 ssl http2 default_server;
+    server_name @HOST@ _;
+
+    ssl_certificate     /etc/suveryn/tls/server.crt;
+    ssl_certificate_key /etc/suveryn/tls/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:suveryn:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    access_log off;                       # setup's requests carry passwords and keys in their bodies only, but log nothing anyway
+    proxy_max_temp_file_size 0;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Connection "";
+
+    include /etc/nginx/snippets/suveryn-headers.conf;
+
+    root /opt/suveryn/ui;
+    location /assets/ {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+    location ~ ^/(favicon\.svg|apple-touch-icon\.png)$ {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        try_files $uri =404;
+    }
+    location / {
+        return 404;
+    }
+
+    include /etc/suveryn/nginx-setup*.conf;
+}
