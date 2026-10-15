@@ -9,6 +9,7 @@ UI is served on the same origin as the API):
 | `/v1/`, `/auth/`, `/health` | suveryn-core's gateway, `127.0.0.1:8000` |
 | `/idp/` | Keycloak, `127.0.0.1:8180` (`keycloak.conf`: `hostname=https://<host>/idp`) |
 | `/idp/admin/` | Keycloak's admin console, from private and loopback addresses only |
+| `/` and `/setup/v1/`, while the web setup is open | The setup page and its API ([`setup`](../setup/README.md)): `/etc/suveryn/nginx-setup.conf`, included by the site and deleted when setup closes; from private addresses only. Afterwards `/setup.html` and `/setup/` are 404 |
 | `/docs`, `/redoc`, `/openapi.json` | 404: FastAPI's API pages load scripts from public CDNs (and `/docs` is off in the gateway too) |
 | `http://` | 301 to `https://` |
 

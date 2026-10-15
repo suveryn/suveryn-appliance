@@ -44,12 +44,38 @@ def test_production_settings_are_laid_over_the_development_realm(dev):
     assert c["redirectUris"] == [f"{URL}/auth/callback"] and c["baseUrl"] == f"{URL}/"
     assert c["attributes"]["post.logout.redirect.uris"] == f"{URL}/" and c["webOrigins"] == []
     assert c["secret"] == "test-secret-not-real"
-    # everything else is the development realm's: flow, roles, password and brute-force rules
-    for key in ("passwordPolicy", "bruteForceProtected", "failureFactor", "accessTokenLifespan", "roles", "scopeMappings",
+    # The web setup's password rules (15 characters), stricter than development's 12.
+    assert prod["passwordPolicy"] == "length(15) and notUsername and notEmail"
+    # everything else is the development realm's: flow, roles, brute-force rules
+    for key in ("bruteForceProtected", "failureFactor", "accessTokenLifespan", "roles", "scopeMappings",
                 "registrationAllowed", "identityProviders", "supportedLocales"):
         assert prod[key] == dev[key], key
     for key in ("standardFlowEnabled", "implicitFlowEnabled", "directAccessGrantsEnabled", "publicClient", "fullScopeAllowed"):
         assert c[key] == dev["clients"][0][key], key
+
+
+def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash_in_the_file():
+    import base64
+    import hashlib
+    u = build_realm.administrator_user("  Anne  de  Smet ", "Anne@Office.BE", "a long test password 1", salt=b"0" * 16)
+    assert (u["username"], u["email"], u["firstName"], u["lastName"]) == ("anne@office.be", "anne@office.be", "Anne", "de Smet")
+    assert u["realmRoles"] == ["suveryn-admin"] and u["enabled"] and u["emailVerified"]
+    assert set(u["clientRoles"]["realm-management"]) == {"manage-users", "view-users", "query-users", "query-groups"}
+    assert "a long test password 1" not in json.dumps(u)
+    [c] = u["credentials"]
+    secret, data = json.loads(c["secretData"]), json.loads(c["credentialData"])
+    assert data == {"hashIterations": 210000, "algorithm": "pbkdf2-sha512", "additionalParameters": {}}
+    expected = hashlib.pbkdf2_hmac("sha512", b"a long test password 1", b"0" * 16, 210000)
+    assert base64.b64decode(secret["value"]) == expected and base64.b64decode(secret["salt"]) == b"0" * 16
+    assert build_realm.administrator_user("Cher", "cher@office.be", "x" * 15)["lastName"] == ""
+    with pytest.raises(SystemExit):
+        build_realm.administrator_user("Anne", "anne@office.be", "too short")
+
+
+def test_a_production_realm_with_a_weaker_password_policy_is_refused(dev):
+    prod = build_realm.production_realm(dev, URL, "test-secret-not-real")
+    with pytest.raises(SystemExit, match="password policy"):
+        build_realm.verify({**prod, "passwordPolicy": "length(12) and notUsername and notEmail"}, URL)
 
 
 @pytest.mark.parametrize("change, problem", [

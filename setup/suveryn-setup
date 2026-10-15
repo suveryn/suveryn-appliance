@@ -1,0 +1,937 @@
+#!/usr/bin/python3
+"""The appliance's web setup, on the appliance's side (suveryn-tracker#37, part 5). The screens are
+suveryn-core's chat-ui (setup.html); this answers them, keeps the answers and runs provisioning.
+
+    suveryn-setup prepare     root, before serve: what the screens show, the setup certificate, nginx
+    suveryn-setup serve       the setup API on 127.0.0.1:8090, as the unprivileged user suveryn-setup
+    suveryn-setup provision   root: provisioning with the saved answers, then closing setup
+    suveryn-setup watch       root, without systemd (a test machine): runs provision when it is asked for
+
+Three parts, so that nothing reachable from the network runs as root:
+
+- **prepare** (`ExecStartPre=+` in suveryn-setup.service) writes `facts.json` (the name, the
+  language chosen at installation, the appliance's identity, the installed models), makes the
+  appliance's own certificate for `<name>.local` and its address (the local CA's, which provisioning
+  keeps when the office chooses it), and gives nginx the setup site.
+- **serve** answers the screens through nginx (`/setup/v1/`, from private addresses only). It checks
+  every answer as the screens do, saves it in its own folder (`answers/`, 0700) and asks for
+  provisioning by writing `answers/start`. It can't do anything else: no root, no capabilities, no
+  write access outside that folder (suveryn-setup.service).
+- **provision** (suveryn-setup-provision.service, started by a path unit when `start` appears)
+  reads the answers back as untrusted input, checks them again, runs
+  `suveryn-provision first-boot` with them and reports progress in `progress.json`. Once the
+  browser has shown Complete it closes setup: the office's own certificate (if chosen) goes in,
+  the setup locations leave nginx, `/etc/suveryn/setup-complete` is written, the answers' secrets
+  are deleted and these units are disabled.
+
+The API is the contract at the top of suveryn-core's packages/chat-ui/src/setup/api.ts. Refusals
+are 422 with `{"errors": {field: code}}` or `{"error": code}`; the codes are shown in the office's
+language (text.ts, `errors`). Python 3 standard library, openssl, ip and lsblk only.
+"""
+
+import base64
+import datetime
+import importlib.machinery
+import importlib.util
+import ipaddress
+import json
+import os
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent
+ENV = os.environ.get
+
+sys.dont_write_bytecode = True  # never a __pycache__ in the image's tree (it loads bundle from there)
+STATE = Path(ENV("SUVERYN_SETUP_DIR", "/var/lib/suveryn/setup"))     # root, 0755: facts.json, progress.json
+ANSWERS = STATE / "answers"                                           # suveryn-setup, 0700
+ETC = Path(ENV("SUVERYN_ETC", "/etc/suveryn"))
+VAR = Path(ENV("SUVERYN_VAR", "/var/lib/suveryn"))
+NGINX = Path(ENV("SUVERYN_NGINX", "/etc/nginx"))
+LOGS = Path(ENV("SUVERYN_LOGS", "/var/log/suveryn"))
+PROVISION = Path(ENV("SUVERYN_PROVISION", str(REPO / "provision" / "suveryn-provision")))
+NETWORK_MODE_TOOL = Path(ENV("SUVERYN_NETWORK_MODE_TOOL", "/opt/suveryn/bin/suveryn-network-mode"))
+PORT = int(ENV("SUVERYN_SETUP_PORT", "8090"))
+USER = "suveryn-setup"
+
+SETUP_COMPLETE = ETC / "setup-complete"            # the console reads it (C8), so does the unit's condition
+SETUP_CERT = ETC / "tls" / "setup-cert.pem"         # the console shows its fingerprint while setup is open
+NGINX_SETUP = ETC / "nginx-setup.conf"              # the setup locations, included by the site while setup is open
+SEEN_DONE_WAIT = int(ENV("SUVERYN_SETUP_SEEN_DONE_WAIT", str(30 * 60)))  # how long Complete may take to be seen
+
+SHARE_TIMEOUT = float(ENV("SUVERYN_SETUP_SHARE_TIMEOUT", "5"))
+MAX_BODY = 300 * 1024
+MAX_PEM = 64 * 1024
+MIN_PASSWORD = 15
+RETENTION = (14, 30, 90, 365)
+STEPS = ("database", "signin", "models", "web", "outgoing")
+# Which UI step each of suveryn-provision's steps belongs to (its "== Title" lines, by prefix).
+PROVISION_STEPS = {
+    "GPU licence check": "database", "Network mode": "database", "Firewall": "database",
+    "Security updates": "database", "PostgreSQL": "database",
+    "Keycloak": "signin",
+    "Model files": "models",
+    "TLS certificate": "web", "Reverse proxy": "web", "Configuration and services": "web",
+    "Starting the services": "web", "Verify": "web",
+}
+
+# The same short list as the screen (suveryn-core packages/chat-ui/src/setup/administrator.ts): a
+# placeholder until the leaked-password list exists on the appliance, shared with Keycloak's
+# passwordBlacklist (open point, #37). tests/test_setup.py keeps the two in step.
+COMMON_PASSWORDS = {
+    "passwordpassword", "password1234567", "123456789012345", "1234567890123456", "qwertyuiopasdfgh",
+    "qwertyuiopasdfghjkl", "iloveyouiloveyou", "welcomewelcome1", "azertyuiopqsdfgh", "wachtwoordwachtwoord",
+    "motdepassemotdepasse", "administrator123", "adminadminadmin",
+}
+
+
+def load(name: str, path: Path):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+manifests = load("suveryn_manifest", REPO / "support" / "suveryn-manifest")
+
+
+class Refused(Exception):
+    """An answer the appliance won't take: codes by field (`_` for the whole step)."""
+
+    def __init__(self, codes: dict[str, str]):
+        super().__init__(", ".join(f"{k}: {v}" for k, v in codes.items()))
+        self.codes = codes
+
+
+# ---------------------------------------------------------------------------- files
+def write_file(path: Path, data: bytes | str, mode: int = 0o600) -> None:
+    """Through a new file and a rename: a link someone left at `path` is replaced, never followed."""
+    data = data.encode() if isinstance(data, str) else data
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    try:
+        os.write(fd, data)
+        os.fchmod(fd, mode)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def read_file(path: Path, limit: int = MAX_BODY) -> bytes | None:
+    """A regular file's bytes, never through a link and never more than `limit`; None if absent."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > limit:
+            raise ValueError(f"{path} isn't a regular file of at most {limit} bytes")
+        return os.read(fd, limit + 1)[:limit]
+    finally:
+        os.close(fd)
+
+
+def read_json(path: Path, default=None):
+    raw = read_file(path)
+    if raw is None:
+        return default
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return default
+
+
+def remove(path: Path) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+# ---------------------------------------------------------------------------- the appliance's facts
+def run(*cmd, input: bytes | None = None, timeout: float = 30) -> tuple[int, str]:
+    try:
+        r = subprocess.run([str(c) for c in cmd], input=input, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 127, str(e)
+    return r.returncode, r.stdout.decode(errors="replace") or (r.stderr.decode(errors="replace") if r.returncode else "")
+
+
+def gather_facts() -> dict:
+    """What prepare (root) knows that serve can't read: the identity and the installation's record."""
+    installed = read_json(VAR / "installed.json", {}) or {}
+    identity = read_json(VAR / "identity" / "identity.json", {}) or {}
+    name = (read_file(VAR / "host" / "hostname") or b"").decode().strip() or installed.get("name") or socket.gethostname()
+    models = [m.get("name") for m in installed.get("models", []) if m.get("name")]
+    if not models:  # an appliance from the Packer image: the LLMs in suveryn-core's manifest
+        core = read_json(Path(ENV("SUVERYN_CORE_MANIFEST", "/opt/suveryn/core/models/manifest.json")), {}) or {}
+        models = [m.get("name") or m.get("id") for m in core.get("models", []) if m.get("role") == "llm"]
+    language = installed.get("language") if installed.get("language") in ("en", "nl", "fr") else None
+    appliance = ({"id": identity["uuid"], "fingerprint": identity["fingerprint"]}
+                 if identity.get("uuid") and identity.get("fingerprint") else None)
+    return {"name": name.split(".")[0], "language": language, "appliance": appliance, "models": models}
+
+
+def network() -> dict:
+    """The address, gateway and resolver in use now, as the network screen shows them."""
+    out = {"address": "", "dhcp": True, "gateway": "", "dns": ""}
+    code, text = run("ip", "-j", "-4", "addr", "show", "scope", "global")
+    try:
+        for link in json.loads(text) if code == 0 else []:
+            for a in link.get("addr_info", []):
+                if a.get("family") == "inet" and not out["address"]:
+                    out["address"] = f"{a['local']}/{a['prefixlen']}"
+                    out["dhcp"] = bool(a.get("dynamic"))
+    except (ValueError, KeyError, TypeError):
+        pass
+    code, text = run("ip", "-j", "-4", "route", "show", "default")
+    try:
+        routes = json.loads(text) if code == 0 else []
+        out["gateway"] = routes[0].get("gateway", "") if routes else ""
+    except (ValueError, IndexError, AttributeError):
+        pass
+    for conf in ("/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"):
+        servers = re.findall(r"^nameserver\s+(\S+)", (read_file(Path(conf)) or b"").decode(), re.M)
+        servers = [s for s in servers if not s.startswith("127.")]
+        if servers:
+            out["dns"] = ", ".join(servers[:2])
+            break
+    return out
+
+
+def usb_disks() -> list[dict]:
+    """Whole disks on USB: where a backup could go. Identified by model and serial, like /dev/disk/by-id."""
+    code, text = run("lsblk", "-J", "-b", "-d", "-o", "NAME,SIZE,TRAN,TYPE,VENDOR,MODEL,SERIAL")
+    disks = []
+    try:
+        for d in json.loads(text).get("blockdevices", []) if code == 0 else []:
+            if d.get("tran") != "usb" or d.get("type") != "disk" or not d.get("size"):
+                continue
+            model = " ".join((d.get("model") or "").split())
+            vendor = " ".join((d.get("vendor") or "").split())
+            ident = re.sub(r"[^A-Za-z0-9._-]+", "_", f"usb-{model or vendor or 'disk'}_{d.get('serial') or d['name']}")
+            name = model if vendor and model.lower().startswith(vendor.lower()) else f"{vendor} {model}".strip()
+            disks.append({"id": ident, "name": name or d["name"], "size_bytes": int(d["size"]), "bus": "USB"})
+    except (ValueError, KeyError, TypeError, AttributeError):
+        pass
+    return disks
+
+
+# ---------------------------------------------------------------------------- the checks (the screens' rules)
+def is_common_password(password: str) -> bool:
+    p = password.lower()
+    if p in COMMON_PASSWORDS or re.fullmatch(r"(.)\1+", p, re.S):
+        return True
+    codes = [ord(c) for c in p]
+    return all(i == 0 or c - codes[i - 1] == 1 for i, c in enumerate(codes))
+
+
+def personal_words(*values: str) -> list[str]:
+    return [w for v in values for w in re.split(r"[\W_]+", v.lower()) if len(w) >= 4]
+
+
+def check_network(a) -> dict:
+    if not isinstance(a, dict) or a.get("mode") not in ("connected", "air-gapped") or a.get("outgoing") not in ("approved", "all"):
+        raise Refused({"_": "invalid"})
+    return {"mode": a["mode"], "outgoing": a["outgoing"] if a["mode"] == "connected" else "approved"}
+
+
+def check_administrator(a, appliance_name: str) -> dict:
+    if not isinstance(a, dict) or not all(isinstance(a.get(k), str) for k in ("name", "email", "password")):
+        raise Refused({"_": "invalid"})
+    name, email, password = " ".join(a["name"].split()), a["email"].strip(), a["password"]
+    errors = {}
+    if not name or len(name) > 200:
+        errors["name"] = "name_missing"
+    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+        errors["email"] = "email_invalid"
+    if len(password) < MIN_PASSWORD or len(password) > 512:
+        errors["password"] = "password_short"
+    elif is_common_password(password):
+        errors["password"] = "password_common"
+    elif any(w in password.lower() for w in personal_words(name, email.split("@")[0], appliance_name)):
+        errors["password"] = "password_personal"
+    if errors:
+        raise Refused(errors)
+    return {"name": name, "email": email, "password": password}
+
+
+def pem_blocks(text: str, kind: str) -> list[str]:
+    return re.findall(rf"-----BEGIN {kind}-----\r?\n[A-Za-z0-9+/=\r\n]+-----END {kind}-----", text)
+
+
+def openssl(*args: str, files: dict[str, bytes] | None = None) -> tuple[int, str]:
+    """openssl with each input in an anonymous memory file: an argument "@name" is files[name] as
+    /dev/fd/N. Nothing the office uploads is written to disk."""
+    fds, paths = [], {}
+    try:
+        for key, content in (files or {}).items():
+            fd = os.memfd_create(f"suveryn-setup-{key}")
+            os.write(fd, content)
+            os.lseek(fd, 0, os.SEEK_SET)
+            fds.append(fd)
+            paths[key] = f"/dev/fd/{fd}"
+        cmd = ["openssl", *[paths[a[1:]] if a.startswith("@") else a for a in args]]
+        r = subprocess.run(cmd, capture_output=True, pass_fds=fds, timeout=30, stdin=subprocess.DEVNULL)
+        return r.returncode, r.stdout.decode(errors="replace")
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def certificate_facts(pem: bytes) -> dict | None:
+    code, out = openssl("x509", "-in", "@c", "-noout", "-issuer", "-enddate", "-ext", "subjectAltName",
+                        "-nameopt", "multiline,utf8", files={"c": pem})
+    if code != 0:
+        return None
+    end = re.search(r"notAfter=(.+)", out)
+    issuer_block = out.split("notAfter=")[0]
+    cn = re.search(r"commonName\s*=\s*(.+)", issuer_block) or re.search(r"organizationName\s*=\s*(.+)", issuer_block)
+    names = re.findall(r"DNS:([^,\s]+)", out) + re.findall(r"IP Address:([^,\s]+)", out)
+    not_after = datetime.datetime.strptime(end.group(1).strip(), "%b %d %H:%M:%S %Y %Z") if end else None
+    return {"issuer": cn.group(1).strip() if cn else "", "names": names,
+            "not_after": not_after.date().isoformat() if not_after else ""}
+
+
+def covers(names: list[str], host: str) -> bool:
+    host = host.lower()
+    for n in (n.lower() for n in names):
+        if n == host or (n.startswith("*.") and "." in host and host.split(".", 1)[1] == n[2:]):
+            return True
+    return False
+
+
+def check_certificate(a, host: str) -> tuple[dict, dict[str, bytes]]:
+    """The answer to show and save, and the PEM files to keep (own certificate only)."""
+    if not isinstance(a, dict) or a.get("kind") not in ("self-signed", "own"):
+        raise Refused({"_": "invalid"})
+    if a["kind"] == "self-signed":
+        return {"kind": "self-signed", "names": [host, *([ip] if (ip := network()["address"].split("/")[0]) else [])]}, {}
+    errors = {}
+    texts = {}
+    for field, kind in (("certificate", "CERTIFICATE"), ("key", None), ("chain", "CERTIFICATE")):
+        value = a.get(field)
+        if field == "chain" and not value:
+            continue
+        if not isinstance(value, str) or len(value.encode()) > MAX_PEM:
+            errors[field] = "not_a_certificate" if kind else "not_a_key"
+            continue
+        texts[field] = value
+    cert_blocks = pem_blocks(texts.get("certificate", ""), "CERTIFICATE")
+    if "certificate" in texts and len(cert_blocks) < 1:
+        errors["certificate"] = "not_a_certificate"
+    key_block = re.search(r"-----BEGIN (RSA |EC )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END (RSA |EC )?PRIVATE KEY-----",
+                          texts.get("key", ""))
+    if "key" in texts and not key_block:
+        errors["key"] = "not_a_key"
+    chain_blocks = pem_blocks(texts.get("chain", ""), "CERTIFICATE")
+    if texts.get("chain") and not chain_blocks:
+        errors["chain"] = "not_a_certificate"
+    if errors:
+        raise Refused(errors)
+    # The first certificate is the appliance's; any others in the same file are its chain.
+    leaf = cert_blocks[0].encode() + b"\n"
+    chain = "".join(b + "\n" for b in [*cert_blocks[1:], *chain_blocks]).encode()
+    key = key_block.group(0).encode() + b"\n"
+    facts = certificate_facts(leaf)
+    if facts is None:
+        raise Refused({"certificate": "not_a_certificate"})
+    code, key_pub = openssl("pkey", "-in", "@k", "-passin", "pass:", "-pubout", files={"k": key})
+    if code != 0:
+        raise Refused({"key": "not_a_key"})
+    _, cert_pub = openssl("x509", "-in", "@c", "-noout", "-pubkey", files={"c": leaf})
+    if key_pub.strip() != cert_pub.strip():
+        raise Refused({"key": "key_mismatch"})
+    if openssl("x509", "-in", "@c", "-noout", "-checkend", "0", files={"c": leaf})[0] != 0:
+        raise Refused({"certificate": "expired"})
+    if not covers(facts["names"], host):
+        raise Refused({"certificate": "name_not_covered"})
+    if chain:
+        code, _ = openssl("verify", "-partial_chain", "-CAfile", "@ch", "@c", files={"ch": chain, "c": leaf})
+        if code != 0:
+            raise Refused({"chain": "chain_invalid"})
+    answer = {"kind": "own", "names": facts["names"], "issuer": facts["issuer"], "not_after": facts["not_after"]}
+    return answer, {"certificate.pem": leaf + chain, "key.pem": key}
+
+
+BECH32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+
+def bech32_valid(s: str, hrp: str) -> bool:
+    """A bech32 string (BIP 173) with this human-readable part: age's recipient format."""
+    if s != s.lower() or not s.startswith(hrp + "1") or any(c not in BECH32 for c in s[len(hrp) + 1:]):
+        return False
+    data = [BECH32.index(c) for c in s[len(hrp) + 1:]]
+    chk = 1
+    for v in [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + data:
+        top = chk >> 25
+        chk = (chk & 0x1ffffff) << 5 ^ v
+        for i, g in enumerate((0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)):
+            chk ^= g if (top >> i) & 1 else 0
+    return chk == 1
+
+
+SMB = re.compile(r"(?:\\\\|//)([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\])[\\/][^\s\\/][^\s]*")
+NFS = re.compile(r"([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\]):(/[^\s]*)")
+
+
+def share_host(protocol, address) -> str | None:
+    if protocol not in ("smb", "nfs") or not isinstance(address, str) or len(address) > 512:
+        return None
+    m = (SMB if protocol == "smb" else NFS).fullmatch(address.strip())
+    return m.group(1).strip("[]") if m else None
+
+
+def test_share(a) -> dict:
+    """Whether the appliance can reach the share's server on the office's network. Reachability only:
+    signing in and writing a test file need the backup service's mount (tracker #33)."""
+    if not isinstance(a, dict):
+        raise Refused({"_": "invalid"})
+    host = share_host(a.get("protocol"), a.get("address"))
+    if host is None:
+        return {"ok": False, "error": "address"}
+    try:
+        infos = socket.getaddrinfo(host, 445 if a["protocol"] == "smb" else 2049, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return {"ok": False, "error": "unreachable"}
+    for family, kind, proto, _, addr in infos:
+        ip = ipaddress.ip_address(addr[0])
+        if not (ip.is_private or ip.is_link_local) or ip.is_loopback:
+            return {"ok": False, "error": "not_local"}
+    for family, kind, proto, _, addr in infos:
+        try:
+            with socket.socket(family, kind, proto) as s:
+                s.settimeout(SHARE_TIMEOUT)
+                s.connect(addr)
+                return {"ok": True}
+        except OSError:
+            continue
+    return {"ok": False, "error": "unreachable"}
+
+
+def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]:
+    """The answer to save and, for a share, its password (kept apart, 0600)."""
+    if not isinstance(a, dict) or a.get("target") not in ("usb", "share", "later"):
+        raise Refused({"_": "invalid"})
+    if a["target"] == "later":
+        return {"target": "later"}, None
+    if a.get("retention_days") not in RETENTION or not isinstance(a.get("recipient"), str) \
+            or not bech32_valid(a["recipient"], "age") or len(a["recipient"]) != 62:
+        raise Refused({"_": "invalid"})
+    common = {"retention_days": a["retention_days"], "recipient": a["recipient"]}
+    if a["target"] == "usb":
+        if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
+            raise Refused({"disk": "disk_gone"})
+        return {"target": "usb", "disk": a["disk"], **common}, None
+    if share_host(a.get("protocol"), a.get("address")) is None:
+        raise Refused({"address": "address"})
+    user = a.get("user") or None
+    password = a.get("password") or None
+    if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
+            (password is not None and (not isinstance(password, str) or len(password) > 512)):
+        raise Refused({"_": "invalid"})
+    return {"target": "share", "protocol": a["protocol"], "address": a["address"].strip(), "user": user, **common}, password
+
+
+def manifest_for_screen(m: dict) -> dict:
+    return {k: m[k] for k in ("edition", "appliance_id", "users", "valid_until", "next_check_in", "connectors", "playbooks")}
+
+
+def check_manifest(raw: bytes, facts: dict) -> dict:
+    appliance = (facts.get("appliance") or {}).get("id")
+    if not appliance:
+        raise Refused({"_": "manifest_other_appliance"})
+    try:
+        return manifest_for_screen(manifests.check(raw, appliance))
+    except manifests.Refused as e:
+        raise Refused({"_": e.code}) from None
+
+
+# ---------------------------------------------------------------------------- progress
+def blank_progress() -> dict:
+    return {"state": "running", "steps": [{"id": s, "state": "waiting"} for s in STEPS], "outgoing": None}
+
+
+def progress() -> dict | None:
+    """What provisioning reports; a request not yet picked up shows as running, nothing done yet."""
+    if (ANSWERS / "start").exists():
+        return blank_progress()
+    p = read_json(STATE / "progress.json")
+    return p if isinstance(p, dict) and p.get("state") in ("running", "done", "failed") else None
+
+
+# ---------------------------------------------------------------------------- serve
+WRITES = ("PUT answers/network", "PUT answers/administrator", "PUT answers/certificate", "POST manifest",
+          "PUT answers/support", "PUT answers/backups", "POST backups/test", "POST provision")
+
+
+class App:
+    """The setup API. All state is in files: a restart (or a reload of the page) continues."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+
+    def facts(self) -> dict:
+        return read_json(STATE / "facts.json", {}) or {}
+
+    def host(self) -> str:
+        return f"{self.facts().get('name', 'suveryn')}.local"
+
+    def answers(self) -> dict:
+        return read_json(ANSWERS / "answers.json", {}) or {}
+
+    def save(self, key: str, value) -> None:
+        with self.lock:
+            a = self.answers()
+            a[key] = value
+            write_file(ANSWERS / "answers.json", json.dumps(a, indent=1, ensure_ascii=False))
+
+    def locked(self) -> None:
+        """Answers can't change once provisioning has started, unless it failed."""
+        p = progress()
+        if p and p["state"] in ("running", "done"):
+            raise Refused({"_": "provisioning_started"})
+
+    def state(self) -> dict:
+        f = self.facts()
+        return {"name": f.get("name", ""), **network(), "language": f.get("language"),
+                "appliance": f.get("appliance"), "models": f.get("models", []), "usb_disks": usb_disks(),
+                "answers": self.answers(), "provisioning": progress()}
+
+    def handle(self, method: str, path: str, body: bytes, content_type: str) -> tuple[int, object]:
+        route = f"{method} {path}"
+        if route == "GET state":
+            return 200, self.state()
+        if route == "GET provision":
+            p = progress()
+            if p and p["state"] == "done":
+                (ANSWERS / "seen-done").touch()  # Complete is on screen: provisioning may close setup now
+            return 200, p
+        if route not in WRITES:
+            return 404, {"error": "not_found"}
+        # A body must say what it is (a cross-site form can't send these types without the browser
+        # asking first); POST provision has none.
+        if route == "POST manifest" and content_type != "application/octet-stream":
+            return 415, {"error": "octet_stream_only"}
+        if route != "POST manifest" and (body or route != "POST provision") and content_type != "application/json":
+            return 415, {"error": "json_only"}
+        try:
+            data = json.loads(body) if route != "POST manifest" and body else None
+        except ValueError:
+            return 400, {"error": "invalid_json"}
+        if route == "POST backups/test":
+            return 200, test_share(data)
+        if route == "POST provision":
+            return 200, self.start()
+        self.locked()
+        if route == "PUT answers/network":
+            self.save("network", check_network(data))
+        elif route == "PUT answers/administrator":
+            a = check_administrator(data, self.facts().get("name", ""))
+            write_file(ANSWERS / "administrator-password", a.pop("password"))
+            self.save("administrator", a)
+        elif route == "PUT answers/certificate":
+            answer, files = check_certificate(data, self.host())
+            for name in ("certificate.pem", "key.pem"):
+                if name in files:
+                    write_file(ANSWERS / name, files[name])
+                else:
+                    remove(ANSWERS / name)
+            self.save("certificate", answer)
+            return 200, answer
+        elif route == "POST manifest":
+            m = check_manifest(body, self.facts())
+            write_file(ANSWERS / "manifest.yaml", body)
+            self.save("support", m)
+            return 200, m
+        elif route == "PUT answers/support":
+            if not isinstance(data, dict) or data.get("skipped") is not True:
+                raise Refused({"_": "invalid"})
+            remove(ANSWERS / "manifest.yaml")
+            self.save("support", None)
+        elif route == "PUT answers/backups":
+            answer, password = check_backups(data)
+            if password:
+                write_file(ANSWERS / "share-password", password)
+            else:
+                remove(ANSWERS / "share-password")
+            self.save("backups", answer)
+        return 204, None
+
+    def start(self) -> dict:
+        """Provisioning starts, or starts again after a failure; while it runs or once done, nothing changes."""
+        with self.lock:
+            p = progress()
+            if p and p["state"] in ("running", "done"):
+                return p
+            complete(self.answers(), ANSWERS)  # raises Refused when something is missing
+            write_file(ANSWERS / "start", "requested by the web setup\n", 0o644)
+            return blank_progress()
+
+
+def complete(a: dict, folder: Path) -> None:
+    missing = [k for k in ("network", "administrator", "certificate", "backups") if k not in a]
+    if "support" not in a:
+        missing.append("support")
+    if "administrator" in a and read_file(folder / "administrator-password") is None:
+        missing.append("administrator")
+    if missing:
+        raise Refused({"_": "not_answered"})
+
+
+class Handler(BaseHTTPRequestHandler):
+    app: App
+    server_version = "suveryn-setup"
+    sys_version = ""
+
+    def log_message(self, fmt, *args):  # method, path and status only: never a body, never a query
+        sys.stderr.write(f"suveryn-setup: {self.command} {self.path.split('?')[0]} {args[1] if len(args) > 1 else ''}\n")
+
+    def send(self, status: int, payload) -> None:
+        body = b"" if payload is None and status == 204 else json.dumps(payload, ensure_ascii=False).encode()
+        self.send_response(status)
+        if status != 204:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if status != 204:
+            self.wfile.write(body)
+
+    def dispatch(self, method: str) -> None:
+        path = self.path.split("?")[0]
+        if not path.startswith("/setup/v1/"):
+            return self.send(404, {"error": "not_found"})
+        # Another site in the office's browsers can't drive setup: a request that says where it comes
+        # from must come from this appliance's own page.
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != f"https://{self.headers.get('Host', '')}":
+            return self.send(403, {"error": "cross_origin"})
+        if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+            return self.send(403, {"error": "cross_origin"})
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY or length < 0:
+            return self.send(413, {"error": "too_large"})
+        body = self.rfile.read(length) if length else b""
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        try:
+            status, payload = self.app.handle(method, path[len("/setup/v1/"):], body, ctype)
+        except Refused as e:
+            status, payload = 422, ({"error": e.codes["_"]} if list(e.codes) == ["_"] else {"errors": e.codes})
+        except Exception as e:  # noqa: BLE001: one failed request never stops setup
+            sys.stderr.write(f"suveryn-setup: {method} {path}: {type(e).__name__}\n")
+            status, payload = 500, {"error": "unexpected"}
+        self.send(status, payload)
+
+    def do_GET(self):
+        self.dispatch("GET")
+
+    def do_PUT(self):
+        self.dispatch("PUT")
+
+    def do_POST(self):
+        self.dispatch("POST")
+
+
+def serve() -> None:
+    if os.geteuid() == 0 and not ENV("SUVERYN_SETUP_TEST"):
+        raise SystemExit("suveryn-setup serve: not as root (suveryn-setup.service runs it as suveryn-setup)")
+    ANSWERS.mkdir(mode=0o700, exist_ok=True)
+    Handler.app = App()
+    httpd = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    print(f"suveryn-setup: answering the web setup on 127.0.0.1:{PORT} (through nginx)", file=sys.stderr, flush=True)
+    httpd.serve_forever()
+
+
+# ---------------------------------------------------------------------------- prepare (root)
+def provision_module():
+    """suveryn-provision's own TLS and nginx steps (always this checkout's, whatever runs provisioning)."""
+    return load("suveryn_provision", REPO / "provision" / "suveryn-provision")
+
+
+def prepare() -> None:
+    if SETUP_COMPLETE.exists():
+        print("suveryn-setup: setup is complete; nothing to prepare")
+        return
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    os.chmod(STATE, 0o755)
+    ANSWERS.mkdir(mode=0o700, exist_ok=True)
+    try:
+        import pwd
+        pw = pwd.getpwnam(USER)
+        os.chown(ANSWERS, pw.pw_uid, pw.pw_gid)
+    except KeyError:
+        if not ENV("SUVERYN_SETUP_TEST"):
+            raise SystemExit(f"suveryn-setup: no user {USER} (suveryn-provision image creates it)")
+    os.chmod(ANSWERS, 0o700)
+    facts = gather_facts()
+    write_file(STATE / "facts.json", json.dumps(facts, indent=1, ensure_ascii=False), 0o644)
+    host = f"{facts['name']}.local"
+    ip = network()["address"].split("/")[0]
+    p = provision_module()
+    # The appliance's own certificate: the local CA's, for <name>.local and the address. Provisioning
+    # keeps it when the office chooses it (tls() keeps a certificate that names the host).
+    p.tls(host, None, None, ips=[ip] if ip else [])
+    shutil.copyfile(ETC / "tls" / "server.crt", SETUP_CERT)
+    os.chmod(SETUP_CERT, 0o644)
+    nginx_setup_site(host)
+    print(f"suveryn-setup: prepared https://{host}/ ({ip or 'no address yet'})", flush=True)
+
+
+SETUP_SITE_MARK = "# sūveryn web setup site"
+
+
+def nginx_setup_site(host: str) -> None:
+    """While setup is open, nginx serves the setup page and passes /setup/v1/ to serve. Before
+    provisioning that is the whole site; provisioning's site includes the same file until setup closes."""
+    snippets = NGINX / "snippets"
+    snippets.mkdir(parents=True, exist_ok=True)
+    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
+        shutil.copyfile(REPO / "reverse-proxy" / name, snippets / name)
+    write_file(NGINX_SETUP, (HERE / "nginx-setup.conf").read_text().replace("@PORT@", str(PORT)), 0o644)
+    site = NGINX / "sites-available" / "suveryn"
+    if not site.exists() or SETUP_SITE_MARK in site.read_text():
+        site.parent.mkdir(parents=True, exist_ok=True)
+        write_file(site, (HERE / "nginx-setup-site.conf.template").read_text().replace("@HOST@", host), 0o644)
+    enabled = NGINX / "sites-enabled" / "suveryn"
+    enabled.parent.mkdir(parents=True, exist_ok=True)
+    if not enabled.exists() and not enabled.is_symlink():
+        enabled.symlink_to(site)
+    remove(NGINX / "sites-enabled" / "default")
+    if not ENV("SUVERYN_SETUP_TEST"):
+        code, out = run("nginx", "-t")
+        if code != 0:
+            raise SystemExit(f"suveryn-setup: nginx refuses the setup site: {out[-300:]}")
+        provision_module().start_nginx()
+
+
+# ---------------------------------------------------------------------------- provision (root)
+class Progress:
+    def __init__(self):
+        self.p = blank_progress()
+
+    def write(self) -> None:
+        write_file(STATE / "progress.json", json.dumps(self.p, indent=1), 0o644)
+
+    def step(self, ident: str, state: str, error: str | None = None) -> None:
+        for s in self.p["steps"]:
+            if s["id"] == ident:
+                s["state"] = state
+                if error:
+                    s["error"] = error
+            elif state == "running" and STEPS.index(s["id"]) < STEPS.index(ident) and s["state"] != "done":
+                s["state"] = "done"
+        self.write()
+
+    def current(self) -> str:
+        return next((s["id"] for s in self.p["steps"] if s["state"] == "running"), "database")
+
+    def fail(self, error: str) -> None:
+        self.step(self.current(), "failed", error)
+        self.p["state"] = "failed"
+        self.write()
+
+
+def read_answers() -> tuple[dict, dict]:
+    """The saved answers, checked again here: they come from the unprivileged service's folder."""
+    facts = read_json(STATE / "facts.json", {}) or {}
+    a = read_json(ANSWERS / "answers.json", {}) or {}
+    complete(a, ANSWERS)
+    host = f"{facts.get('name', '')}.local"
+    password = (read_file(ANSWERS / "administrator-password", 4096) or b"").decode()
+    out = {"network": check_network(a["network"]),
+           "administrator": check_administrator({**a["administrator"], "password": password}, facts.get("name", "")),
+           # A USB disk unplugged since doesn't stop provisioning: the backup service looks for it later.
+           "backups": check_backups(a["backups"], disks=[{"id": a["backups"].get("disk")}])[0],
+           "certificate": {"kind": a["certificate"].get("kind")}, "support": None}
+    files = {}
+    if out["certificate"]["kind"] == "own":
+        cert = read_file(ANSWERS / "certificate.pem", 2 * MAX_PEM) or b""
+        key = read_file(ANSWERS / "key.pem", MAX_PEM) or b""
+        answer, files = check_certificate({"kind": "own", "certificate": cert.decode(), "key": key.decode()}, host)
+        out["certificate"] = answer
+    elif out["certificate"]["kind"] != "self-signed":
+        raise Refused({"certificate": "invalid"})
+    raw = read_file(ANSWERS / "manifest.yaml", manifests.MAX_SIZE)
+    if a.get("support") is not None and raw is not None:
+        out["support"] = check_manifest(raw, facts)
+        files["manifest.yaml"] = raw
+    password_file = read_file(ANSWERS / "share-password", 4096)
+    if password_file:
+        files["share-password"] = password_file
+    return out, files
+
+
+def provision() -> int:
+    if SETUP_COMPLETE.exists():
+        remove(ANSWERS / "start")
+        return 0
+    prog = Progress()
+    prog.write()
+    remove(ANSWERS / "start")  # after progress.json says running: the screen never sees the old state
+    LOGS.mkdir(parents=True, exist_ok=True)
+    log = open(LOGS / "setup-provision.log", "a")
+    log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} provisioning from the web setup\n")
+    try:
+        answers, files = read_answers()
+    except (Refused, KeyError, TypeError, ValueError, AttributeError) as e:
+        log.write(f"the saved answers are incomplete or not valid: {e}\n")
+        prog.fail("answers")
+        return 1
+    facts = read_json(STATE / "facts.json", {}) or {}
+    host = f"{facts['name']}.local"
+    work = Path(ENV("SUVERYN_SETUP_WORK", "/run/suveryn/setup"))
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(work, 0o700)
+    admin_file = work / "administrator.json"
+    write_file(admin_file, json.dumps(answers["administrator"]))
+    net = answers["network"]
+    cmd = [sys.executable, str(PROVISION), "first-boot", "--public-url", f"https://{host}", "--network-mode", net["mode"],
+           *(["--outbound", net["outgoing"]] if net["mode"] == "connected" else []), "--site", "on-premise",
+           "--administrator", str(admin_file)]
+    models = models_media(work)
+    if models:
+        cmd += ["--models-from", str(models)]
+    prog.step("database", "running")
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                stdin=subprocess.DEVNULL)
+        last = ""
+        for line in proc.stdout:
+            log.write(line)
+            log.flush()
+            if line.startswith("== "):
+                title = line[3:].strip()
+                ui = next((v for k, v in PROVISION_STEPS.items() if title.startswith(k)), None)
+                if ui and STEPS.index(ui) > STEPS.index(prog.current()):
+                    prog.step(ui, "running")
+            elif line.strip():
+                last = line.strip()
+        code = proc.wait()
+    finally:
+        remove(admin_file)
+        if models:
+            run("umount", models)
+    if code != 0:
+        log.write(f"suveryn-provision first-boot failed ({code})\n")
+        prog.fail(re.sub(r"[^\w .,:/()'-]", "", last)[:200] or f"exit {code}")
+        return 1
+    prog.step("outgoing", "running")
+    code, out = run(NETWORK_MODE_TOOL, "check", "--json", timeout=120)
+    try:
+        result = json.loads(out)
+    except ValueError:
+        result = {"passed": False}
+    log.write(f"outgoing-traffic check: {result.get('summary', 'no result')}\n")
+    prog.p["outgoing"] = ("not_checked" if net["mode"] == "connected" and net["outgoing"] == "all"
+                          else "not_limited" if not result.get("passed")
+                          else "blocked" if net["mode"] == "air-gapped" else "limited")
+    keep_settings(answers, files)
+    prog.step("outgoing", "done")
+    prog.p["state"] = "done"
+    prog.write()
+    log.write("provisioning done; waiting for the browser to show Complete\n")
+    log.close()
+    deadline = time.time() + SEEN_DONE_WAIT
+    while time.time() < deadline and not (ANSWERS / "seen-done").exists():
+        time.sleep(1)
+    finish(answers, files)
+    return 0
+
+
+def models_media(work: Path) -> Path | None:
+    """Model files on a USB disk labelled SUVERYN-MODELS (air-gapped), mounted read-only."""
+    dev = Path("/dev/disk/by-label/SUVERYN-MODELS")
+    if not dev.exists():
+        return None
+    target = work / "models"
+    target.mkdir(exist_ok=True)
+    return target if run("mount", "-o", "ro,nosuid,nodev,noexec", dev, target)[0] == 0 else None
+
+
+def keep_settings(answers: dict, files: dict) -> None:
+    """What the office chose that later parts read: the support manifest and the backup settings."""
+    if "manifest.yaml" in files:
+        (ETC / "support").mkdir(exist_ok=True)
+        os.chmod(ETC / "support", 0o755)
+        write_file(ETC / "support" / "manifest.yaml", files["manifest.yaml"], 0o644)
+    # The backup service (tracker #33) reads this: where, how long, and the public key backups are
+    # encrypted to. The share's password is kept apart, readable by root only.
+    write_file(ETC / "backups.json", json.dumps(answers["backups"], indent=1), 0o644)
+    if "share-password" in files:
+        write_file(ETC / "backups-share.secret", files["share-password"], 0o600)
+
+
+def finish(answers: dict, files: dict) -> None:
+    """Close setup: the office's certificate in, the setup locations out, setup-complete written."""
+    if "certificate.pem" in files:
+        write_file(ETC / "tls" / "server.key", files["key.pem"], 0o600)
+        write_file(ETC / "tls" / "server.crt", files["certificate.pem"], 0o644)
+        trust_office_ca(files["certificate.pem"])
+    remove(NGINX_SETUP)
+    if not ENV("SUVERYN_SETUP_TEST"):
+        provision_module().start_nginx()
+    summary = {"completed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "network": answers["network"],
+               "administrator": {k: answers["administrator"][k] for k in ("name", "email")},
+               "certificate": answers["certificate"], "support": answers["support"], "backups": answers["backups"]}
+    write_file(ETC / "setup-answers.json", json.dumps(summary, indent=1, ensure_ascii=False), 0o644)
+    write_file(SETUP_COMPLETE, summary["completed"] + "\n", 0o644)
+    remove(SETUP_CERT)
+    shutil.rmtree(ANSWERS, ignore_errors=True)  # the password and key files with it
+    if Path("/run/systemd/system").is_dir() and not ENV("SUVERYN_SETUP_TEST"):
+        run("systemctl", "disable", "--now", "suveryn-setup.service", "suveryn-setup-provision.path")
+
+
+def trust_office_ca(pem: bytes) -> None:
+    """The gateway reaches Keycloak at the public https name, so the appliance itself must trust the
+    office's certificate: the self-signed (root) certificates the office gave with it join the
+    appliance's trust store, as the local CA's does (suveryn-provision tls())."""
+    roots = []
+    for block in pem_blocks(pem.decode(errors="replace"), "CERTIFICATE"):
+        _, subject = openssl("x509", "-in", "@c", "-noout", "-subject", "-nameopt", "RFC2253", files={"c": block.encode()})
+        _, issuer = openssl("x509", "-in", "@c", "-noout", "-issuer", "-nameopt", "RFC2253", files={"c": block.encode()})
+        if subject.split("=", 1)[-1].strip() == issuer.split("=", 1)[-1].strip():
+            roots.append(block)
+    if not roots or ENV("SUVERYN_SETUP_TEST"):
+        return
+    for i, block in enumerate(roots):
+        write_file(Path(f"/usr/local/share/ca-certificates/suveryn-office-ca-{i}.crt"), block + "\n", 0o644)
+    run("update-ca-certificates")
+    if Path("/run/systemd/system").is_dir():
+        run("systemctl", "try-restart", "suveryn-gateway.service")
+
+
+def watch() -> None:
+    """Without systemd: provision whenever serve asks for it."""
+    while not SETUP_COMPLETE.exists():
+        if (ANSWERS / "start").exists():
+            provision()
+        time.sleep(1)
+
+
+def main(argv: list[str]) -> int:
+    commands = {"prepare": prepare, "serve": serve, "provision": provision, "watch": watch}
+    if len(argv) != 1 or argv[0] not in commands:
+        print("usage: suveryn-setup prepare | serve | provision | watch", file=sys.stderr)
+        return 2
+    if argv[0] in ("prepare", "provision", "watch") and os.geteuid() != 0 and not ENV("SUVERYN_SETUP_TEST"):
+        print(f"suveryn-setup {argv[0]}: run as root", file=sys.stderr)
+        return 2
+    return commands[argv[0]]() or 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

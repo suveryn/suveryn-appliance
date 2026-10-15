@@ -42,6 +42,12 @@ each part only when it matches what it should be built from.
 
 ## First boot
 
+**The web setup** (suveryn-tracker#37): when no `first-boot.env` is on the EFI partition, the first
+start opens `https://<name>.local/` and someone on the office's network answers the setup screens;
+[`setup`](../setup/README.md) then runs `suveryn-provision first-boot` with those answers. Nothing the
+office sets touches the EFI partition. `first-boot.env` below is the earlier way, kept until the web
+setup has been tested end to end on a machine (#37 part 6).
+
 The installer flashes the image, then writes the office's settings to the **EFI partition**, which
 is FAT32 and so writable from any computer, at `suveryn/first-boot.env`:
 
@@ -121,5 +127,5 @@ dev pod.
 - **Remote support access** (SSH or otherwise): none in the image.
 - **Updates for offline installations:** a signed bundle on media, tied to the signing decisions
   (development context §8, §11).
-- **Console setup:** today the office's settings come from `first-boot.env`; a guided set-up on the
-  machine's screen would be friendlier.
+- **Console setup:** the web setup ([`setup`](../setup/README.md)) replaces `first-boot.env` once it
+  has been tested end to end (#37 part 6).

@@ -30,7 +30,9 @@ nothing):
    or copied from ``--models-from`` (physical media, for an air-gapped installation).
 8. **Keycloak** at the pinned version (sha256 checked), the sūveryn theme (``keycloak/theme``) and
    the production realm (``keycloak/realm/build_realm.py``: sslRequired all, 180-day events, exact
-   redirect URLs, a new client secret), imported once; the realm file is deleted after the import.
+   redirect URLs, a new client secret, 15-character passwords; with ``first-boot --administrator`` the
+   office's administrator from the web setup, as a hash), imported once; the realm file is deleted
+   after the import.
 9. **The reader sandbox** (``reader-sandbox/``): its user and folders, the wrapper, and the gateway
    set to use it (``SUVERYN_EXTRACT_WRAPPER``); sudo lets the gateway start it as the reader.
 10. **The chat UI**, built from suveryn-core with a pinned Node, into ``/opt/suveryn/ui``.
@@ -511,7 +513,7 @@ def keycloak_software() -> None:
     note("Keycloak built with the sūveryn theme")
 
 
-def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
+def keycloak(public_url: str, keycloak_pw: str, administrator: Path | None = None) -> dict[str, str]:
     """The office's Keycloak: its host name, secrets and the production realm (first boot)."""
     step("Keycloak: host name, secrets and the production realm")
     host = public_url.split("://", 1)[1].rstrip("/")
@@ -529,7 +531,9 @@ def keycloak(public_url: str, keycloak_pw: str) -> dict[str, str]:
     if not oidc.exists():  # the realm is built and imported once: a rebuild would change the client secret
         out = VAR / "realm-build"  # not under /root (0700): the keycloak user imports from here
         # From the local suveryn-core checkout (the realm-lock commit is in its history): no network needed.
+        # With the office's administrator from the web setup: in the realm file as a hash only.
         run(sys.executable, REPO / "keycloak" / "realm" / "build_realm.py", "--public-url", public_url, "--out", out,
+            *(["--administrator", administrator] if administrator else []),
             capture=True, env={"SUVERYN_CORE_REPO": str(CORE)})
         realm_file = out / "suveryn-realm.json"
         os.chown(realm_file, pwd.getpwnam("keycloak").pw_uid, 0)
@@ -594,7 +598,9 @@ def chat_ui() -> None:
     note(f"built with Node {v['version']} into {UI}")
 
 
-def tls(host: str, cert: Path | None, key: Path | None) -> None:
+def tls(host: str, cert: Path | None, key: Path | None, ips: list[str] | None = None) -> None:
+    """The office's certificate, or the local CA's for `host` (and `ips`, as the web setup asks: the
+    appliance is also reached by its address). A local certificate that already names the host is kept."""
     step("TLS certificate")
     TLS.mkdir(mode=0o755, exist_ok=True)
     server_crt, server_key = TLS / "server.crt", TLS / "server.key"
@@ -624,7 +630,8 @@ def tls(host: str, cert: Path | None, key: Path | None) -> None:
     run("openssl", "req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-subj", f"/CN={host}",
         "-keyout", server_key, "-out", csr, capture=True)
     ext = TLS / "server.ext"
-    ext.write_text(f"subjectAltName=DNS:{host}\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+    san = ",".join([f"DNS:{host}", *(f"IP:{ip}" for ip in ips or [])])
+    ext.write_text(f"subjectAltName={san}\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature\n"
                    "extendedKeyUsage=serverAuth\n")
     run("openssl", "x509", "-req", "-in", csr, "-CA", ca_crt, "-CAkey", ca_key, "-CAcreateserial", "-days", "397",
         "-sha256", "-extfile", ext, "-out", server_crt, capture=True)
@@ -1138,8 +1145,9 @@ def verify_sign_in(base: str, ctx: ssl.SSLContext, admin_password: str) -> tuple
 FIRST_BOOT_DONE = VAR / ".first-boot-done"
 
 
-def image() -> None:
-    """Everything that is the same for every office: built into the appliance image (needs network)."""
+def image(with_web_setup: bool = True) -> None:
+    """Everything that is the same for every office: built into the appliance image (needs network).
+    `install` (a test or staging machine, answered on the command line) leaves the web setup out."""
     users()
     packages()
     suveryn_core()
@@ -1149,6 +1157,23 @@ def image() -> None:
     chat_ui()
     for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
         shutil.copyfile(REPO / "reverse-proxy" / name, Path("/etc/nginx/snippets") / name)
+    if with_web_setup:
+        web_setup()
+
+
+SETUP_UNITS = ["suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"]
+
+
+def web_setup() -> None:
+    """The web setup (setup/): its user and units, so that the first start opens it (tracker #37)."""
+    step("Web setup")
+    ensure_user("suveryn-setup")
+    for unit in SETUP_UNITS:
+        shutil.copy2(REPO / "setup" / "systemd" / unit, f"/etc/systemd/system/{unit}")
+    if systemd_running():
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "suveryn-setup.service", "suveryn-setup-provision.path")
+    note("suveryn-setup (user and units): the first start opens https://<name>.local/ for the office's answers")
 
 
 def first_boot(a: argparse.Namespace, staging: bool) -> None:
@@ -1166,8 +1191,9 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
         firewall()
         updates(mode)
     db_url, keycloak_pw = postgres()
+    # Sign-in before the models, the order the web setup's provisioning screen shows.
+    oidc = keycloak(a.public_url, keycloak_pw, getattr(a, "administrator", None))
     llms = llm_models(a.models_from, mode, staging)
-    oidc = keycloak(a.public_url, keycloak_pw)
     reader = READER_SETTINGS
     host = a.public_url.split("://", 1)[1].rstrip("/")
     tls(host, a.tls_cert, a.tls_key)
@@ -1210,6 +1236,8 @@ def main() -> None:
     sub.add_parser("image", help="build-time steps: everything the same for every office (needs network)")
     f = sub.add_parser("first-boot", help="first-boot steps on the office's machine: names, secrets, models, start")
     office_args(f, False)
+    f.add_argument("--administrator", type=Path, metavar="FILE",
+                   help="JSON {name, email, password}: the office's administrator (the web setup passes it)")
     f.add_argument("--config", type=Path,
                    help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
     sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
@@ -1249,7 +1277,7 @@ def main() -> None:
                 if not getattr(a, attr) and c.get(key):
                     setattr(a, attr, Path(c[key]))
         first_boot(a, staging=False)
-    image()
+    image(with_web_setup=False)
     first_boot(a, staging=True)
 
 

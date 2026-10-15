@@ -12,6 +12,8 @@ OS image build, hardening and first-boot provisioning for sūveryn appliances, i
 | [`image`](image/README.md) | The bare-metal appliance image (Packer/QEMU as build tools): what is built in, what happens at first boot per network mode, hardening |
 | [`image/mkosi`](image/mkosi/README.md) | The read-only, verified system of the approved design (mkosi): slot A with dm-verity, the boot file, the disk's partition definitions, `/var` on the data partition; tested in a virtual machine |
 | [`bundles`](bundles/README.md) | Signed bundles (models now, system updates later): `suveryn-bundle-release` makes and signs them at Sūveryn Labs (AWS KMS); the appliance checks them with `/usr/lib/suveryn/bundle` |
+| [`setup`](setup/README.md) | The web setup on the appliance's side: answers the setup screens (suveryn-core `setup.html`) on the first start, checks and keeps the office's answers, runs provisioning with them and closes setup |
+| [`support`](support/README.md) | Support manifests: Sūveryn Labs' signed statement of an appliance's support agreement, checked on the appliance |
 | [`provision`](provision/README.md) | `suveryn-provision`: installs and wires up PostgreSQL/pgvector, Keycloak (theme and production realm), llama-server and its models, suveryn-core and the reader sandbox on Ubuntu 24.04, then verifies them end to end |
 
 Related: [suveryn-docs](https://github.com/suveryn/suveryn-docs) (installation and administration), [suveryn-brand](https://github.com/suveryn/suveryn-brand) (the mark, fonts and tokens; the mark is not covered by this repository's licence and is fetched at build time).
