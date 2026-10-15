@@ -27,6 +27,11 @@ server {
     ssl_session_tickets off;
 
     server_tokens off;
+    # The files' types from the site itself, not only from nginx.conf: without them every file is
+    # text/plain, and with nosniff the browser runs no script and applies no style (a nginx.conf
+    # without mime.types, as RunPod's, served a blank setup page).
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
     access_log off;                       # setup's requests carry passwords and keys in their bodies only, but log nothing anyway
     proxy_max_temp_file_size 0;
     proxy_http_version 1.1;

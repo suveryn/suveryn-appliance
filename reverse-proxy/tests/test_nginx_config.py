@@ -87,3 +87,12 @@ def test_directives_work_on_ubuntu_24_04_nginx_1_24():
     """Ubuntu 24.04 ships nginx 1.24: `http2 on;` (1.25.1+) fails `nginx -t` there (found on the test pod)."""
     assert not re.search(r"^\s*http2\s+on;", SITE, re.M)
     assert "listen 443 ssl http2;" in SITE
+
+
+def test_the_sites_bring_their_own_file_types():
+    """A nginx.conf without mime.types (RunPod's) served every file as text/plain: with nosniff the
+    browser ran no script and the setup page stayed blank. Both sites include the types themselves."""
+    setup_site = (HERE.parent / "setup" / "nginx-setup-site.conf.template").read_text()
+    for name, site in (("the office's site", SITE), ("the setup site", setup_site)):
+        https = site[site.index("listen 443"):]
+        assert "include /etc/nginx/mime.types;" in https and "default_type application/octet-stream;" in https, name
