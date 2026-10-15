@@ -55,8 +55,12 @@ Modelled on suveryn-website's (`_headers`), without anything it needs for analyt
 | `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy` | `same-origin` | Everything |
 
 The UI's strict CSP is possible because its build has no inline scripts or styles, no `data:`
-URLs and no `eval`: fonts, icons and the Word/Excel libraries are its own files. `server_tokens off`
-hides nginx's version.
+URLs and no `eval`: fonts, icons and the Word/Excel libraries are its own files. The browser code is
+made to fit the policy, never the other way round: no `'unsafe-inline'`, nonce or hash for a library.
+The rules for that code, how a library is checked before it is added, and the two places React Aria
+(the UI's component library) would write a `<style>` and how each is handled:
+[suveryn-core `docs/content-security-policy.md`](https://github.com/suveryn/suveryn-core/blob/main/docs/content-security-policy.md).
+The first-boot web setup (#37) must get this same policy. `server_tokens off` hides nginx's version.
 
 ## Confidential data
 
