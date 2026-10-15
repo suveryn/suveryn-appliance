@@ -41,6 +41,11 @@ server {
     ssl_session_tickets off;
 
     server_tokens off;
+    # The files' types from the site itself, not only from nginx.conf: without them every file is
+    # text/plain, and with nosniff the browser runs no script and applies no style (a nginx.conf
+    # without mime.types, as RunPod's, served a blank setup page).
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
     access_log /var/log/nginx/suveryn.access.log suveryn;
     client_max_body_size 101m;           # the gateway's 100 MB upload limit plus multipart overhead
     proxy_max_temp_file_size 0;          # never write a proxied response (passages, answers) to disk

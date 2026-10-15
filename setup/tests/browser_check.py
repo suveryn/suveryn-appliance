@@ -83,6 +83,23 @@ def checkout() -> Path:
     return copy
 
 
+def served_as_scripts() -> None:
+    """The setup page's scripts and styles come with their types: as text/plain (nosniff) the
+    browser runs none of them and the page stays blank. Said at once, not after a long wait."""
+    page = direct().open(urllib.request.Request("https://127.0.0.1/", headers={"Host": HOST}), timeout=30).read().decode()
+    for pattern, want in ((r'<script[^>]+src="\.?/?(assets/[^"]+)"', "javascript"),
+                          (r'<link rel="stylesheet"[^>]+href="\.?/?(assets/[^"]+)"', "text/css")):
+        m = re.search(pattern, page)
+        if not m:
+            continue
+        r = direct().open(urllib.request.Request(f"https://127.0.0.1/{m.group(1)}", headers={"Host": HOST}), timeout=30)
+        ctype = r.headers.get("Content-Type", "")
+        if want not in ctype:
+            sys.exit(f"browser_check.py: nginx serves {m.group(1)} as {ctype!r}, not {want}: the browser won't use it "
+                     "(nosniff). Its types don't reach the site: see /etc/nginx/mime.types and the site's include.")
+    print("(the page's scripts and styles come with their types)", flush=True)
+
+
 def sites_enabled() -> None:
     """A test machine whose own nginx.conf doesn't load sites-enabled/ (RunPod's): add it, as the
     provisioning README says. Ubuntu's own nginx.conf, and the appliance's, have it already."""
@@ -151,6 +168,7 @@ def machine() -> dict:
                            stdout=log, stderr=subprocess.STDOUT, timeout=600)
     if r.returncode != 0:
         sys.exit(f"prepare failed: {(OUT / 'prepare.log').read_text()[-800:]}")
+    served_as_scripts()
     serve = subprocess.Popen(["runuser", "-u", "suveryn-setup", "--", sys.executable, "-I", SETUP / "suveryn-setup", "serve"],
                              env=env, stdout=open(OUT / "serve.log", "w"), stderr=subprocess.STDOUT)
     watch = subprocess.Popen([sys.executable, "-u", SETUP / "suveryn-setup", "watch"], env=env,
@@ -193,7 +211,7 @@ def flow(browser, m):
     pg.on("console", lambda msg: console.append(f"{msg.type}: {msg.text}"))
     m["console"] = console
     pg.goto(f"https://{HOST}/")
-    pg.locator("h1").first.wait_for(timeout=m.get("slow", 1) * 30000)
+    pg.locator("h1").first.wait_for(timeout=min(m.get("slow", 1), 4) * 30000)  # the page itself: never long
     if m.get("language"):  # the language chosen at installation; the rest of the flow is in English
         lang = pg.evaluate("document.documentElement.lang")
         check("the screens open in the language chosen at installation", lang.startswith(m["language"]), lang)
