@@ -37,6 +37,9 @@ def test_the_ui_and_the_api_get_the_strict_csp_and_keycloak_keeps_its_own():
             assert uses_csp, pattern
     value = re.search(r'Content-Security-Policy "([^"]+)"', CSP).group(1)
     assert "'unsafe-inline'" not in value and "'unsafe-eval'" not in value and "http" not in value and "data:" not in value
+    # Nor a nonce or a hash to let a library's inline <style> through: the code is made to fit instead
+    # (suveryn-core docs/content-security-policy.md).
+    assert "'nonce-" not in value and not re.search(r"'sha(256|384|512)-", value)
 
 
 def test_the_csp_verify_expects_is_the_one_nginx_sends():
