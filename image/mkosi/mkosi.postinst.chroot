@@ -11,6 +11,7 @@ link /var/lib/suveryn/host/hosts       /etc/hosts
 link /var/lib/suveryn/host/localtime   /etc/localtime
 link /var/lib/suveryn/host/keyboard    /etc/default/keyboard
 link /var/lib/suveryn/network          /etc/systemd/network
+link /var/lib/suveryn/nginx/suveryn    /etc/nginx/sites-enabled/suveryn
 link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
 # The machine-id is mounted over this empty file from /var in the initrd (suveryn-boot-mode).
@@ -38,6 +39,24 @@ systemctl enable suveryn-identity.service
 # The console installer, on the stick only (#37); the console's font and keyboard layout at every start.
 systemctl enable suveryn-installer.service suveryn-console.service
 systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || true  # enabled by their packages already
+
+# The web setup (#37) and the office's site, from /opt/suveryn/appliance (mkosi.conf.d/20-web-setup.conf).
+# Its user is made here: /etc/passwd can't be written on the appliance.
+app=/opt/suveryn/appliance
+find "$app" -name __pycache__ -prune -exec rm -rf {} +
+printf 'u suveryn-setup - "sūveryn web setup" /nonexistent /usr/sbin/nologin\n' > /usr/lib/sysusers.d/suveryn-setup.conf
+systemd-sysusers /usr/lib/sysusers.d/suveryn-setup.conf
+cp "$app"/setup/systemd/suveryn-setup.service "$app"/setup/systemd/suveryn-setup-provision.service \
+   "$app"/setup/systemd/suveryn-setup-provision.path /usr/lib/systemd/system/
+systemctl enable suveryn-setup.service suveryn-setup-provision.path
+# nginx: the header snippets built in, no default site, and the office's site on the data partition
+# (the link above). It starts once that site exists: the web setup writes it first.
+install -m 0644 "$app"/reverse-proxy/suveryn-headers.conf "$app"/reverse-proxy/suveryn-csp.conf /etc/nginx/snippets/
+rm -f /etc/nginx/sites-enabled/default
+mkdir -p /usr/lib/systemd/system/nginx.service.d
+printf '[Unit]\nConditionPathExists=/etc/nginx/sites-enabled/suveryn\n' > /usr/lib/systemd/system/nginx.service.d/suveryn.conf
+systemctl enable nginx.service
+printf 'd /var/lib/suveryn/nginx 0755 root root -\nd /var/log/nginx 0755 www-data adm -\n' > /usr/lib/tmpfiles.d/suveryn-nginx.conf
 
 # 4. No pcrlock: the data partition is bound to PCR 7 (#34); pcrlock policies (and the TPM NV index
 #    they write) are decision D2, postponed. systemd 255 would generate one at every boot.

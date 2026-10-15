@@ -15,7 +15,11 @@ and keeps the office's answers, runs provisioning with them, and closes setup on
 | [`tests/`](tests) | Unit tests, and a browser check from Welcome to Complete |
 
 `suveryn-provision image` installs the units and the `suveryn-setup` user; the units run this folder
-from the image's checkout at `/opt/suveryn/appliance`.
+from the image's checkout at `/opt/suveryn/appliance`. The read-only system (`image/mkosi`) carries
+the same: this repository's parts at `/opt/suveryn/appliance`, the units enabled, the user made at
+build time (`/etc/passwd` can't be written there), nginx with the header snippets built in and the
+office's site on the data partition (`/etc/nginx/sites-enabled/suveryn` links to
+`/var/lib/suveryn/nginx/suveryn`; nginx starts once that exists). Not on the installer stick.
 
 ## Three parts, so nothing on the network runs as root
 
@@ -82,7 +86,12 @@ most 30 minutes) and closes setup:
 2. `/etc/suveryn/nginx-setup.conf` is deleted and nginx reloaded: `/` is the chat, `/setup/` is 404;
 3. `/etc/suveryn/setup-answers.json` keeps what was chosen, without secrets, and
    `/etc/suveryn/setup-complete` is written (the console shows setup as complete);
-4. the answers folder is deleted, and the setup units are disabled.
+4. the answers folder is deleted, and the setup units are disabled (on the read-only system, where
+   `/etc` can't be written, stopped: their condition on `setup-complete` keeps them from starting again).
+
+On the read-only system the office's own certificate's root, and the local CA, can't join the
+system's trust store in `/usr`; the trust bundle on the data partition takes its place with the
+services (#39). Provisioning says so in its log.
 
 The certificate the browser accepted during setup stays the same until Complete is on screen: the
 self-signed one is the one provisioning keeps, and the office's own goes in only at step 1.
@@ -90,19 +99,34 @@ self-signed one is the one provisioning keeps, and the office's own goes in only
 ## Testing
 
 ```bash
-python3 -m pytest setup/tests               # any machine with openssl; SUVERYN_CORE=<suveryn-core> for the contract checks
-sudo python3 setup/tests/browser_check.py   # a disposable machine only: see its header
+python3 -m pytest setup/tests                       # any machine with openssl; SUVERYN_CORE=<suveryn-core> for the contract checks
+sudo python3 setup/tests/browser_check.py           # a disposable machine only: see its header
+sudo image/mkosi/test/run-vm-tests                   # step 4b: the web setup on the installed test system (#37 part 6a)
+sudo python3 setup/tests/browser_check.py --real    # a FRESH test GPU machine: the real provisioning (#37 part 6b)
 ```
 
-The browser check serves suveryn-core's production setup page with nginx and the appliance's real
+**The browser check** serves suveryn-core's production setup page with nginx and the appliance's real
 headers, runs this service as `suveryn-setup`, and walks every screen in Chromium: a refused key, a
 manifest for another appliance, a share outside the office's network, a provisioning failure and Try
-again, Complete, and the switch to the real site afterwards (18 checks, no CSP violations). It
-stands in for suveryn-provision (`stand_in_provision.py`: the same steps, with the real TLS and
-nginx site), the outgoing-traffic check, the identity and the portal's key.
+again, Complete, and the switch to the real site afterwards (18 checks, no CSP violations). It stands
+in for suveryn-provision (`stand_in_provision.py`: the same steps, with the real TLS and nginx site),
+the outgoing-traffic check, the identity and the portal's key.
 
-**Not yet tested:** the units under systemd and a real `suveryn-provision first-boot` from the web
-setup; that is the end-to-end test in a virtual machine (#37 part 6).
+**On the read-only system (6a):** `image/mkosi/test/run-vm-tests` installs the test system from its
+stick in a virtual machine with a TPM, and its step 4b boots the installed disk with port 443
+forwarded: the same screens, driven in Chromium on the host, against this service under systemd with
+its locked-down units, the appliance's real identity, nginx with the site on the data partition, and
+the read-only `/etc`. The self-test inside checks the service runs unprivileged, then that setup
+closed for good (the units stopped and not started again at the next boots, `/` the chat, `/setup/`
+404, the answers and secrets gone). The test system has no sūveryn services or GPU, so provisioning
+is the stand-in there; the test image carries the chat UI's build (`image/mkosi/test/make-test-ui`)
+and a test portal key (`make-test-keys`).
+
+**The real provisioning (6b), on the Pod:** `browser_check.py --real` on a fresh GPU test machine
+after `suveryn-provision image`: the same screens, then the real `suveryn-provision first-boot` as a
+test machine (`--site test --test-machine`: no firewall of its own, as `install`), the office's
+administrator signing in to the chat through Keycloak, and `suveryn-provision verify`. It refuses a
+machine provisioned before: never the one with real documents.
 
 ## Open
 
