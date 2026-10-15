@@ -299,8 +299,11 @@ def test_a_wrong_kms_key_type_is_refused(world, tmp_path):
 
 def test_title_description_and_default_for_the_installer(world):
     release("make", world["bundle"], "--kind", "model", "--name", "test-model", "--version", "2026.10.1",
-            "--title", "Test Model 7B", "--description", "Small and fast. For tests.", "--default")
+            "--title", "Test Model 7B", "--description", "Small and fast. For tests.", "--default",
+            "--description-nl", "Klein en snel. Voor de tests.", "--description-fr", "Petit et rapide. Pour les tests.")
     release("sign", world["bundle"], "--key-file", world["tmp"] / "current.key")
     code, out = tool(world, "verify", world["bundle"])
     assert code == 0 and (out["title"], out["description"], out["default"]) == \
         ("Test Model 7B", "Small and fast. For tests.", True)
+    assert (out["description_nl"], out["description_fr"]) == ("Klein en snel. Voor de tests.",
+                                                              "Petit et rapide. Pour les tests.")

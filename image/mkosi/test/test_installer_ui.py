@@ -40,7 +40,8 @@ MACHINE = {
     "min_disk": 140_000_000_000,
     "models": [{"folder": "qwen", "valid": True, "name": "qwen3.8-27b", "title": "Qwen3.8-27B", "version": "1",
                 "size": 17_000_000_000, "key": "0f61e8d1aa3bfa1a8e4c", "default": True,
-                "description": "Fewest legal errors on Belgian deeds in our benchmark."},
+                "description": "Fewest legal errors on Belgian deeds in our benchmark.",
+                "description_fr": "Le moins d'erreurs juridiques sur des actes belges dans notre banc d'essai."},
                {"folder": "mistral", "valid": True, "name": "mistral-small", "title": "Mistral Small 3.2 24B",
                 "version": "1", "size": 15_000_000_000, "key": "0f61e8d1aa3bfa1a8e4c", "default": False,
                 "description": "20 to 40% faster. People choose it per conversation."},
@@ -132,21 +133,32 @@ def console(tmp_path):
         c.close()
 
 
+def step(c, n):
+    """Wait for step n, in whichever language the screens are in."""
+    end = time.time() + 10
+    while time.time() < end:
+        c.pump(0.1)
+        if any(f"{word} {n} " in c.text for word in ("Step", "Stap", "Étape")):
+            return
+    raise AssertionError(f"step {n} didn't appear:\n{c.text}")
+
+
 def to_disks(c):
     c.press(TAB, TAB, TAB, TAB, ENTER)  # language, keyboard, test field, time zone, Next
-    c.wait("Hardware and target disk")
+    step(c, 2)
 
 
 def to_models(c):
     to_disks(c)
     c.press(ENTER)
-    c.wait("Found on this installation medium")
+    step(c, 3)
+    c.wait("suveryn-bundles")
 
 
 def to_network(c):
     to_models(c)
     c.press(ENTER)
-    c.wait("Interface")
+    step(c, 4)
 
 
 def to_summary(c, name="notary-brussels-01"):
@@ -167,6 +179,7 @@ def test_c1_language_keyboard_time_zone(console):
     assert "Belgian (AZERTY)" in s and "Europe/Brussels" in s and "Check a few letters" in s
     c.press(DOWN)  # Nederlands
     assert "(*) Nederlands" in c.text
+    c.press(UP)  # back to English
     c.press(TAB, ENTER)  # open the keyboard list
     c.type("swiss")
     assert "Swiss French" in c.text and "Belgian" not in c.text.split("Type to search")[1]
@@ -368,3 +381,96 @@ def test_it_fits_an_80_by_25_console(console):
     c = console(cols=80, rows=25)
     to_models(c)
     assert "Found on this installation medium" in c.text and "< Next >" in c.text
+
+
+# ---------------------------------------------------------------------------- Dutch and French
+TEXT = json.loads((LIB / "installer-text.json").read_text())
+
+
+def test_every_text_is_in_all_three_languages():
+    import string
+    for key, entry in TEXT.items():
+        if key.startswith("_"):
+            continue
+        assert set(entry) == {"en", "nl", "fr"}, key
+        fields = {lang: {f for _, f, _, _ in string.Formatter().parse(v) if f} for lang, v in entry.items()}
+        assert fields["nl"] == fields["en"] == fields["fr"], key  # the same {values} filled in
+
+
+def test_the_house_style():
+    """No em dashes; formal Dutch (u, uw) and French (vous); sūveryn lower case mid-sentence."""
+    import re
+    for key, entry in TEXT.items():
+        if key.startswith("_"):
+            continue
+        for lang, v in entry.items():
+            assert "—" not in v, (key, lang)
+            assert not re.search(r"(?<!^)(?<![.:]\s)Sūveryn(?! Labs)(?!-installatie)(?! installer)", v) or \
+                key in ("c2_stick", "installer"), (key, lang, v)
+        assert not re.search(r"\b(je|jij|jouw|jullie)\b", entry["nl"], re.I), key
+        assert not re.search(r"\b(tu|ton|ta|tes|toi)\b", entry["fr"], re.I), key
+    assert TEXT["c3_signed"]["nl"].startswith("Ondertekend door Sūveryn Labs")
+
+
+def test_the_screens_switch_language_at_once(console):
+    c = console()
+    c.press(DOWN)  # Nederlands
+    s = c.text
+    assert "Taal, toetsenbord en tijdzone" in s and "Stap 1 van 6" in s and "Belgisch (AZERTY)" in s
+    assert "Hiermee wordt deze machine een sūveryn-appliance" in s and "< Volgende >" in s and "Kiezen" in s
+    c.press(DOWN)  # Français
+    s = c.text
+    assert "Langue, clavier et fuseau horaire" in s and "Étape 1 sur 6" in s and "Belge (AZERTY)" in s
+    assert "Cette machine devient ainsi une appliance sūveryn" in s and "< Suivant >" in s
+
+
+def test_installing_in_french(console):
+    c = console()
+    c.press(DOWN, DOWN)  # Français
+    to_disks(c)
+    s = c.text
+    assert "Matériel et disque cible" in s and "Carte graphique" in s and "16 cœurs" in s
+    assert "32 Go. Recommandé : 64 Go." in s and "2,0 To" in s and "trop petit" in s
+    c.press(ENTER)
+    c.wait("Trouvés sur ce support d'installation")
+    s = c.text
+    assert "Signé par Sūveryn Labs" in s and "par défaut · 17,0 Go" in s and "Signature non valide." in s
+    assert "Le moins d'erreurs juridiques" in s  # the manifest's French description
+    assert "20 to 40% faster" in s  # no French one: the English
+    c.press(ENTER)
+    c.wait("Réseau")
+    c.press(TAB)
+    c.type("bureau-1")
+    c.wait("Reçue : 192.168.1.50/24")
+    c.press(ENTER)
+    c.wait("Prêt pour l'installation")
+    s = c.text
+    assert "Tapez EFFACER pour confirmer" in s and "Toutes les données de nvme0n1 seront définitivement effacées" in s
+    c.type("ERASE")
+    c.press(ENTER)
+    assert "Tapez EFFACER en majuscules pour confirmer." in c.text
+    c.press(*[BACKSPACE] * 5)
+    c.type("EFFACER")
+    c.press(ENTER)
+    c.wait("Notez la clé de récupération du disque")
+    install = next(e["install"] for e in c.log() if "install" in e)
+    assert install[install.index("--language") + 1] == "fr"
+    assert "Tapez le premier groupe pour confirmer" in c.text
+
+
+def test_dutch_network_errors(console):
+    m = copy.deepcopy(MACHINE)
+    m["dhcp"] = {}
+    c = console(m)
+    c.press(DOWN)  # Nederlands
+    to_network(c)
+    c.press(TAB)
+    c.type("kantoor")
+    c.press(TAB, DOWN, TAB)  # Vast adres, IP-adres
+    c.type("192.168.1.50")
+    c.press(ENTER)
+    assert "Vul het adres in met de netwerkprefix" in c.text
+    c.press(*[BACKSPACE] * 12)
+    c.type("192.168.1.50/24")
+    c.press(ENTER)
+    assert "Een vast adres heeft een DNS-server nodig." in c.text

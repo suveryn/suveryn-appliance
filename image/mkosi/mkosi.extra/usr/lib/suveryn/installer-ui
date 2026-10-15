@@ -31,7 +31,7 @@ from pathlib import Path
 
 LIB = Path(os.environ.get("SUVERYN_LIB", "/usr/lib/suveryn"))
 STEPS = 6
-CHECK, WARN, ARROW = "√", "!", "▸"  # the console font (Uni2-Terminus) has √ but no ✓
+CHECK, WARN, ARROW = "√", "!", "▸"  # the console font (Terminus) has √ but no ✓
 RECOMMENDED_MEMORY_GB = 64
 MIN_GPU_GB = 24
 DHCP_WAIT = 30
@@ -48,8 +48,28 @@ def load(name: str):
 ENGINE = load("install")
 
 
+TEXT = json.loads((LIB / "installer-text.json").read_text())
+LANG = "en"
+
+
+def t(key: str, **values) -> str:
+    """The text for key in the chosen language (installer-text.json), with {values} filled in."""
+    entry = TEXT[key]
+    return entry.get(LANG, entry["en"]).format(**values)
+
+
 def gb(n: int) -> str:
-    return f"{n / 1e9:.1f} GB" if n < 1e12 else f"{n / 1e12:.1f} TB"
+    """A size in the chosen language: 17.0 GB, 17,0 GB, 17,0 Go."""
+    tera = n >= 1e12
+    text = f"{n / (1e12 if tera else 1e9):.1f}"
+    if LANG != "en":
+        text = text.replace(".", ",")
+    unit = {"fr": ("Go", "To")}.get(LANG, ("GB", "TB"))[tera]
+    return f"{text} {unit}"
+
+
+def gb_whole(n: int) -> str:
+    return f"{n} {'Go' if LANG == 'fr' else 'GB'}"
 
 
 # ---------------------------------------------------------------------------- the machine
@@ -311,6 +331,10 @@ class Canvas:
 
 
 # ---------------------------------------------------------------------------- fields
+def text_of(x) -> str:
+    return x() if callable(x) else x
+
+
 class Field:
     focusable = True
     label = ""
@@ -347,9 +371,10 @@ class Radio(Field):
         first = True
         for v, text in self.options:
             mark = "(*)" if v == self.value else "( )"
+            text = text_of(text)
             style = "focus" if focused and v == self.value else ("dim" if v in self.disabled else "text")
             pieces = [(f" {mark} {text}".ljust(c.width - col - 2), style)]
-            c.add(((self.label if first else "").ljust(col), "dim"), *pieces)
+            c.add(((text_of(self.label) if first else "").ljust(col), "dim"), *pieces)
             first = False
 
 
@@ -362,7 +387,8 @@ class Select(Field):
 
     def shown(self):
         f = self.filter.lower()
-        return [(v, t) for v, t in self.options if f in t.lower() or f in str(v).lower()]
+        return [(v, label) for v, label in ((v, text_of(x)) for v, x in self.options)
+                if f in label.lower() or f in str(v).lower()]
 
     def key(self, k):
         if not self.open:
@@ -392,19 +418,21 @@ class Select(Field):
         return None
 
     def text(self):
-        return next((t for v, t in self.options if v == self.value), str(self.value))
+        return next((text_of(label) for v, label in self.options if v == self.value), str(self.value))
 
     def draw(self, c: Canvas, focused: bool, col: int):
         w = min(self.width, c.width - col - 4)
-        c.add((self.label.ljust(col), "dim"), ("[ ", "dim"), ((self.text()[: w - 2]).ljust(w - 2) + "▾", "focus" if focused and not self.open else "field"), (" ]", "dim"))
+        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", "dim"),
+              ((text_of(self.text())[: w - 2]).ljust(w - 2) + "▾", "focus" if focused and not self.open else "field"),
+              (" ]", "dim"))
         if self.open:
             shown = self.shown()
-            c.add((" " * col, "text"), ("  Type to search: ", "dim"), (self.filter + "_", "strong"))
+            c.add((" " * col, "text"), ("  " + t("type_to_search"), "dim"), (self.filter + "_", "strong"))
             top = max(0, self.pos - 4)
-            for i, (v, t) in enumerate(shown[top: top + 8], start=top):
-                c.add((" " * col, "text"), (f"  {t}".ljust(w), "focus" if i == self.pos else "text"))
+            for i, (v, label) in enumerate(shown[top: top + 8], start=top):
+                c.add((" " * col, "text"), (f"  {label}".ljust(w), "focus" if i == self.pos else "text"))
             if not shown:
-                c.add((" " * col, "text"), ("  nothing matches", "dim"))
+                c.add((" " * col, "text"), ("  " + t("nothing_matches"), "dim"))
 
 
 class Text(Field):
@@ -428,8 +456,8 @@ class Text(Field):
         if focused:
             body = (shown + "_").ljust(w)
         else:
-            body = (shown or self.placeholder).ljust(w)
-        c.add((self.label.ljust(col), "dim"), ("[ ", "dim"),
+            body = (shown or text_of(self.placeholder)).ljust(w)
+        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", "dim"),
               (body, "field" if (self.value or focused) else "dim"), (" ]", "dim"))
         hint = self.hint() if callable(self.hint) else self.hint
         if hint:
@@ -475,7 +503,11 @@ class Checklist(Field):
 
 class Button(Field):
     def __init__(self, label, action):
-        self.label, self.action = label, action
+        self._label, self.action = label, action
+
+    @property
+    def label(self) -> str:
+        return text_of(self._label)
 
     def key(self, k):
         if k in (10, 13, curses.KEY_ENTER):
@@ -485,10 +517,24 @@ class Button(Field):
 
 # ---------------------------------------------------------------------------- the screens
 class Screen:
-    title = ""
+    title_key, help_key = "", ""
     step = 1
-    help = ""
-    footer = [("↑↓", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("Esc", "Back"), ("F1", "Help")]
+    keys = [("↑↓", "key_select"), ("Tab", "key_next_field"), ("Enter", "key_continue"), ("Esc", "key_back"),
+            ("F1", "key_help")]
+
+    @property
+    def title(self) -> str:
+        return t(self.title_key)
+
+    @property
+    def help(self) -> str:
+        return t(self.help_key) if self.help_key else ""
+
+    @property
+    def footer(self) -> list:
+        """(key, what it does) for the bottom line; a key's own name translated where it has one."""
+        names = {"Enter": "key_enter", "Esc": "key_esc", "Space": "key_space"}
+        return [(t(names[k]) if k in names else k, t(v) if v in TEXT else v) for k, v in self.keys]
 
     def __init__(self, app):
         self.app = app
@@ -510,27 +556,27 @@ class Screen:
 
 
 class Language(Screen):
-    title, step = "Language, keyboard and time zone", 1
-    help = ("Language: the language of the web setup and of the appliance (English for now on this console).\n"
-            "Keyboard: the layout of the keyboard attached to this machine. Use the test field to check it.\n"
-            "Time zone: where the appliance is.")
-    footer = [("↑↓", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("F1", "Help")]
+    title_key, help_key, step = "c1_title", "c1_help", 1
+    keys = [("↑↓", "key_select"), ("Tab", "key_next_field"), ("Enter", "key_continue"), ("F1", "key_help")]
 
     def __init__(self, app):
         super().__init__(app)
         a = app.answers
-        self.lang = Radio("Language", [("en", "English"), ("nl", "Nederlands"), ("fr", "Français")], a["language"])
-        self.kb = Select("Keyboard", list(ENGINE.KEYBOARDS.items()), a["keyboard"], on_change=app.system.apply_keyboard)
-        self.test = Text("Test it", placeholder="type here to check the layout", hint="Check a few letters: a, z, q, w, m and @.")
-        self.tz = Select("Time zone", [(z, z) for z in app.system.timezones()], a["timezone"])
-        self.next = Button("< Next >", "next")
+        # The screens switch language as soon as one is chosen.
+        self.lang = Radio(lambda: t("c1_language"), [("en", "English"), ("nl", "Nederlands"), ("fr", "Français")],
+                          a["language"], on_change=app.set_language)
+        self.kb = Select(lambda: t("c1_keyboard"), [(k, lambda k=k: t(f"kb_{k}")) for k in ENGINE.KEYBOARDS],
+                         a["keyboard"], on_change=app.system.apply_keyboard)
+        self.test = Text(lambda: t("c1_test"), placeholder=lambda: t("c1_test_placeholder"),
+                         hint=lambda: t("c1_test_hint"))
+        self.tz = Select(lambda: t("c1_timezone"), [(z, z) for z in app.system.timezones()], a["timezone"])
+        self.next = Button(lambda: t("button_next"), "next")
 
     def fields(self):
         return [self.lang, self.kb, self.test, self.tz, self.next]
 
     def body(self, c, focus):
-        c.wrap("This turns this machine into a sūveryn appliance. Afterwards, you finish setup from a browser "
-               "on another computer.")
+        c.wrap(t("c1_intro"))
         c.blank()
         for f in (self.lang, self.kb, self.test, self.tz):
             f.draw(c, focus is f, 16)
@@ -541,9 +587,7 @@ class Language(Screen):
 
 
 class Hardware(Screen):
-    title, step = "Hardware and target disk", 2
-    help = ("The appliance needs an NVIDIA graphics card for the language models, and a TPM 2.0 chip that "
-            "unlocks the encrypted disk at every start. Everything on the disk you choose is erased.")
+    title_key, help_key, step = "c2_title", "c2_help", 2
 
     def __init__(self, app):
         super().__init__(app)
@@ -554,23 +598,23 @@ class Hardware(Screen):
         self.stick = next((d for d in app.system.disks() if d["name"] == boot), None)
         options, disabled = [], []
         for d in self.disks:
-            text = f"{d['name']:<10} {(d['model'] or 'disk')[:24]:<25} {gb(d['size'])}"
-            if d["size"] < self.min:
-                text += "  too small"
+            small = d["size"] < self.min
+            options.append((d["name"], lambda d=d, small=small: f"{d['name']:<10} {(d['model'] or t('c2_disk'))[:24]:<25} "
+                            f"{gb(d['size'])}" + (f"  {t('c2_too_small')}" if small else "")))
+            if small:
                 disabled.append(d["name"])
-            options.append((d["name"], text))
         self.disk = Radio("", options, app.answers.get("disk"), disabled=disabled)
-        self.back, self.next = Button("< Back >", "back"), Button("< Next >", "next")
+        self.back, self.next = Button(lambda: t("button_back"), "back"), Button(lambda: t("button_next"), "next")
 
     def problems(self) -> tuple[list, list]:
         """(blocking, warnings) as lines for the hardware check."""
         hw, block, warn = self.hw, [], []
         if not hw["gpu"] and os.environ.get("SUVERYN_INSTALLER_ALLOW_NO_GPU") != "1":
-            block.append("No NVIDIA graphics card found: the language models need one.")
+            block.append(t("c2_block_gpu"))
         if not hw["tpm"]:
-            block.append("No TPM 2.0 found: switch it on in the firmware settings (often TPM, PTT or fTPM).")
+            block.append(t("c2_block_tpm"))
         if not self.disk.value:
-            block.append(f"No disk to install onto: it needs at least {gb(self.min)}.")
+            block.append(t("c2_block_disk", size=gb(self.min)))
         return block, warn
 
     def fields(self):
@@ -578,32 +622,32 @@ class Hardware(Screen):
 
     def body(self, c, focus):
         hw = self.hw
-        c.add(("Hardware check", "strong"))
+        c.add((t("c2_check"), "strong"))
         def row(ok, label, value, note=None):
-            c.add((f"  {CHECK if ok else WARN} ", "ok" if ok else "accent"), (label.ljust(14), "dim"), (value, "text"))
+            c.add((f"  {CHECK if ok else WARN} ", "ok" if ok else "accent"), (label.ljust(18), "dim"), (value, "text"))
             if note:
-                c.add((" " * 19, "text"), (note, "dim"))
+                c.add((" " * 22, "text"), (note, "dim"))
         g = hw["gpu"]
         if g:
-            mem = f" · {g['memory_gb']} GB" if g.get("memory_gb") else ""
+            mem = f" · {gb_whole(g['memory_gb'])}" if g.get("memory_gb") else ""
             ok = not g.get("memory_gb") or g["memory_gb"] >= MIN_GPU_GB
-            row(ok, "Graphics", g["name"] + mem,
-                "GeForce cards are licensed for on-premise office use only." if "GeForce" in g["name"] else
-                (None if ok else f"Recommended: {MIN_GPU_GB} GB. Larger models won't fit."))
+            row(ok, t("c2_graphics"), g["name"] + mem,
+                t("c2_geforce") if "GeForce" in g["name"] else (None if ok else t("c2_gpu_memory_low", gb=MIN_GPU_GB)))
         else:
-            row(False, "Graphics", "no NVIDIA graphics card found")
-        row(True, "Processor", f"{hw['cores']} cores")
-        row(hw["tpm"], "Security", "TPM 2.0 · unlocks the encrypted disk" if hw["tpm"] else "no TPM 2.0 found")
+            row(False, t("c2_graphics"), t("c2_no_gpu"))
+        row(True, t("c2_processor"), t("c2_cores", n=hw["cores"]))
+        row(hw["tpm"], t("c2_security"), t("c2_tpm_ok") if hw["tpm"] else t("c2_no_tpm"))
         mem_ok = hw["memory_gb"] >= RECOMMENDED_MEMORY_GB
-        row(mem_ok, "Memory", f"{hw['memory_gb']} GB" + ("" if mem_ok else f". Recommended: {RECOMMENDED_MEMORY_GB} GB."),
-            None if mem_ok else "You can continue. Long documents and several users at once will be slower.")
+        row(mem_ok, t("c2_memory"), gb_whole(hw["memory_gb"]) if mem_ok else
+            t("c2_memory_low", gb=hw["memory_gb"], rec=RECOMMENDED_MEMORY_GB), None if mem_ok else t("c2_memory_note"))
         c.blank()
-        c.add(("Install to", "strong"))
+        c.add((t("c2_install_to"), "strong"))
         self.disk.draw(c, focus is self.disk, 0)
         if self.stick:
-            c.add((f"     {self.stick['name']:<10} {'Sūveryn installer':<25} {gb(self.stick['size'])}  installation medium", "dim"))
+            c.add((f"     {self.stick['name']:<10} {t('c2_stick')[:24]:<25} {gb(self.stick['size'])}", "dim"))
+            c.add((" " * 41, "text"), (t("c2_medium"), "dim"))
         c.blank()
-        c.add((f"{WARN} ", "accent"), ("Everything on the selected disk will be erased. The disk is then encrypted.", "text"))
+        c.add((f"{WARN} ", "accent"), (t("c2_erased"), "text"))
 
     def leave(self):
         block, _ = self.problems()
@@ -615,23 +659,21 @@ class Hardware(Screen):
 
 def model_problem(error: str) -> str:
     if "SHA-256" in error or "bytes, the manifest says" in error or "missing" in error:
-        return "Changed or damaged since it was signed."
+        return t("c3_changed")
     if "trust" in error or "signature" in error or "signed" in error:
-        return "Signature not valid."
+        return t("c3_bad_signature")
     return error[:60]
 
 
 class Models(Screen):
-    title, step = "Language models", 3
-    help = ("Models come from the stick's suveryn-bundles partition. Each one is checked against Sūveryn Labs' "
-            "signature and every file's checksum; a model that fails is skipped. Several can be installed; "
-            "people choose one per conversation.")
-    footer = [("↑↓", "Move"), ("Space", "Select"), ("Tab", "Next field"), ("Enter", "Continue"), ("Esc", "Back")]
+    title_key, help_key, step = "c3_title", "c3_help", 3
+    keys = [("↑↓", "key_move"), ("Space", "key_select"), ("Tab", "key_next_field"), ("Enter", "key_continue"),
+            ("Esc", "key_back")]
 
     def __init__(self, app):
         super().__init__(app)
         self.list = None
-        self.back, self.next = Button("< Back >", "back"), Button("< Next >", "next")
+        self.back, self.next = Button(lambda: t("button_back"), "back"), Button(lambda: t("button_next"), "next")
         self.build()
 
     def build(self):
@@ -644,14 +686,15 @@ class Models(Screen):
             if m.get("valid"):
                 checked = (m["folder"] in chosen) if chosen is not None else bool(m.get("default"))
                 items.append({"folder": m["folder"], "label": m.get("title") or m["name"],
-                              "middle": f"{'default' if m.get('default') else 'optional'} · {gb(m['size'])}",
-                              "right": "", "size": m["size"], "note": m.get("description", ""),
+                              "middle": f"{t('c3_default') if m.get('default') else t('c3_optional')} · {gb(m['size'])}",
+                              "right": "", "size": m["size"],
+                              "note": m.get(f"description_{LANG}") or m.get("description", ""),
                               "enabled": True, "checked": checked})
             else:
-                items.append({"folder": m["folder"], "label": m["folder"], "middle": "", "right": f"{WARN} skipped",
-                              "right_style": "accent", "enabled": False, "checked": False,
-                              "note": [(model_problem(m.get("error", "")) + " ", "accent"),
-                                       ("Not installed. Ask your partner for a new copy.", "dim")]})
+                items.append({"folder": m["folder"], "label": m["folder"], "middle": "",
+                              "right": f"{WARN} {t('c3_skipped')}", "right_style": "accent", "enabled": False,
+                              "checked": False, "note": [(model_problem(m.get("error", "")) + " ", "accent"),
+                                                         (t("c3_not_installed"), "dim")]})
         self.list = Checklist(items)
 
     def tick(self):
@@ -668,75 +711,77 @@ class Models(Screen):
 
     def body(self, c, focus):
         if self.list is None:
-            c.add(("Checking the language models on this stick", "strong"))
-            c.wrap("Each model is checked against its signature and every file's checksum. This takes about a "
-                   f"minute per model. {int(time.time() - self.app.models_started)} s", "dim")
+            c.add((t("c3_checking"), "strong"))
+            c.wrap(t("c3_checking_note", s=int(time.time() - self.app.models_started)), "dim")
             return
         valid = [m for m in self.app.models if m.get("valid")]
-        c.add(("Found on this installation medium", "strong"))
-        c.add((f"Partition suveryn-bundles on {self.app.system.boot_disk()}", "dim"))
+        c.add((t("c3_found"), "strong"))
+        c.add((t("c3_partition", disk=self.app.system.boot_disk()), "dim"))
         if valid:
             keys = sorted({m["key"][:16] for m in valid})
-            c.add((f"{CHECK} ", "ok"), ("Signed by Sūveryn Labs · bundle key ", "text"), (", ".join(keys), "strong"))
-            c.add(("  matches a key built into this release", "dim"))
+            c.add((f"{CHECK} ", "ok"), (t("c3_signed"), "text"), (", ".join(keys), "strong"))
+            c.add(("  " + t("c3_key_matches"), "dim"))
         else:
-            c.add((f"{WARN} ", "accent"), ("No valid model on this stick.", "text"))
+            c.add((f"{WARN} ", "accent"), (t("c3_none_valid"), "text"))
         c.blank()
         used = 0
         for it in self.list.items:
             if it["enabled"]:
                 used += it["size"] if it["checked"] else 0
                 fits = used <= self.free() or not it["checked"]
-                it["right"], it["right_style"] = (f"{CHECK} fits", "ok") if fits else (f"{WARN} too big", "accent")
+                it["right"], it["right_style"] = (f"{CHECK} {t('c3_fits')}", "ok") if fits else \
+                    (f"{WARN} {t('c3_too_big')}", "accent")
         self.list.draw(c, focus is self.list, 0)
         c.add(("─" * c.width, "dim"))
         chosen = [it for it in self.list.items if it["checked"]]
         g = self.app.answers.get("hardware", {}).get("gpu")
         if g and g.get("memory_gb"):
-            c.add(("Graphics".ljust(16), "dim"), (f"{g['memory_gb']} GB · one model active at a time, "
-                                                   "switching takes a few seconds", "text"))
+            c.add((t("c3_graphics").ljust(18), "dim"), (t("c3_graphics_note", gb=g["memory_gb"]), "text"))
         disk = self.app.answers.get("disk", "")
-        c.add(("Disk".ljust(16), "dim"), (f"{len(chosen)} model{'s' if len(chosen) != 1 else ''} · {gb(used)} "
-                                          f"of {gb(self.app.answers.get('disk_size', 0))} on {disk}", "text"))
+        c.add((t("c3_disk").ljust(18), "dim"),
+              (t("c3_disk_one" if len(chosen) == 1 else "c3_disk_many", n=len(chosen), used=gb(used),
+                 size=gb(self.app.answers.get("disk_size", 0)), disk=disk), "text"))
 
     def leave(self):
         if self.list is None:
-            return "Still checking the models on the stick. A moment, please."
+            return t("c3_still_checking")
         chosen = [it for it in self.list.items if it["checked"]]
         if any(it["enabled"] for it in self.list.items) and not chosen:
-            return "Choose at least one model (Space ticks it)."
+            return t("c3_choose_one")
         if sum(it["size"] for it in chosen) > self.free():
-            return "The chosen models don't fit on the disk. Untick one."
+            return t("c3_dont_fit")
         self.app.answers["models"] = [it["folder"] for it in chosen]
         self.app.answers["model_titles"] = [it["label"] for it in chosen]
 
 
 class Network(Screen):
-    title, step = "Network", 4
-    help = ("The name is how people reach the appliance: https://<name>.local. With DHCP the office's network "
-            "gives the address; ask for a reservation so it stays the same. Without DHCP, enter a fixed address "
-            "with its prefix, e.g. 192.168.1.50/24.")
+    title_key, help_key, step = "c4_title", "c4_help", 4
 
     def __init__(self, app):
         super().__init__(app)
         a = app.answers
         self.ports = app.system.interfaces()
         opts = []
+        def state(p):
+            if p["carrier"] and p["speed"] > 0:
+                fast = p["speed"] >= 1000
+                return f"{t('c4_connected')} · {p['speed'] // 1000 if fast else p['speed']} {'Gbit/s' if fast else 'Mbit/s'}"
+            return t("c4_connected") if p["carrier"] else t("c4_no_cable")
         for p in self.ports:
-            state = (f"connected · {p['speed'] // 1000 if p['speed'] >= 1000 else p['speed']} "
-                     f"{'Gbit/s' if p['speed'] >= 1000 else 'Mbit/s'}" if p["carrier"] and p["speed"] > 0
-                     else "connected" if p["carrier"] else "no cable")
-            opts.append((p["name"], f"{p['name']:<10} {p['model'][:26]:<27} {state}"))
+            opts.append((p["name"], lambda p=p: f"{p['name']:<9} {p['model'][:18]:<19} {state(p)}"))
         first = next((p["name"] for p in self.ports if p["carrier"]), self.ports[0]["name"] if self.ports else None)
-        self.port = Radio("Interface", opts, a.get("interface") or first, on_change=lambda v: self.restart_dhcp())
-        self.name = Text("Name", a.get("name", ""), placeholder="e.g. notary-brussels-01",
-                         hint=lambda: f"Reachable as {self.name.value or 'name'}.local. Letters, digits and hyphens.")
-        self.mode = Radio("Address", [("dhcp", "Automatic (DHCP)"), ("fixed", "Fixed address")],
+        self.port = Radio(lambda: t("c4_interface"), opts, a.get("interface") or first,
+                          on_change=lambda v: self.restart_dhcp())
+        self.name = Text(lambda: t("c4_name"), a.get("name", ""), placeholder=lambda: t("c4_name_placeholder"),
+                         hint=lambda: t("c4_name_hint", name=self.name.value or t("c4_name_word")))
+        self.mode = Radio(lambda: t("c4_address"), [("dhcp", lambda: t("c4_dhcp")), ("fixed", lambda: t("c4_fixed"))],
                           a.get("address_mode", "dhcp"))
-        self.ip = Text("IP address", a.get("fixed_address", ""), placeholder="192.168.1.50/24", width=24)
-        self.gw = Text("Gateway", a.get("fixed_gateway", ""), placeholder="192.168.1.1", width=24)
-        self.dns = Text("DNS server", a.get("fixed_dns", ""), placeholder="192.168.1.1", width=24)
-        self.back, self.retry, self.next = Button("< Back >", "back"), Button("< Retry DHCP >", "retry"), Button("< Next >", "next")
+        self.ip = Text(lambda: t("c4_ip"), a.get("fixed_address", ""), placeholder="192.168.1.50/24", width=24)
+        self.gw = Text(lambda: t("c4_gateway"), a.get("fixed_gateway", ""), placeholder="192.168.1.1", width=24)
+        self.dns = Text(lambda: t("c4_dns"), a.get("fixed_dns", ""), placeholder="192.168.1.1", width=24)
+        self.back, self.retry, self.next = (Button(lambda: t("button_back"), "back"),
+                                            Button(lambda: t("button_retry_dhcp"), "retry"),
+                                            Button(lambda: t("button_next"), "next"))
         self.lease, self.timed_out = None, False
         self.restart_dhcp()
 
@@ -768,33 +813,32 @@ class Network(Screen):
         self.mode.draw(c, focus is self.mode, 16)
         if self.mode.value == "dhcp":
             if self.lease:
-                c.add((" " * 16, "text"), (f"{CHECK} ", "ok"), (f"Received {self.lease['address']}", "text"))
-                extra = " · ".join(x for x in (f"gateway {self.lease['gateway']}" if self.lease.get("gateway") else "",
+                c.add((" " * 16, "text"), (f"{CHECK} ", "ok"), (t("c4_received", address=self.lease["address"]), "text"))
+                extra = " · ".join(x for x in (t("c4_gateway_is", gw=self.lease["gateway"]) if self.lease.get("gateway") else "",
                                                f"DNS {', '.join(self.lease['dns'])}" if self.lease.get("dns") else "") if x)
                 if extra:
                     c.add((" " * 18, "text"), (extra, "dim"))
             else:
-                c.add((" " * 16, "text"), (f"Waiting for an address from DHCP… {int(time.time() - self.dhcp_started)} s", "dim"))
+                c.add((" " * 16, "text"), (t("c4_waiting", s=int(time.time() - self.dhcp_started)), "dim"))
             c.blank()
-            c.wrap("Ask your network administrator to reserve this address for the appliance, so it stays the "
-                   "same after a restart.", "dim")
+            c.wrap(t("c4_reserve"), "dim")
         else:
             if self.timed_out:
-                c.add((" " * 16, "text"), (f"{WARN} ", "accent"), (f"No address received from DHCP after {DHCP_WAIT} seconds.", "text"))
-                c.add((" " * 18, "text"), ("Check the cable, or enter a fixed address below.", "dim"))
+                c.add((" " * 16, "text"), (f"{WARN} ", "accent"), (t("c4_no_lease", s=DHCP_WAIT), "text"))
+                c.add((" " * 18, "text"), (t("c4_check_cable"), "dim"))
             c.blank()
             for f in (self.ip, self.gw, self.dns):
                 f.draw(c, focus is f, 16)
             c.blank()
-            c.wrap("Ask your network administrator for a free address in your office network.", "dim")
+            c.wrap(t("c4_free_address"), "dim")
 
     def leave(self):
         try:
             ENGINE.check_name(self.name.value)
         except ENGINE.Refused:
-            return "The name can be letters, digits and hyphens (at most 63), not starting or ending with a hyphen."
+            return t("c4_bad_name")
         if not self.port.value:
-            return "No Ethernet port found."
+            return t("c4_no_port")
         args = Namespace(interface=self.port.value, address="dhcp", gateway=None, dns=None)
         if self.mode.value == "fixed":
             args = Namespace(interface=self.port.value, address=self.ip.value.strip(),
@@ -802,7 +846,7 @@ class Network(Screen):
         try:
             ENGINE.network_file(args, ports={p["name"]: p["mac"] for p in self.ports})
         except ENGINE.Refused as e:
-            return str(e)[0].upper() + str(e)[1:] + "."
+            return network_problem(str(e), args)
         self.app.answers.update(interface=self.port.value, name=self.name.value, address_mode=self.mode.value,
                                 fixed_address=self.ip.value.strip(), fixed_gateway=self.gw.value.strip(),
                                 fixed_dns=self.dns.value.strip(), lease=self.lease)
@@ -815,15 +859,30 @@ class Network(Screen):
         return False
 
 
+def network_problem(error: str, args) -> str:
+    """The installer's check of a fixed address, in the chosen language."""
+    if "network prefix" in error:
+        return t("c4_need_prefix")
+    m = re.search(r"the gateway (\S+) isn't in (\S+)", error)
+    if m:
+        return t("c4_gateway_outside", gw=m.group(1), net=m.group(2))
+    if "DNS server" in error:
+        return t("c4_need_dns")
+    return t("c4_bad_address", detail=error.removeprefix("unusable address: "))
+
+
 class Summary(Screen):
-    title, step = "Ready to install", 5
-    help = "Check the answers. Installing erases the disk; type ERASE (capitals) to confirm."
-    footer = [("Tab", "Next field"), ("Enter", "Install"), ("Esc", "Back"), ("F1", "Help")]
+    title_key, step = "c5_title", 5
+    keys = [("Tab", "key_next_field"), ("Enter", "key_install"), ("Esc", "key_back"), ("F1", "key_help")]
+
+    @property
+    def help(self):
+        return t("c5_help", word=t("erase_word"))
 
     def __init__(self, app):
         super().__init__(app)
         self.confirm = Text("", "", placeholder="", width=12, max_len=10)
-        self.back, self.install = Button("< Back >", "back"), Button("< Install >", "next")
+        self.back, self.install = Button(lambda: t("button_back"), "back"), Button(lambda: t("button_install"), "next")
 
     def fields(self):
         return [self.confirm, self.back, self.install]
@@ -831,42 +890,38 @@ class Summary(Screen):
     def body(self, c, focus):
         a = self.app.answers
         addr = (f"{a['lease']['address']} · DHCP" if a.get("lease") else "DHCP") if a["address_mode"] == "dhcp" \
-            else f"{a['fixed_address']} · fixed"
+            else f"{a['fixed_address']} · {t('c5_fixed')}"
         hw = a["hardware"]
-        rows = [("Keyboard", ENGINE.KEYBOARDS[a["keyboard"]]), ("Time zone", a["timezone"]),
-                ("Disk", f"{a['disk']} · {a['disk_model'] or 'disk'} · {gb(a['disk_size'])}"),
-                ("Encryption", "LUKS2 · unlocks with this machine's TPM"), ("Name", a["name"]), ("Address", addr),
-                ("Models", ", ".join(a["model_titles"]) or "none")]
+        rows = [(t("c5_keyboard"), t(f"kb_{a['keyboard']}")), (t("c5_timezone"), a["timezone"]),
+                (t("c5_disk"), f"{a['disk']} · {a['disk_model'] or t('c2_disk')} · {gb(a['disk_size'])}"),
+                (t("c5_encryption"), t("c5_encryption_value")), (t("c5_name"), a["name"]), (t("c5_address"), addr),
+                (t("c5_models"), ", ".join(a["model_titles"]) or t("c5_none"))]
         for label, value in rows:
-            c.add((label.ljust(16), "dim"), (value, "text"))
+            c.add((label.ljust(18), "dim"), (value, "text"))
         if hw["memory_gb"] < RECOMMENDED_MEMORY_GB:
-            c.add(("Memory".ljust(16), "dim"), (f"{WARN} ", "accent"),
-                  (f"{hw['memory_gb']} GB, below the recommended {RECOMMENDED_MEMORY_GB} GB", "text"))
+            c.add((t("c5_memory").ljust(18), "dim"), (f"{WARN} ", "accent"),
+                  (t("c5_memory_low", gb=hw["memory_gb"], rec=RECOMMENDED_MEMORY_GB), "text"))
         c.blank()
-        c.add((f"{WARN} ", "accent"), (f"All data on {a['disk']} will be permanently erased.", "strong"))
+        c.add((f"{WARN} ", "accent"), (t("c5_erased", disk=a["disk"]), "strong"))
         c.blank()
-        self.confirm.label = "Type ERASE to confirm  "
-        self.confirm.draw(c, focus is self.confirm, 24)
+        label = t("c5_type_word", word=t("erase_word")) + "  "
+        self.confirm.label = label
+        self.confirm.draw(c, focus is self.confirm, len(label))
 
     def leave(self):
-        if self.confirm.value != "ERASE":
-            return "Type ERASE in capitals to confirm."
+        if self.confirm.value != t("erase_word"):
+            return t("c5_word_wrong", word=t("erase_word"))
 
 
 class Installing(Screen):
-    title, step = "Installing the sūveryn appliance", 6
-    footer = [("", "Installation in progress. Keys are disabled.")]
+    title_key, step = "c6_title", 6
+    keys = [("", "c6_keys_off")]
 
     def __init__(self, app):
         super().__init__(app)
         a = app.answers
-        self.items = ["Checking the language models against their signatures",
-                      f"Partitioning {a['disk']} and copying system files",
-                      "Encrypting the disk (LUKS2, a new key for this machine)",
-                      "Copying language models",
-                      "Applying the name and network settings",
-                      "Linking the disk key to this machine's TPM",
-                      "Installing the boot loader"]
+        self.items = [t("c6_check_models"), t("c6_partition", disk=a["disk"]), t("c6_encrypt"), t("c6_copy_models"),
+                      t("c6_settings"), t("c6_tpm"), t("c6_boot")]
         self.at, self.detail, self.percent = 0, "", 0.0
         self.failed, self.result, self.lines = None, None, []
         self.done = False
@@ -896,7 +951,7 @@ class Installing(Screen):
                 self.result = json.loads(out)
                 self.at, self.percent = len(self.items), 100.0
             except ValueError:
-                self.failed = "the installer gave no result"
+                self.failed = t("c6_no_result")
         else:
             last = [ln for ln in self.lines if not ln.startswith(("bundle:", "step ", "install-disk ["))]
             self.failed = (last[-1] if last else f"exit {code}").removeprefix("install: ")
@@ -907,7 +962,8 @@ class Installing(Screen):
         m = re.match(r"install: checking (.+)", line)
         if m:
             self.at, self.current = 0, m.group(1)
-            self.detail = f"{a['models'].index(self.current) + 1} of {len(a['models'])}" if self.current in a["models"] else ""
+            self.detail = t("c6_n_of", n=a["models"].index(self.current) + 1, total=len(a["models"])) \
+                if self.current in a["models"] else ""
         elif line.startswith("step 1/"):
             self.at, self.detail, self.percent = 1, "", 25.0
         elif line.startswith("install-disk") and "enrolling" in line:
@@ -918,7 +974,7 @@ class Installing(Screen):
             self.current = m.group(1)
             n = a["models"].index(self.current) + 1 if self.current in a["models"] else 0
             title = a["model_titles"][n - 1] if n else self.current
-            self.detail = f"{n} of {len(a['models'])} · {title}"
+            self.detail = f"{t('c6_n_of', n=n, total=len(a['models']))} · {title}"
         elif (m := re.match(r"bundle: \[(\d+)/(\d+)\] .* \((\d+) MiB\)", line)):
             if self.at == 3:
                 self.copied += int(m.group(3)) * 2**20
@@ -952,59 +1008,54 @@ class Installing(Screen):
                 c.add(("  ", "text"), (text, "dim"))
         c.blank()
         if self.failed:
-            c.add((f"{WARN} ", "accent"), ("The installation failed.", "strong"))
+            c.add((f"{WARN} ", "accent"), (t("c6_failed"), "strong"))
             c.wrap(self.failed[:1].upper() + self.failed[1:], "accent", indent=2)
-            c.wrap(f"Nothing on the stick changed. The disk {self.app.answers['disk']} may be partly written; "
-                   "installing again erases it anew.", "dim", indent=2)
+            c.wrap(t("c6_failed_note", disk=self.app.answers["disk"]), "dim", indent=2)
         else:
-            c.add(("This takes about ten minutes. Do not turn off the machine.", "text"))
-            c.add(("Then you write down the disk recovery key, and the machine restarts.", "dim"))
-            c.add(("This appliance's ID and signing key are made at its first start.", "dim"))
+            c.wrap(t("c6_duration"), "text")
+            c.wrap(t("c6_then"), "dim")
+            c.wrap(t("c6_identity"), "dim")
 
     def fields(self):
         if self.failed:
-            self.footer = [("Enter", "Back to the summary")]
-            return [Button("< Back to the summary >", "back")]
+            self.keys = [("Enter", "c6_back_summary")]
+            return [Button(lambda: t("button_back_summary"), "back")]
         return []
 
 
 class RecoveryKey(Screen):
-    title, step = "Write down the disk recovery key", 6
-    help = ("The recovery key opens the encrypted disk when the TPM can't: after a BIOS or firmware update, a "
-            "Secure Boot change, or on another machine. Keep it on paper, away from the appliance.")
-    footer = [("Enter", "Restart"), ("", "Remove the installation medium before restarting.")]
+    title_key, help_key, step = "c7_title", "c7_help", 6
+    keys = [("Enter", "key_restart"), ("", "c7_remove_medium")]
 
     def __init__(self, app):
         super().__init__(app)
         self.key_text = app.answers["result"]["recovery_key"]
-        self.confirm = Text("Type the first group to confirm  ", "", width=10, max_len=8)
-        self.restart = Button("< Restart >", "restart")
+        self.confirm = Text(lambda: t("c7_confirm") + "  ", "", width=10, max_len=8)
+        self.restart = Button(lambda: t("button_restart"), "restart")
 
     def fields(self):
         return [self.confirm, self.restart]
 
     def body(self, c, focus):
-        c.add((f"{CHECK} ", "ok"), ("The disk is encrypted and linked to this machine's TPM. It unlocks by itself "
-                                    "at every start.", "text"))
-        c.wrap("You need this key only if it can't: after a BIOS or firmware update, a Secure Boot change, or when "
-               "the disk is moved to another machine.", "dim", indent=2)
+        c.add((f"{CHECK} ", "ok"), (t("c7_encrypted"), "text"))
+        c.wrap(t("c7_only_if"), "dim", indent=2)
         c.blank()
         groups = self.key_text.split("-")
         c.add(("    " + "-".join(groups[:4]), "strong"))
         c.add(("    " + "-".join(groups[4:]), "strong"))
         c.blank()
-        c.add((f"{WARN} ", "accent"), ("This is the only time it is shown. It is not stored on this machine.", "strong"))
-        c.wrap("Write it on paper and keep it with the office's other important documents, not with the appliance.",
-               "dim", indent=2)
+        c.add((f"{WARN} ", "accent"), (t("c7_once"), "strong"))
+        c.wrap(t("c7_paper"), "dim", indent=2)
         c.blank()
         ok = self.confirm.value == groups[0]
-        self.confirm.draw(c, focus is self.confirm, 34)
+        col = len(text_of(self.confirm.label))
+        self.confirm.draw(c, focus is self.confirm, col)
         if ok:
-            c.add((" " * 34, "text"), (f"{CHECK} matches", "ok"))
+            c.add((" " * col, "text"), (f"{CHECK} {t('c7_matches')}", "ok"))
 
     def leave(self):
         if self.confirm.value != self.key_text.split("-")[0]:
-            return "Type the first group of the key, as shown, to confirm you wrote it down."
+            return t("c7_wrong")
 
 
 FLOW = [Language, Hardware, Models, Network, Summary]
@@ -1025,6 +1076,10 @@ class App:
         self.help_open = False
         self.go(Language)
 
+    def set_language(self, lang: str) -> None:
+        global LANG
+        LANG = lang
+
     def check_models(self):
         try:
             self.models = self.system.models()
@@ -1042,6 +1097,12 @@ class App:
     def fields(self):
         return self.screen.fields()
 
+    def top_left(self) -> str:
+        return t("installer")
+
+    def top_right(self) -> str:
+        return f"{self.version} · {t('step_of', n=self.screen.step, total=STEPS)} "
+
     def draw(self):
         scr, ink = self.scr, self.ink
         scr.erase()
@@ -1054,8 +1115,8 @@ class App:
                     pass
         put(0, 0, " " * cols, "bar")
         put(0, 1, "Sūveryn", "strong")
-        put(0, 9, "installer", "dim")
-        right = f"{self.version} · Step {self.screen.step} of {STEPS} "
+        put(0, 9, self.top_left(), "dim")
+        right = self.top_right()
         put(0, cols - len(right), right, "dim")
         width = min(cols - 4, 92)
         c = Canvas(width - 6)
@@ -1094,13 +1155,13 @@ class App:
             for para in self.screen.help.split("\n"):
                 hc.wrap(para)
             hc.blank()
-            hc.add(("To leave the installer, remove the stick and press Ctrl+Alt+Del.", "dim"))
-            hc.add(("Esc closes this help.", "dim"))
+            hc.wrap(t("help_leave"), "dim")
+            hc.wrap(t("help_close"), "dim")
             hy = max(2, (rows - len(hc.lines) - 2) // 2)
             hx = (cols - hc.width - 4) // 2
             for i in range(len(hc.lines) + 2):
                 put(hy + i, hx, " " * (hc.width + 4), "field")
-            put(hy, hx + 2, " Help ", "strong")
+            put(hy, hx + 2, f" {t('help_title')} ", "strong")
             for i, line in enumerate(hc.lines):
                 x = hx + 2
                 for text, style in line:
@@ -1109,6 +1170,8 @@ class App:
         put(rows - 1, 0, " " * (cols - 1), "bar")
         x = 1
         for k, v in self.screen.footer:
+            if x + len(k) + 1 + len(v) > cols - 1:
+                break  # a narrow console: the keys that fit, whole
             if k:
                 put(rows - 1, x, k, "strong")
                 x += len(k) + 1
