@@ -1,0 +1,4 @@
+#!/bin/sh
+# The test system: a stand-in for `suveryn-network-mode check --json` (the network mode isn't
+# installed in this image yet).
+echo '{"passed": true, "summary": "only approved destinations reachable (test stand-in)"}'

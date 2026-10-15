@@ -68,6 +68,9 @@ SETUP_CERT = ETC / "tls" / "setup-cert.pem"         # the console shows its fing
 NGINX_SETUP = ETC / "nginx-setup.conf"              # the setup locations, included by the site while setup is open
 SEEN_DONE_WAIT = int(ENV("SUVERYN_SETUP_SEEN_DONE_WAIT", str(30 * 60)))  # how long Complete may take to be seen
 
+# Where the machine runs, for the GPU licence check: an office's appliance is on its premises. A test
+# machine in a datacenter (the Pod) says "test" (SUVERYN_SETUP_SITE=test), never "on-premise".
+SITE = ENV("SUVERYN_SETUP_SITE", "on-premise")
 SHARE_TIMEOUT = float(ENV("SUVERYN_SETUP_SHARE_TIMEOUT", "5"))
 MAX_BODY = 300 * 1024
 MAX_PEM = 64 * 1024
@@ -188,6 +191,8 @@ def network() -> dict:
     """The address, gateway and resolver in use now, as the network screen shows them."""
     out = {"address": "", "dhcp": True, "gateway": "", "dns": ""}
     code, text = run("ip", "-j", "-4", "addr", "show", "scope", "global")
+    if code != 0:
+        print(f"suveryn-setup: ip addr failed ({code}): {text.strip()[:200]}", file=sys.stderr, flush=True)
     try:
         for link in json.loads(text) if code == 0 else []:
             for a in link.get("addr_info", []):
@@ -696,25 +701,25 @@ SETUP_SITE_MARK = "# sūveryn web setup site"
 def nginx_setup_site(host: str) -> None:
     """While setup is open, nginx serves the setup page and passes /setup/v1/ to serve. Before
     provisioning that is the whole site; provisioning's site includes the same file until setup closes."""
-    snippets = NGINX / "snippets"
-    snippets.mkdir(parents=True, exist_ok=True)
-    for name in ("suveryn-headers.conf", "suveryn-csp.conf"):
-        shutil.copyfile(REPO / "reverse-proxy" / name, snippets / name)
+    p = provision_module()
+    p.NGINX = NGINX
+    p.snippets()
     write_file(NGINX_SETUP, (HERE / "nginx-setup.conf").read_text().replace("@PORT@", str(PORT)), 0o644)
-    site = NGINX / "sites-available" / "suveryn"
+    site = p.site_file()  # sites-available, or on the read-only system the data partition
     if not site.exists() or SETUP_SITE_MARK in site.read_text():
         site.parent.mkdir(parents=True, exist_ok=True)
         write_file(site, (HERE / "nginx-setup-site.conf.template").read_text().replace("@HOST@", host), 0o644)
     enabled = NGINX / "sites-enabled" / "suveryn"
-    enabled.parent.mkdir(parents=True, exist_ok=True)
     if not enabled.exists() and not enabled.is_symlink():
+        enabled.parent.mkdir(parents=True, exist_ok=True)
         enabled.symlink_to(site)
-    remove(NGINX / "sites-enabled" / "default")
+    if (NGINX / "sites-enabled" / "default").exists():
+        remove(NGINX / "sites-enabled" / "default")
     if not ENV("SUVERYN_SETUP_TEST"):
         code, out = run("nginx", "-t")
         if code != 0:
             raise SystemExit(f"suveryn-setup: nginx refuses the setup site: {out[-300:]}")
-        provision_module().start_nginx()
+        p.start_nginx()
 
 
 # ---------------------------------------------------------------------------- provision (root)
@@ -799,7 +804,7 @@ def provision() -> int:
     write_file(admin_file, json.dumps(answers["administrator"]))
     net = answers["network"]
     cmd = [sys.executable, str(PROVISION), "first-boot", "--public-url", f"https://{host}", "--network-mode", net["mode"],
-           *(["--outbound", net["outgoing"]] if net["mode"] == "connected" else []), "--site", "on-premise",
+           *(["--outbound", net["outgoing"]] if net["mode"] == "connected" else []), "--site", SITE, *(["--test-machine"] if SITE == "test" else []),
            "--administrator", str(admin_file)]
     models = models_media(work)
     if models:
@@ -892,7 +897,11 @@ def finish(answers: dict, files: dict) -> None:
     remove(SETUP_CERT)
     shutil.rmtree(ANSWERS, ignore_errors=True)  # the password and key files with it
     if Path("/run/systemd/system").is_dir() and not ENV("SUVERYN_SETUP_TEST"):
-        run("systemctl", "disable", "--now", "suveryn-setup.service", "suveryn-setup-provision.path")
+        # Disabled where /etc can be written; on the read-only system the units' condition
+        # (setup-complete) keeps them from starting again, so stopping them is enough.
+        if run("systemctl", "disable", "suveryn-setup.service", "suveryn-setup-provision.path")[0] != 0:
+            print("suveryn-setup: units not disabled (read-only system); setup-complete keeps them stopped", flush=True)
+        run("systemctl", "stop", "--no-block", "suveryn-setup.service", "suveryn-setup-provision.path")
 
 
 def trust_office_ca(pem: bytes) -> None:
@@ -907,8 +916,12 @@ def trust_office_ca(pem: bytes) -> None:
             roots.append(block)
     if not roots or ENV("SUVERYN_SETUP_TEST"):
         return
-    for i, block in enumerate(roots):
-        write_file(Path(f"/usr/local/share/ca-certificates/suveryn-office-ca-{i}.crt"), block + "\n", 0o644)
+    try:
+        for i, block in enumerate(roots):
+            write_file(Path(f"/usr/local/share/ca-certificates/suveryn-office-ca-{i}.crt"), block + "\n", 0o644)
+    except OSError as e:  # the read-only system: the trust bundle on the data partition (#39) takes its place
+        print(f"suveryn-setup: the office's CA isn't added to the system's trust store ({e.strerror})", flush=True)
+        return
     run("update-ca-certificates")
     if Path("/run/systemd/system").is_dir():
         run("systemctl", "try-restart", "suveryn-gateway.service")

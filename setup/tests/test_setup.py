@@ -463,13 +463,13 @@ def test_prepare_writes_the_facts_and_the_setup_site(tmp_path, monkeypatch):
     (mod.VAR / "installed.json").write_text(json.dumps({"language": "fr", "models": [{"name": "qwen3-30b-a3b"}]}))
     monkeypatch.setattr(mod, "network", lambda: {"address": "10.0.0.7/24", "dhcp": False, "gateway": "", "dns": ""})
     calls = []
+    real = mod.provision_module()  # its nginx helpers, with the TLS step standing in
 
-    class FakeProvision:
-        @staticmethod
-        def tls(host, cert, key, ips):
-            calls.append((host, cert, key, ips))
-            (mod.ETC / "tls" / "server.crt").write_text("the local CA's certificate")
-    monkeypatch.setattr(mod, "provision_module", lambda: FakeProvision)
+    def tls(host, cert, key, ips):
+        calls.append((host, cert, key, ips))
+        (mod.ETC / "tls" / "server.crt").write_text("the local CA's certificate")
+    monkeypatch.setattr(real, "tls", tls)
+    monkeypatch.setattr(mod, "provision_module", lambda: real)
     mod.prepare()
     assert json.loads((mod.STATE / "facts.json").read_text()) == {
         "name": "notary-ghent", "language": "fr", "appliance": {"id": APPLIANCE, "fingerprint": "cd" * 32},
@@ -484,6 +484,20 @@ def test_prepare_writes_the_facts_and_the_setup_site(tmp_path, monkeypatch):
     (mod.NGINX / "sites-available" / "suveryn").write_text("# the real site")
     mod.prepare()
     assert (mod.NGINX / "sites-available" / "suveryn").read_text() == "# the real site"
+
+
+def test_on_the_read_only_system_the_site_goes_to_the_data_partition(tmp_path, monkeypatch):
+    """image/mkosi: /etc/nginx/sites-enabled/suveryn is a link into /var/lib/suveryn/nginx, built in."""
+    mod = load(tmp_path)
+    real = mod.provision_module()
+    data = tmp_path / "var-nginx" / "suveryn"
+    enabled = mod.NGINX / "sites-enabled" / "suveryn"
+    enabled.parent.mkdir(parents=True)
+    monkeypatch.setattr(real.os, "readlink", lambda p: "/var/lib/suveryn/nginx/suveryn" if Path(p) == enabled else os.readlink(p))
+    enabled.symlink_to(data)
+    real.NGINX = mod.NGINX
+    monkeypatch.setattr(real, "Path", lambda p: data if p == "/var/lib/suveryn/nginx/suveryn" else Path(p))
+    assert real.site_file() == data and data.parent.is_dir()
 
 
 def test_serve_refuses_to_run_as_root(tmp_path):

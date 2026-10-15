@@ -15,7 +15,10 @@ inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest)
                    settings and model are there; the identity is made, sealed to the TPM, and signs;
                    every rule passes
 3. second boot:    the same, with the stick attached too: the appliance opens only its own disk's data
-                   partition; the same machine-id, identity and model
+                   partition; the same machine-id, identity and model; the web setup open, unprivileged
+4. web setup:      the setup screens driven in Chromium through a forwarded port, from Welcome to Complete,
+                   against the appliance's setup service under systemd, with stand-ins for provisioning
+                   (no sūveryn services or GPU in the test system); then setup closed for good
 4. stick beside:   the stick started on the machine with the installed disk: installer mode, and the
                    appliance's data partition is never opened (no prompt either)
 5. TPM replaced:   a new, empty TPM; the console asks for the recovery key; a wrong one is refused,
@@ -24,8 +27,9 @@ inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest)
 6. five wrong keys: a new TPM again; after five wrong keys the unlock gives up and nothing starts
 7. a changed block in slot A: verity refuses it
 
-Needs root, qemu-system-x86_64, OVMF, swtpm, sfdisk, losetup, mkfs.vfat and mtools. Without KVM each boot
-takes two to five minutes.
+Needs root, qemu-system-x86_64, OVMF, swtpm, sfdisk, losetup, mkfs.vfat and mtools, and for step 4
+Python Playwright with Chromium and the test image built with the chat UI (test/make-test-ui). Without
+KVM each boot takes two to five minutes.
 
     sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
 """
@@ -151,10 +155,12 @@ class Console:
 
 def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, credential: str | None = None,
          keys: list[str] = (), quiet_after_keys: int = 0, stop_when_given_up: bool = False,
-         ui=None) -> tuple[str, int]:
+         ui=None, forward: str | None = None, beside=None) -> tuple[str, int]:
     """Boot until the machine powers off (or the timeout). Answers recovery-key prompts with `keys`, in
     order. With quiet_after_keys, stops once all keys are used and no new prompt came for that many
-    seconds. With ui, a script that drives the console (Console); its result is in boot.ui.
+    seconds. With ui, a script that drives the console (Console); its result is in boot.ui. With forward
+    (host address), the appliance's port 443 is reachable there; with beside, a function run in a thread
+    meanwhile (its result or error in boot.beside).
     Returns (console output, number of prompts seen)."""
     log = work / f"{name}.log"
     sersock = work / f"{name}.serial"
@@ -164,7 +170,8 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
            "-drive", f"if=pflash,format=raw,file={vars_file}",
            "-chardev", f"socket,id=chrtpm,path={tpmsock}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
            "-device", "tpm-crb,tpmdev=tpm0",
-           "-nic", "user,model=virtio-net-pci", "-display", "none", "-no-reboot",
+           "-nic", "user,model=virtio-net-pci" + (f",hostfwd=tcp:{forward}:443-:443" if forward else ""),
+           "-display", "none", "-no-reboot",
            "-chardev", f"socket,id=ser0,path={sersock},server=on,wait=on", "-serial", "chardev:ser0"]
     for i, d in enumerate(disks):  # the firmware tries them in this order
         cmd += ["-drive", f"file={d},format=raw,if=none,id=disk{i}", "-device", f"virtio-blk-pci,drive=disk{i},bootindex={i}"]
@@ -192,6 +199,15 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
         console = Console(conn)
         threading.Thread(target=console.run, args=(ui,), daemon=True).start()
     boot.ui = console
+    boot.beside = {}
+    boot.ready = threading.Event()  # the self-test said "web-setup ready" (step 4b)
+    if beside:
+        def run_beside():
+            try:
+                boot.beside["result"] = beside()
+            except Exception as e:  # noqa: BLE001 (reported by the step)
+                boot.beside["error"] = e
+        threading.Thread(target=run_beside, daemon=True).start()
     with open(log, "wb") as out:
         while qemu.poll() is None and time.time() - start < BOOT_TIMEOUT:
             try:
@@ -204,9 +220,13 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
                 out.write(chunk)
                 out.flush()
                 buf += chunk
+                if b"SUVERYN-SELFTEST web-setup ready" in bytes(buf[-4096:]):
+                    boot.ready.set()
                 if console:
                     console.feed(chunk)
             if console and console.error:
+                break
+            if boot.beside.get("error"):  # the browser half failed: no need to wait for the timeout
                 break
             tail = bytes(buf[-4096:])
             if failed_after is None and GAVE_UP.search(tail):
@@ -337,17 +357,65 @@ def console_after_boot(c: "Console") -> bool:
     c.wait("Kies een optie")
     c.press("2")
     c.wait("Netwerkinstellingen wijzigen")
+    time.sleep(5)  # the screen takes keys once it has read the ports (slow under TCG, with the web setup starting too)
     c.press("\t", "\t", "\x1b[B", "\t")  # name, address: fixed, IP address
     for text in ("10.0.2.15/24", "\t", "10.0.2.2", "\t", "10.0.2.3"):
         for ch in text:
             c.press(ch, settle=0)
     c.press("\r", settle=5)
-    s = c.wait("Kies een optie", timeout=60)
+    # The new address on the status screen (not just "Kies een optie": that line can still be on the
+    # serial screen from before, under the network screen, while the console is slow).
+    s = c.wait("· vast", timeout=180)
     assert "10.0.2.15/24 · vast" in " ".join(s.replace("│", " ").split()), s
     c.press("5")
     c.wait("De appliance uitschakelen?")
     c.press("\r")
     return True
+
+
+def web_setup_test(work: Path, identity: str):
+    """Step 4's browser half: the manifests for this appliance (signed with the portal's test key) and
+    another, a share server on the host (10.0.2.2 to the appliance), then the screens (setup/tests)."""
+    import importlib.machinery
+    import importlib.util
+    repo = MKOSI.parent.parent
+    loader = importlib.machinery.SourceFileLoader("browser_check", str(repo / "setup" / "tests" / "browser_check.py"))
+    spec = importlib.util.spec_from_loader("browser_check", loader)
+    bc = importlib.util.module_from_spec(spec)
+    loader.exec_module(bc)
+    uuid = identity.split()[0]
+    tool, key = repo / "support" / "suveryn-manifest", HERE / "keys" / "test-portal.key"
+    for name, appliance in (("manifest.yaml", uuid), ("other.yaml", "00000000" + uuid[8:])):
+        subprocess.run([sys.executable, tool, "make", work / name, "--appliance", appliance, "--edition", "Sūveryn Enterprise",
+                        "--users", "15", "--valid-until", "2099-09-30", "--next-check-in", "2099-12-31"], check=True,
+                       capture_output=True)
+        subprocess.run([sys.executable, tool, "sign", work / name, "--key-file", key], check=True, capture_output=True)
+    listener = socket.socket()  # QEMU's user network takes the appliance's 10.0.2.2:445 to the host's 445
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 445))
+    listener.listen()
+    threading.Thread(target=lambda: [listener.accept()[0].close() for _ in iter(int, 1)], daemon=True).start()
+    m = {"host": "test-appliance.local", "connect": WEB, "address": "10.0.2.15", "share": "10.0.2.2", "appliance": uuid,
+         "manifest": work / "manifest.yaml", "other": work / "other.yaml", "out": work, "answers": None, "slow": 10,
+         "language": "nl"}  # installed in Dutch (step 2)
+    # Until the self-test inside has checked setup is open (then the screens may close it), and the
+    # setup service answers here too.
+    if not boot.ready.wait(BOOT_TIMEOUT):
+        raise AssertionError("the self-test never said the web setup was ready")
+    for _ in range(BOOT_TIMEOUT // 5):
+        try:
+            if bc.direct().open(bc.urllib.request.Request(f"https://{WEB}/setup/v1/state", headers={"Host": m["host"]}),
+                                timeout=10).status == 200:
+                break
+        except OSError:
+            pass
+        time.sleep(5)
+    bc.browse(m)
+    listener.close()
+    return bc.results
+
+
+WEB = "127.0.0.2"  # where the host reaches the appliance's port 443 in step 4
 
 
 def main() -> int:
@@ -418,6 +486,23 @@ def main() -> int:
         ok(f"the identity survives a restart ({identities[0].split()[0]})")
     else:
         bad(f"the identity changed between boots, or is missing ({identities})")
+
+    note("4b. the web setup in a browser, through to Complete")
+    if not (HERE / "ui" / "setup.html").exists() or not (HERE / "keys" / "test-portal.key").exists():
+        bad("no chat UI or portal key in the test image: test/make-test-ui and test/make-test-keys, then build again")
+    else:
+        out, prompts = boot(work, "web-setup", [target], tpm, work / "vars.fd", credential="suveryn.test=web-setup",
+                            forward=WEB, beside=lambda: web_setup_test(work, identities[0] or ""))
+        r = selftest(out)
+        res = boot.beside.get("result") or []
+        for name, passed in res:
+            print(f"   {'ok  ' if passed else 'FAIL'} {name}", flush=True)
+        if boot.beside.get("error") or not res or not all(p for _, p in res):
+            bad(f"the screens didn't run through: {boot.beside.get('error')!r} (screenshots and console: {work})")
+        elif r["result"] == "PASS" and prompts == 0:
+            ok(f"the screens from Welcome to Complete ({len(res)} checks), the setup service under systemd, then closed")
+        else:
+            bad(f"result {r['result']}, {prompts} prompt(s) (console: {work}/web-setup.log)")
 
     note("5. the console of the installed appliance (C8), as a person would use it")
     out, prompts = boot(work, "console", [target], tpm, work / "vars.fd", credential="suveryn.console-on-serial=1",
