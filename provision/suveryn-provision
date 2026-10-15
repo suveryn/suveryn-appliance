@@ -340,7 +340,11 @@ def start_postgres() -> None:
     if systemd_running():
         run("systemctl", "enable", "--now", "postgresql")
     elif subprocess.run(["pg_ctlcluster", "16", "main", "status"], capture_output=True).returncode != 0:
-        run("pg_ctlcluster", "16", "main", "start")
+        # Its output to nowhere, as nginx's: the server keeps what it was started with.
+        r = subprocess.run(["pg_ctlcluster", "16", "main", "start"], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if r.returncode != 0:
+            fail(f"PostgreSQL didn't start: {error_lines(r.stderr)}")
 
 
 def postgres() -> tuple[str, str]:
@@ -701,10 +705,16 @@ def reverse_proxy(host: str) -> None:
     run("nginx", "-t", capture=True)
     # Ubuntu's nginx.conf loads sites-enabled/; an image with its own nginx.conf may not (RunPod's
     # doesn't), and the site would then silently not be served.
-    if f"server_name {host};" not in run("nginx", "-T", capture=True):
+    sites_loaded(f"server_name {host};")
+    note(f"https://{host}/: the chat UI, the gateway (/v1, /auth, /health) and Keycloak (/idp); http redirects to https")
+
+
+def sites_loaded(marker: str) -> None:
+    """Stops when nginx's main configuration doesn't load sites-enabled/ (RunPod's own nginx.conf
+    doesn't), so the site would silently not be served."""
+    if marker not in run("nginx", "-T", capture=True):
         fail("nginx's main configuration doesn't load /etc/nginx/sites-enabled/; add "
              "'include /etc/nginx/sites-enabled/*;' to its http block (Ubuntu's own nginx.conf has it)")
-    note(f"https://{host}/: the chat UI, the gateway (/v1, /auth, /health) and Keycloak (/idp); http redirects to https")
 
 
 def _nginx_running() -> bool:
@@ -725,8 +735,10 @@ def start_nginx() -> None:
         run("systemctl", "reload", "nginx")
     elif _nginx_running():
         run("nginx", "-s", "reload")
-    else:
-        run("nginx")
+    else:  # without systemd: nginx keeps the output it was started with, so it gets none of ours
+        r = subprocess.run(["nginx"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if r.returncode != 0:
+            fail(f"nginx didn't start: {error_lines(r.stderr)}")
 
 
 def firewall_rules() -> list[list[str]]:
