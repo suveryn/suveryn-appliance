@@ -1,0 +1,128 @@
+#!/bin/bash
+# C8b, "Boot · Disk won't unlock" (#37, #34): in the initrd, when the TPM can't open the data partition.
+#
+#   unlock-screen /dev/<data partition>
+#
+# Asks for the recovery key on the console, five attempts. Dashes and capitals are optional. Once the
+# key opens the disk, the TPM is enrolled again (PCR 7, as at installation), so the next start is
+# unattended. After five wrong keys it says what that means and waits: Ctrl+Alt+Del restarts.
+#
+# The office's language isn't known yet (it is on the locked disk), so the screen is in English with
+# the essential lines in Dutch and French too. The key itself only passes through a file in /run (the
+# initrd's memory), removed as soon as it has been tried.
+set -uo pipefail
+
+DATA=${1:?usage: unlock-screen /dev/<data partition>}
+NAME=suveryn-data
+TRIES=5
+KEY=/run/suveryn/.recovery-key
+CON=/dev/console
+MODHEX='^[cbdefghijklnrtuv]{64}$'
+
+exec <"$CON" >"$CON" 2>&1
+umask 077
+mkdir -p /run/suveryn
+
+# The console as on the appliance: the brand's colours and a font with ū, where there is a screen.
+setvtrgb /usr/lib/suveryn/console-colours 2>/dev/null
+setfont /usr/share/consolefonts/Vietnamese-Terminus16.psf.gz 2>/dev/null
+dmesg --console-level emerg 2>/dev/null
+kill -s RTMIN+21 1 2>/dev/null  # systemd's own status lines would draw over this screen
+restore() { stty sane 2>/dev/null; kill -s RTMIN+20 1 2>/dev/null; }
+trap restore EXIT
+
+# Colours: 1 accent, 6 teal, 7 grey, 15 text; on a black background.
+A=$'\e[1;31m' T=$'\e[1;36m' D=$'\e[0;37m' B=$'\e[1;37m' R=$'\e[0m' F=$'\e[44;1;37m'
+cols=$(tput cols 2>/dev/null || echo 80)
+[ "$cols" -gt 20 ] 2>/dev/null || cols=80
+version=$(sed -n 's/^IMAGE_VERSION=//p' /sysroot/usr/lib/os-release 2>/dev/null)
+
+draw() {  # draw <attempt> <message>
+  printf '\e[0m\e[2J\e[H'
+  printf '\e[45;37m %-*s\e[0m\n\n\n' $((cols - 2)) "Sūveryn ${version}"
+  printf '  %s! %sThe disk can'"'"'t unlock by itself.%s\n' "$A" "$B" "$R"
+  printf '  %sDe schijf kan niet vanzelf ontgrendelen. Le disque ne peut pas se déverrouiller seul.%s\n\n' "$D" "$R"
+  printf '  %sThis happens after a BIOS or firmware update, a Secure Boot change, or when the disk is%s\n' "$D" "$R"
+  printf '  %smoved to another machine.%s\n\n' "$D" "$R"
+  printf '  %sEnter the recovery key from the sheet you kept at installation. Dashes are optional.%s\n' "$B" "$R"
+  printf '  %sTyp de herstelsleutel van het blad dat u bij de installatie bewaarde.%s\n' "$D" "$R"
+  printf '  %sTapez la clé de récupération de la feuille conservée à l'"'"'installation.%s\n\n' "$D" "$R"
+  printf '  [ %s%-71s%s ]\n' "$F" "" "$R"
+  printf '  %sAttempt %s of %s.%s %sThe key uses only letters that sit in the same place on AZERTY and QWERTY.%s\n' \
+    "$B" "$1" "$TRIES" "$R" "$D" "$R"
+  [ -n "$2" ] && printf '  %s! %s%s\n' "$A" "$2" "$R"
+  printf '\n  %sAfter unlocking, the appliance links the disk to this machine'"'"'s TPM again, so the next start\n' "$D"
+  printf '  is unattended.%s\n\n' "$R"
+  printf '  %sLost the key? The data on this disk can'"'"'t be read without it. Install a fresh appliance and%s\n' "$D" "$R"
+  printf '  %srestore the latest backup.%s\n\n' "$D" "$R"
+  printf '  %sEnter%s Unlock   %sCtrl+Alt+Del%s Restart\n' "$B" "$R" "$B" "$R"
+  # Back to the input field (line 14, after "[ ").
+  printf '\e[14;5H%s' "$F"
+}
+
+read_key() {  # the typed key, shown as dots, into $typed
+  typed=""
+  stty -echo -icanon min 1 time 0 2>/dev/null
+  while IFS= read -r -s -n 1 ch; do
+    case "$ch" in
+      ""|$'\n'|$'\r') break ;;
+      $'\x7f'|$'\b') [ -n "$typed" ] && { typed=${typed%?}; printf '\b \b'; } ;;
+      *) [ ${#typed} -lt 80 ] && { typed+=$ch; printf '•'; } ;;
+    esac
+  done
+  printf '%s' "$R"
+  stty sane 2>/dev/null
+}
+
+normalise() {  # dashes, spaces and capitals are optional: back to systemd's form, 8 groups of 8
+  local k
+  k=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d ' -')
+  if [[ $k =~ $MODHEX ]]; then
+    printf '%s-%s-%s-%s-%s-%s-%s-%s' "${k:0:8}" "${k:8:8}" "${k:16:8}" "${k:24:8}" "${k:32:8}" "${k:40:8}" "${k:48:8}" "${k:56:8}"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+message=""
+for ((attempt = 1; attempt <= TRIES; attempt++)); do
+  draw "$attempt" "$message"
+  read_key
+  printf '\e[%d;3H%sChecking the key…%s\e[K' 16 "$D" "$R"
+  normalise "$typed" > "$KEY"
+  if /usr/lib/systemd/systemd-cryptsetup attach "$NAME" "$DATA" "$KEY" headless=true >/dev/null 2>&1; then
+    printf '\e[2J\e[H\n  %s√%s %sThe disk is unlocked.%s\n' "$T" "$R" "$B" "$R"
+    if [ -e /dev/tpmrm0 ]; then
+      printf '  %sLinking it to this machine'"'"'s TPM again…%s\n' "$D" "$R"
+      # The old TPM's slot goes first, in a step of its own: enrolling with --wipe-slot=tpm2 does nothing
+      # when a slot for the same PCRs is there already ("already enrolled"), even one this TPM can't open.
+      if systemd-cryptenroll --unlock-key-file="$KEY" --wipe-slot=tpm2 "$DATA" >/dev/null 2>&1 &&
+          systemd-cryptenroll --unlock-key-file="$KEY" --tpm2-device=auto --tpm2-pcrs=7 --tpm2-pcrlock= \
+            "$DATA" >/dev/null 2>&1; then
+        echo tpm-again > /run/suveryn/tpm-enrolled
+        printf '  %s√%s The next start is unattended.\n' "$T" "$R"
+      else
+        printf '  %s!%s The TPM couldn'"'"'t be linked again: the recovery key will be asked at the next start too.\n' "$A" "$R"
+      fi
+    fi
+    rm -f "$KEY"
+    echo recovery-key > /run/suveryn/unlocked-by
+    sleep 2
+    exit 0
+  fi
+  rm -f "$KEY"
+  message="That key doesn't open this disk. Check it against the sheet and try again."
+done
+
+# Five wrong keys: say so, and wait. Nothing else starts.
+printf '\e[0m\e[2J\e[H'
+printf '\e[45;37m %-*s\e[0m\n\n\n' $((cols - 2)) "Sūveryn ${version}"
+printf '  %s! %sThe disk couldn'"'"'t be unlocked: %s wrong keys.%s\n' "$A" "$B" "$TRIES" "$R"
+printf '  %sDe schijf kon niet worden ontgrendeld. Le disque n'"'"'a pas pu être déverrouillé.%s\n\n' "$D" "$R"
+printf '  %sPress Ctrl+Alt+Del to restart and try again with the recovery key.%s\n' "$B" "$R"
+printf '  %sLost the key? The data on this disk can'"'"'t be read without it. Install a fresh appliance and\n' "$D"
+printf '  restore the latest backup.%s\n' "$R"
+echo "suveryn: the data partition couldn't be unlocked (${TRIES} wrong recovery keys)" > /dev/kmsg 2>/dev/null
+trap - EXIT
+stty sane 2>/dev/null
+while :; do sleep 3600; done

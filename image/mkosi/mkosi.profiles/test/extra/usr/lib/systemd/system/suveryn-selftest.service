@@ -3,6 +3,7 @@ Description=sūveryn test system: check the read-only system's rules (test profi
 After=multi-user.target systemd-tmpfiles-setup.service systemd-networkd.service suveryn-identity.service
 # Not while the console installer has the serial console (run-vm-tests step 1).
 ConditionCredential=!suveryn.installer-on-serial
+ConditionCredential=!suveryn.console-on-serial
 
 [Service]
 Type=oneshot

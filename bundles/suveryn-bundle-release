@@ -3,7 +3,7 @@
 image/mkosi/mkosi.extra/usr/lib/suveryn/bundle; this tool uses its format, so the two can't drift.
 
     suveryn-bundle-release make DIR --kind model --name NAME --version VERSION [--title T]
-                                [--description D] [--default]
+                                [--description D] [--description-nl D] [--description-fr D] [--default]
         write DIR/manifest.json: every file in DIR with its size and SHA-256
     suveryn-bundle-release sign DIR (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)
         write DIR/manifest.sig, then check it with the public key
@@ -46,7 +46,8 @@ def fail(msg: str) -> None:
 
 # ---------------------------------------------------------------------------- make
 def make(folder: Path, kind: str, name: str, version: str, title: str | None = None,
-         description: str | None = None, default: bool = False) -> dict:
+         description: str | None = None, default: bool = False, description_nl: str | None = None,
+         description_fr: str | None = None) -> dict:
     if not folder.is_dir():
         fail(f"{folder} isn't a folder")
     files = []
@@ -72,8 +73,10 @@ def make(folder: Path, kind: str, name: str, version: str, title: str | None = N
                 "files": files}
     if title:
         manifest["title"] = title
-    if description:
-        manifest["description"] = description
+    for key, value in (("description", description), ("description_nl", description_nl),
+                       ("description_fr", description_fr)):
+        if value:
+            manifest[key] = value
     if default:
         manifest["default"] = True
     try:
@@ -172,6 +175,8 @@ def main(argv: list[str]) -> int:
     m.add_argument("--version", required=True)
     m.add_argument("--title", help="shown by the installer (C3), e.g. 'Qwen3.8-27B'")
     m.add_argument("--description", help="one line the installer shows under the title")
+    m.add_argument("--description-nl", help="the same line in Dutch")
+    m.add_argument("--description-fr", help="the same line in French")
     m.add_argument("--default", action="store_true", help="selected by default in the installer")
     for name in ("sign", "public-key"):
         s = sub.add_parser(name)
@@ -185,7 +190,8 @@ def main(argv: list[str]) -> int:
     t.add_argument("file", type=Path)
     a = p.parse_args(argv)
     if a.cmd == "make":
-        m = make(a.dir, a.kind, a.name, a.version, a.title, a.description, a.default)
+        m = make(a.dir, a.kind, a.name, a.version, a.title, a.description, a.default, a.description_nl,
+                 a.description_fr)
         print(f"manifest written: {m['kind']} {m['name']} {m['version']}, {len(m['files'])} file(s)")
     elif a.cmd == "sign":
         sig = sign(a.dir, signer(a))
