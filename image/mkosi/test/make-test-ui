@@ -1,0 +1,11 @@
+#!/bin/sh
+# The chat UI's production build, with the web setup's screens (setup.html), for the test system
+# (tracker #37): run-vm-tests drives those screens against the appliance's setup service. Never
+# committed; the appliance image gets the UI with the sūveryn services (#39).
+#   image/mkosi/test/make-test-ui [path/to/suveryn-core]     (before: mkosi -f --profile test build)
+set -eu
+cd "$(dirname "$0")"
+core=$(cd "${1:-../../../../suveryn-core}" && pwd)
+(cd "$core/packages/chat-ui" && npm ci --silent && npm run build --silent)
+rm -rf ui && mkdir ui && cp -r "$core/packages/chat-ui/dist/." ui/
+echo "the chat UI from $core ($(git -C "$core" rev-parse --short HEAD)) in image/mkosi/test/ui (not committed)"

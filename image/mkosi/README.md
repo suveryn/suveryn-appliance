@@ -18,7 +18,8 @@ mode (#37), and the sūveryn services in this system.
 pip install "git+https://github.com/systemd/mkosi.git@v25.3"   # in a venv; pinned
 cd image/mkosi
 sudo mkosi -f build                  # the appliance: linux-generic and firmware, slot A of 32 GiB
-test/make-test-keys                  # once: the test system's bundle keys (#36), never committed
+test/make-test-keys                  # once: the test system's bundle and portal keys (#36, #37), never committed
+test/make-test-ui                    # the chat UI's build for the test system's web setup (#37), never committed
 sudo mkosi -f --profile test build   # the test system: the same layout, small (for run-vm-tests)
 ```
 
@@ -194,8 +195,12 @@ too). The network mode's outgoing rules let mDNS out on the office's link (224.0
 port 5353). The inbound rules, when they come to the image, must let UDP 5353 in.
 
 The web setup (screens 0 to 8, in the browser) is suveryn-core's `setup.html` with
-[`setup`](../../setup/README.md) on the appliance's side; it writes `setup-cert.pem` while open and
-`setup-complete` when it closes. It runs once the services are in this image (#39).
+[`setup`](../../setup/README.md) on the appliance's side, in this image (`mkosi.conf.d/20-web-setup.conf`):
+nginx, the setup service and its units, at `/opt/suveryn/appliance`. It opens at the first start of the
+installed appliance, writes `setup-cert.pem` while open and `setup-complete` when it closes. Its
+provisioning needs the sūveryn services, which come into this image with #39; until then the test
+system runs it with a stand-in (`run-vm-tests` step 4b). The chat UI's build isn't in the appliance
+image yet either (#39); the test system carries one (`test/make-test-ui`).
 
 ## The appliance's identity and system state (#35)
 
@@ -268,9 +273,18 @@ console installer through a terminal emulator (pyte) the way a person would:
    keyboard layout and network file (and, on the first start, its firmware boot entry); the network
    up; the identity made, sealed to the TPM (`host+tpm2`), its private key nowhere in plain form,
    signing and verifying (also with `openssl` alone); the system state (release, slot, root hash,
-   verity, PCR 11); two bundle keys trusted; the installed model verifies;
+   verity, PCR 11); two bundle keys trusted; the installed model verifies; the web setup open, its
+   service running as `suveryn-setup` without capabilities, the setup page at `/` and its certificate;
 4. **boot it again with the stick attached**: the same, from its own disk; the same machine-id and
    identity;
+4b. **the web setup in a browser** (#37 part 6a): port 443 forwarded to the host, where Chromium drives
+   the screens from Welcome to Complete in the setup service's real sandbox: they open in Dutch (the
+   installer's language), the address in use, a refused key, a manifest for another appliance and
+   the right one (signed with the portal's test key for this appliance's real ID), a share outside the
+   office's network and one on it, the recovery key, provisioning (the stand-in, failing once) to
+   Complete, no CSP violations. Inside, the self-test then checks setup closed for good: the units
+   stopped, `/` the chat and `/setup/` 404, the answers and secrets gone, the choices kept. Every later
+   start checks it stays closed;
 5. **the console (C8)**: on the serial console, in Dutch: the addresses, disk, ID and support; the
    network details; the registration QR code; the network changed to a fixed address (applied at
    once, and used at every later start); shut down;

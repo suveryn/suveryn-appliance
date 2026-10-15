@@ -11,6 +11,15 @@ writes /etc/suveryn, /etc/nginx, /var/lib/suveryn and /opt/suveryn/ui.
 What stands in for the appliance: suveryn-provision (stand_in_provision.py: same steps, the real TLS and
 nginx site), the outgoing-traffic check, the identity (a fixed UUID), the portal's key (a test key made
 here), and a share's server (a listener on port 445 at this machine's own address).
+
+    python3 setup/tests/browser_check.py --real [OUT_DIR]
+
+The same with the REAL provisioning (#37 part 6b): on a FRESH test GPU machine (the Pod) after
+`suveryn-provision image`, never one with real documents or an earlier installation (it refuses
+one). suveryn-provision first-boot runs as a test machine (--site test), and afterwards the
+administrator from the screens signs in to the chat through Keycloak and `suveryn-provision verify`
+runs. The administrator's password is made here and never printed. Provisioning takes as long as
+the model download.
 """
 
 import json
@@ -32,11 +41,14 @@ from playwright.sync_api import sync_playwright
 HERE = Path(__file__).resolve().parent
 SETUP = HERE.parent
 REPO = SETUP.parent
-OUT = Path(sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="setup-check-"))
+REAL = "--real" in sys.argv[1:]
+_args = [a for a in sys.argv[1:] if a != "--real"]
+OUT = Path(_args[0] if _args else tempfile.mkdtemp(prefix="setup-check-"))
 APPLIANCE = "7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41"
 NAME = socket.gethostname().split(".")[0]
 HOST = f"{NAME}.local"
-PASSWORD = "violet harbour lantern 47"
+import secrets  # noqa: E402
+PASSWORD = f"lantern {secrets.token_hex(8)} harbour" if REAL else "violet harbour lantern 47"
 results = []
 
 
@@ -76,6 +88,10 @@ def machine() -> dict:
     global SETUP, HERE
     if os.geteuid() != 0:
         sys.exit("browser_check.py: as root, on a disposable machine")
+    if REAL:  # before anything is written
+        for done in ("/etc/suveryn/gateway-oidc.env", "/etc/suveryn/setup-complete", "/var/lib/suveryn/.first-boot-done"):
+            if Path(done).exists():
+                sys.exit(f"browser_check.py --real: {done} exists: this machine was provisioned before. Use a fresh one.")
     run_from = checkout()
     SETUP, HERE = run_from / "setup", run_from / "setup" / "tests"
     subprocess.run(["nginx", "-s", "quit"], capture_output=True)
@@ -84,10 +100,14 @@ def machine() -> dict:
         if comm in ("python3", "runuser") and re.search(r"suveryn-setup (serve|watch)", args):
             os.kill(int(pid), 15)  # an earlier run's
     time.sleep(0.5)
-    for path in ("/etc/suveryn", "/var/lib/suveryn/setup", "/etc/nginx/sites-available/suveryn",
+    if REAL:
+        for path in ("/var/lib/suveryn/setup", "/etc/suveryn/nginx-setup.conf", "/etc/suveryn/tls/setup-cert.pem",
+                     "/etc/nginx/sites-available/suveryn", "/etc/nginx/sites-enabled/suveryn", "/run/suveryn"):
+            shutil.rmtree(path, ignore_errors=True) if Path(path).is_dir() else Path(path).unlink(missing_ok=True)
+    for path in () if REAL else ("/etc/suveryn", "/var/lib/suveryn/setup", "/etc/nginx/sites-available/suveryn",
                  "/etc/nginx/sites-enabled/suveryn", "/run/suveryn"):
         shutil.rmtree(path, ignore_errors=True) if Path(path).is_dir() and not Path(path).is_symlink() else Path(path).unlink(missing_ok=True)
-    Path("/etc/suveryn/tls").mkdir(parents=True)
+    Path("/etc/suveryn/tls").mkdir(parents=True, exist_ok=True)
     ident = Path("/var/lib/suveryn/identity")
     ident.mkdir(parents=True, exist_ok=True)
     (ident / "identity.json").write_text(json.dumps({"uuid": APPLIANCE, "fingerprint": "42a9e1f0" * 8}))
@@ -107,6 +127,8 @@ def machine() -> dict:
     check_tool.chmod(0o755)
     env = {**os.environ, "SUVERYN_PROVISION": str(HERE / "stand_in_provision.py"),
            "SUVERYN_NETWORK_MODE_TOOL": str(check_tool), "STAND_IN_FAIL_AT": "Keycloak", "SUVERYN_SETUP_SEEN_DONE_WAIT": "60"}
+    if REAL:  # the real suveryn-provision first-boot and outgoing-traffic check, as a test machine
+        env = {**os.environ, "SUVERYN_SETUP_SITE": "test", "SUVERYN_SETUP_SEEN_DONE_WAIT": "300"}
     r = subprocess.run([sys.executable, SETUP / "suveryn-setup", "prepare"], env=env, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"prepare failed: {r.stdout[-500:]} {r.stderr[-500:]}")
@@ -122,7 +144,9 @@ def machine() -> dict:
     listener.listen()
     threading.Thread(target=lambda: [listener.accept()[0].close() for _ in iter(int, 1)], daemon=True).start()
     time.sleep(1)
-    return {"serve": serve, "watch": watch, "ip": ip}
+    return {"serve": serve, "watch": watch, "host": HOST, "connect": "127.0.0.1", "address": ip, "share": ip,
+            "appliance": APPLIANCE, "manifest": OUT / "manifest.yaml", "other": OUT / "other.yaml", "out": OUT,
+            "answers": Path("/var/lib/suveryn/setup/answers"), "fails_once": not REAL, "slow": 90 if REAL else 1}
 
 
 def direct():
@@ -136,21 +160,36 @@ VIOLATIONS = """window.__csp = []; document.addEventListener('securitypolicyviol
 
 
 def flow(browser, m):
+    """The screens from Welcome to Complete. `m`: host (<name>.local), connect (the address the browser and
+    the header check reach it at), address (shown on Network), share (a share server on the office's
+    network), appliance (its ID), manifest and other (manifests for it and for another appliance), out
+    (screenshots), answers (the answers folder, when this machine can read it; None for a VM)."""
+    HOST, OUT = m["host"], m["out"]
     ctx = browser.new_context(ignore_https_errors=True, accept_downloads=True, locale="en-GB")
     ctx.add_init_script(VIOLATIONS)
     pg = ctx.new_page()
-    errors = []
+    m["page"] = pg  # for browse() to show where it stopped
+    errors, console = [], []
     pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.on("console", lambda msg: console.append(f"{msg.type}: {msg.text}"))
+    m["console"] = console
     pg.goto(f"https://{HOST}/")
+    pg.locator("h1").first.wait_for(timeout=m.get("slow", 1) * 30000)
+    if m.get("language"):  # the language chosen at installation; the rest of the flow is in English
+        lang = pg.evaluate("document.documentElement.lang")
+        check("the screens open in the language chosen at installation", lang.startswith(m["language"]), lang)
+        if not lang.startswith("en"):
+            pg.locator(".ui-select-button").click()
+            pg.get_by_role("option", name="English").click()
     pg.get_by_role("heading", name="Set up your sūveryn appliance", level=1).wait_for()
-    r = direct().open(urllib.request.Request("https://127.0.0.1/", headers={"Host": HOST}), timeout=10)
+    r = direct().open(urllib.request.Request(f"https://{m['connect']}/", headers={"Host": HOST}), timeout=10)
     csp = r.headers.get("Content-Security-Policy", "")
     check("the setup page has the strict CSP and the security headers", "style-src 'self'" in csp
           and r.headers.get("X-Frame-Options") == "DENY" and r.headers.get("Strict-Transport-Security"))
     pg.get_by_role("button", name="Get started").click()
 
     pg.get_by_role("heading", name="Network", level=1).wait_for()
-    check("Network shows the address in use", m["ip"] in pg.content(), m["ip"])
+    check("Network shows the address in use", m["address"] in pg.content(), m["address"])
     pg.get_by_role("button", name="Continue").click()
 
     pg.get_by_role("heading", name="Administrator account", level=1).wait_for()
@@ -161,8 +200,9 @@ def flow(browser, m):
     pg.get_by_role("button", name="Continue").click()
 
     pg.get_by_role("heading", name="Certificate", level=1).wait_for()
-    check("the administrator's password is on the appliance once, readable by the setup service only",
-          oct(os.stat("/var/lib/suveryn/setup/answers/administrator-password").st_mode & 0o777) == "0o600")
+    if m["answers"]:
+        check("the administrator's password is on the appliance once, readable by the setup service only",
+              oct(os.stat(m["answers"] / "administrator-password").st_mode & 0o777) == "0o600")
     # The office's own certificate, with a key that isn't its own: the appliance refuses it.
     certs = OUT / "certs"
     certs.mkdir(exist_ok=True)
@@ -182,13 +222,13 @@ def flow(browser, m):
     pg.get_by_role("button", name="Continue").click()
 
     pg.get_by_role("heading", name="Support agreement", level=1).wait_for()
-    check("Support shows the appliance's ID for registration", APPLIANCE in pg.content())
+    check("Support shows the appliance's ID for registration", m["appliance"] in pg.content())
     drop = pg.locator("input[type=file]").first
-    drop.set_input_files(OUT / "other.yaml")
+    drop.set_input_files(m["other"])
     other = pg.get_by_text("This manifest is for another appliance.")
     other.wait_for()
     check("Support: a manifest for another appliance is refused by the appliance", other.is_visible())
-    pg.locator("input[type=file]").first.set_input_files(OUT / "manifest.yaml")
+    pg.locator("input[type=file]").first.set_input_files(m["manifest"])
     pg.get_by_text("Sūveryn Enterprise").first.wait_for()
     check("Support: the signed manifest for this appliance is accepted and shown", True)
     pg.get_by_role("button", name="Continue").click()
@@ -199,7 +239,7 @@ def flow(browser, m):
     pg.get_by_role("button", name="Test connection").click()
     pg.get_by_text("This address isn't on your own network.").wait_for()
     check("Backups: a share outside the office's network is refused", True)
-    pg.locator("input[name=address]").fill(f"\\\\{m['ip']}\\backups")
+    pg.locator("input[name=address]").fill(f"\\\\{m['share']}\\backups")
     pg.locator("input[name=user]").fill("backup-suveryn")
     pg.locator("input[name=password]").fill("share secret 1")
     pg.get_by_role("button", name="Test connection").click()
@@ -212,26 +252,53 @@ def flow(browser, m):
     pg.get_by_role("button", name="Continue").click()
 
     pg.get_by_role("heading", name="Review", level=1).wait_for()
-    answers = json.loads(Path("/var/lib/suveryn/setup/answers/answers.json").read_text())
     recipient = re.search(r"# public key: (age1\S+)", key).group(1)
+    state = json.loads(direct().open(urllib.request.Request(f"https://{m['connect']}/setup/v1/state",
+                                                            headers={"Host": HOST}), timeout=10).read())
+    secret_kept = m["answers"] and any("AGE-SECRET" in p.read_text(errors="ignore") for p in m["answers"].iterdir())
     check("only the recovery key's public half reached the appliance",
-          answers["backups"]["recipient"] == recipient and "AGE-SECRET-KEY" not in json.dumps(answers)
-          and not any("AGE-SECRET" in p.read_text(errors="ignore") for p in Path("/var/lib/suveryn/setup/answers").iterdir()))
+          state["answers"]["backups"]["recipient"] == recipient and "AGE-SECRET-KEY" not in json.dumps(state)
+          and not secret_kept)
     pg.screenshot(path=OUT / "6-review.png", full_page=True)
     pg.get_by_role("button", name="Start provisioning").click()
 
-    # The stand-in fails once at Keycloak: the screen says so and offers Try again.
-    pg.get_by_role("button", name="Try again").wait_for(timeout=30000)
-    check("Provisioning: a failed step is shown with Try again",
-          pg.locator("[data-state=failed]").count() >= 1)
-    pg.screenshot(path=OUT / "7-failed.png", full_page=True)
-    pg.get_by_role("button", name="Try again").click()
-    pg.get_by_role("heading", name="Setup complete", level=1).wait_for(timeout=60000)
+    if m.get("fails_once", True):
+        # The stand-in fails once at Keycloak: the screen says so and offers Try again.
+        pg.get_by_role("button", name="Try again").wait_for(timeout=m.get("slow", 1) * 30000)
+        check("Provisioning: a failed step is shown with Try again",
+              pg.locator("[data-state=failed]").count() >= 1)
+        pg.screenshot(path=OUT / "7-failed.png", full_page=True)
+        pg.get_by_role("button", name="Try again").click()
+    pg.get_by_role("heading", name="Setup complete", level=1).wait_for(timeout=m.get("slow", 1) * 60000)
     check("Provisioning runs to Complete through the switch to the real nginx site", True)
     check("Complete shows the sign-in address", f"https://{HOST}" in pg.content())
     pg.screenshot(path=OUT / "8-complete.png", full_page=True)
     check("no CSP violations and no script errors on any screen",
           pg.evaluate("window.__csp.length") == 0 and not errors, f"{pg.evaluate('window.__csp')} {errors}")
+    ctx.close()
+    if REAL:
+        signed_in(browser, m)
+
+
+def signed_in(browser, m):
+    """The administrator from the screens signs in to the chat through Keycloak, once setup has closed."""
+    for _ in range(60):
+        if Path("/etc/suveryn/setup-complete").exists():
+            break
+        time.sleep(5)
+    ctx = browser.new_context(ignore_https_errors=True, locale="en-GB")
+    pg = ctx.new_page()
+    try:
+        pg.goto(f"https://{m['host']}/")
+        pg.locator("#username").wait_for(timeout=60000)
+        pg.locator("#username").fill("filip@firm.example")
+        pg.locator("#password").fill(PASSWORD)
+        pg.locator("#kc-login").click()
+        pg.get_by_role("button", name="Sign out").wait_for(timeout=60000)  # the chat's sidebar, signed in
+        check("the administrator from the screens signs in to the chat through Keycloak", True)
+    except Exception as e:  # noqa: BLE001
+        pg.screenshot(path=m["out"] / "9-sign-in.png", full_page=True)
+        check("the administrator from the screens signs in to the chat through Keycloak", False, type(e).__name__)
     ctx.close()
 
 
@@ -258,6 +325,10 @@ def after(m):
           and PASSWORD not in json.dumps(kept) and "share secret 1" not in json.dumps(kept))
     check("the share's password is kept for the backup service, root only",
           oct(os.stat("/etc/suveryn/backups-share.secret").st_mode & 0o777) == "0o600")
+    if REAL:
+        r = subprocess.run([sys.executable, REPO / "provision" / "suveryn-provision", "verify"], capture_output=True, text=True)
+        (OUT / "verify.log").write_text(r.stdout + r.stderr)
+        check("suveryn-provision verify passes after the web setup", r.returncode == 0, f"log: {OUT / 'verify.log'}")
 
 
 def main():
@@ -276,11 +347,17 @@ def main():
 
 def browse(m):
     with sync_playwright() as p:
-        # The browser reaches the appliance at 127.0.0.1 (some test machines send everything else through a proxy).
-        browser = p.chromium.launch(args=[f"--host-resolver-rules=MAP {HOST} 127.0.0.1", "--no-proxy-server"],
+        # The browser reaches the appliance at m["connect"] (some test machines send everything else through a proxy).
+        browser = p.chromium.launch(args=[f"--host-resolver-rules=MAP {m['host']} {m['connect']}", "--no-proxy-server"],
                                     env={k: v for k, v in os.environ.items() if "proxy" not in k.lower()})
         try:
             flow(browser, m)
+        except Exception:
+            pg = m.get("page")
+            if pg and not pg.is_closed():  # where it stopped: a screenshot, the page's text and console
+                pg.screenshot(path=m["out"] / "stopped.png", full_page=True)
+                (m["out"] / "stopped.txt").write_text(pg.inner_text("body") + "\n\n" + "\n".join(m.get("console", [])))
+            raise
         finally:
             browser.close()
 
