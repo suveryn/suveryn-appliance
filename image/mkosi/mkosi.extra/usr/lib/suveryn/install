@@ -115,7 +115,8 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
         raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})")
     mac = ports[iface]
     summary = {"interface": iface, "mac": mac}
-    lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]"]
+    lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]",
+             "MulticastDNS=yes"]
     if args.address == "dhcp":
         if args.gateway or args.dns:
             raise Refused("--gateway and --dns go with a fixed address, not DHCP")
@@ -180,7 +181,8 @@ def list_models(folder: Path | None) -> list[dict]:
             r = bundle.verify(d)
             out.append({"folder": d.name, "valid": True, "kind": r["kind"], "name": r["name"],
                         "version": r["version"], "size": r["size"], "key": r["key"], "title": r["title"],
-                        "description": r["description"], "default": r["default"]})
+                        "description": r["description"], "description_nl": r["description_nl"],
+                        "description_fr": r["description_fr"], "default": r["default"]})
         except bundle.Invalid as e:
             out.append({"folder": d.name, "valid": False, "error": str(e)})
     return out

@@ -5,3 +5,5 @@ Type=ether
 
 [Network]
 DHCP=yes
+# Answers for <name>.local (resolved.conf.d/50-suveryn-mdns.conf).
+MulticastDNS=yes

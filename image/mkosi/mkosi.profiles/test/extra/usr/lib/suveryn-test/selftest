@@ -10,7 +10,9 @@
 #   first-boot       the installed system's first start: also the installer's firmware boot entry
 #   stick-beside     started from the stick, with an installed appliance as the second disk: installer
 #                    mode, and that appliance's data partition is never opened
-#   tpm-replaced     check the running system; the identity, sealed to the old TPM, must be unusable
+#   tpm-replaced     check the running system; the identity, sealed to the old TPM, must be unusable;
+#                    the data partition opened with the recovery key (C8b) and the TPM enrolled again
+#   tpm-again        the next start with that TPM: unlocked by the TPM again, without a prompt
 #   (none)           check the running system (the installed appliance)
 out=/dev/ttyS0
 say() { echo "SUVERYN-SELFTEST $*" > "$out"; }
@@ -69,6 +71,11 @@ print("good valid; changed and untrusted refused")'
 fi
 
 root_on_boot_disk
+case "$mode" in
+  tpm-replaced) check "opened with the recovery key, TPM enrolled again" bash -c 'test "$(cat /run/suveryn/unlocked-by)" = recovery-key && test -e /run/suveryn/tpm-enrolled && cryptsetup luksDump "$(cat /run/suveryn/data-partition)" | grep -c systemd-tpm2' ;;
+  *) check "unlocked by the TPM"     bash -c 'test "$(cat /run/suveryn/unlocked-by)" = tpm' ;;
+esac
+check "mDNS: answers for <name>.local" bash -c 'i=$(ls /sys/class/net | grep -v "^lo$" | head -1); resolvectl status "$i" | grep -q "+mDNS" && ss -uln | grep -q ":5353 " && echo "$(hostname).local on $i"'
 check "installed mode, own disk"      bash -c 'test "$(cat /run/suveryn/boot-mode)" = installed && d=$(cat /run/suveryn/data-partition) && case "$d" in "$(cat /run/suveryn/boot-disk)"*) echo "data $d on boot disk $(cat /run/suveryn/boot-disk)";; *) exit 1;; esac'
 check "root from the verity device"   test "$(findmnt -no SOURCE /)" = /dev/mapper/root
 check "root mounted read-only"        sh -c 'findmnt -no OPTIONS / | grep -qw ro && echo "$(findmnt -no FSTYPE /)"'
@@ -97,7 +104,7 @@ assert open("/var/lib/suveryn/identity/public.pem").read() == d["public_key"]
 print(d["uuid"])'
 check "fingerprint is the key's"      bash -c "f=\$(openssl pkey -pubin -in $iddir/public.pem -outform DER | tail -c 32 | sha256sum | cut -c1-64); grep -q \"\$f\" $iddir/identity.json && echo \${f:0:16}…"
 check "private key not stored plain"  bash -c "test \"\$(stat -c %a $iddir/private.cred)\" = 600 && ! grep -qa 'PRIVATE KEY' $iddir/private.cred && ! openssl pkey -in $iddir/private.cred -noout 2>/dev/null && ! grep -rqa 'PRIVATE KEY' $iddir /var/lib/suveryn/etc"
-if [ "$mode" = tpm-replaced ]; then
+if [ "$mode" = tpm-replaced ] || [ "$mode" = tpm-again ]; then
   check "identity sealed to the TPM"  bash -c "grep -q '\"sealed\": \"host+tpm2\"' $iddir/identity.json"
   check "identity unusable with another TPM" bash -c "! $id show >/tmp/show 2>&1 && grep -q 'Usable: *NO' /tmp/show && ! $id sign /etc/os-release >/dev/null 2>&1 && echo refused"
   check "identity not replaced"       bash -c "test \$(ls $iddir | wc -l) -eq 4"
@@ -126,6 +133,8 @@ check "two bundle keys trusted"       bash -c "test \$($bundle keys | wc -l) -eq
 check "the installer's settings"     bash -c 'test "$(hostname)" = test-appliance && test "$(readlink -f /etc/localtime)" = /usr/share/zoneinfo/Europe/Brussels && grep -q "^MACAddress=" /etc/systemd/network/10-suveryn.network && python3 -c "import json; d=json.load(open(\"/var/lib/suveryn/installed.json\")); assert d[\"name\"] == \"test-appliance\"" && echo "$(hostname), $(date +%Z)"'
 check "the installer's network file in use" bash -c 'i=$(ls /sys/class/net | grep -v "^lo$" | head -1); for n in $(seq 30); do f=$(networkctl status --no-pager "$i" 2>/dev/null | sed -n "s/^ *Network File: //p"); [ -n "$f" ] && break; sleep 1; done; echo "$i: $f"; test "$(readlink -f "$f")" = "$(readlink -f /etc/systemd/network/10-suveryn.network)"'
 check "the installer's keyboard layout" grep -q '^XKBLAYOUT="be"' /etc/default/keyboard
+check "the console's font and layout set" bash -c 'systemctl is-active console-setup.service || { journalctl -b -u console-setup --no-pager | tail -3; exit 1; }'
+check "the installer's language"      python3 -c 'import json; d = json.load(open("/var/lib/suveryn/installed.json")); assert d["language"] == "nl", d; print(d["language"])'
 if [ "$mode" = first-boot ]; then
   check "the installer's boot entry"   bash -c 'efibootmgr | grep -i suveryn && efibootmgr | sed -n "s/^BootOrder: //p"'
 fi

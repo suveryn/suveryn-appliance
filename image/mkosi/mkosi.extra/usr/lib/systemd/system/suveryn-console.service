@@ -1,0 +1,26 @@
+[Unit]
+Description=sūveryn console: how to reach this appliance (installed appliance only)
+Documentation=file:/usr/lib/suveryn/console-ui
+# Not on the installer stick: there the installer has the console.
+ConditionPathExists=!/run/suveryn/installer-mode
+After=systemd-user-sessions.service systemd-networkd.service console-setup.service suveryn-identity.service
+Conflicts=getty@tty1.service
+Before=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/sbin/setvtrgb /usr/lib/suveryn/console-colours
+ExecStartPre=-/usr/bin/dmesg --console-level err
+ExecStart=/usr/lib/suveryn/console-ui
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Environment=TERM=linux ESCDELAY=50
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

@@ -32,9 +32,14 @@ mkdir -p /run/suveryn
 if [ -n "$data" ]; then
   say "installed appliance on $disk: unlocking /dev/$data"
   echo installed > /run/suveryn/boot-mode
-  # The TPM (PCR 7) first; if it can't, the console asks for the recovery key: 5 typed attempts
-  # (systemd counts the failed TPM attempt as one of the tries, hence tries=6).
-  /usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,tries=6
+  # The TPM (PCR 7) first, without asking anything; if it can't, the recovery key on the console
+  # (unlock-screen, C8b: 5 attempts, then the TPM is enrolled again).
+  if /usr/lib/systemd/systemd-cryptsetup attach suveryn-data "/dev/$data" - tpm2-device=auto,headless=true; then
+    echo tpm > /run/suveryn/unlocked-by
+  else
+    say "the TPM can't unlock /dev/$data: asking for the recovery key"
+    /usr/lib/suveryn/unlock-screen "/dev/$data"
+  fi
   # Nothing on the data partition can be run as a program.
   mount -t ext4 -o noexec,nosuid,nodev /dev/mapper/suveryn-data "$SYSROOT/var"
   echo "/dev/$data" > /run/suveryn/data-partition
