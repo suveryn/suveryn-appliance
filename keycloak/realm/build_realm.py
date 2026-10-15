@@ -9,7 +9,8 @@ alike. This script takes it at the commit pinned in realm-lock.json (checked by 
 the production settings over it (PRODUCTION below). Writes, both 0600 and only for provisioning:
 
 - ``suveryn-realm.json``: to import into Keycloak once (``kc.sh import`` or the admin console), then
-  delete: it contains the client secret;
+  delete: it contains the client secret (and, with ``--administrator``, the office's administrator
+  from the web setup, whose password is in it only as a pbkdf2-sha512 hash);
 - ``gateway-oidc.env``: SUVERYN_OIDC_ISSUER, SUVERYN_OIDC_CLIENT_ID, SUVERYN_OIDC_CLIENT_SECRET and
   SUVERYN_PUBLIC_URL for the gateway.
 
@@ -20,6 +21,7 @@ Set SUVERYN_CORE_REPO to a local mirror to build without internet access. Python
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -52,7 +54,18 @@ PRODUCTION = {
     "loginTheme": "suveryn",
     "accountTheme": "suveryn",
     "emailTheme": "suveryn",
+    # The administrator account's rules from the web setup (suveryn-tracker#37), for every account:
+    # at least 15 characters, not the user name or email address. The leaked-password list
+    # (passwordBlacklist) joins once it exists on the appliance (open point, #37).
+    "passwordPolicy": "length(15) and notUsername and notEmail",
 }
+MIN_PASSWORD = 15
+# What the office's administrator may do in Keycloak's admin console for this realm: manage the
+# office's own accounts. Nothing on the realm's settings, clients or other realms.
+ADMIN_CLIENT_ROLES = ["manage-users", "view-users", "query-users", "query-groups"]
+# Keycloak's pbkdf2-sha512 credential (its default before Keycloak 24, still read by 26): the
+# password never appears in the realm file, only its hash.
+HASH_ITERATIONS = 210_000
 
 
 def fail(message: str):
@@ -103,6 +116,30 @@ def production_realm(dev: dict, public_url: str, client_secret: str) -> dict:
     return realm
 
 
+def administrator_user(name: str, email: str, password: str, salt: bytes | None = None) -> dict:
+    """The office's administrator from the web setup: realm role suveryn-admin and user management.
+    Signs in with the email address (the user name is the same address, in lower case)."""
+    name, email = " ".join(name.split()), email.strip().lower()
+    if not name or "@" not in email or len(password) < MIN_PASSWORD:
+        fail("the administrator needs a name, an email address and a password of at least 15 characters")
+    # First name up to the first space: "Anne de Smet" is Anne, de Smet (Belgian surnames carry their particles).
+    first, _, last = name.partition(" ")
+    salt = salt or secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, HASH_ITERATIONS)
+    b64 = lambda b: base64.b64encode(b).decode()  # noqa: E731
+    return {
+        "username": email, "email": email, "emailVerified": True, "enabled": True,
+        "firstName": first, "lastName": last,
+        "realmRoles": ["suveryn-admin"], "clientRoles": {"realm-management": ADMIN_CLIENT_ROLES},
+        "credentials": [{
+            "type": "password", "userLabel": "web setup",
+            "secretData": json.dumps({"value": b64(digest), "salt": b64(salt), "additionalParameters": {}}),
+            "credentialData": json.dumps({"hashIterations": HASH_ITERATIONS, "algorithm": "pbkdf2-sha512",
+                                          "additionalParameters": {}}),
+        }],
+    }
+
+
 def verify(realm: dict, public_url: str) -> None:
     """Refuse a realm that doesn't meet the production rules, whatever the development realm says."""
     problems = []
@@ -112,6 +149,9 @@ def verify(realm: dict, public_url: str) -> None:
         problems.append("sign-in or admin events are off")
     if realm.get("registrationAllowed") or realm.get("identityProviders"):
         problems.append("self-registration or external identity providers are on")
+    m = re.search(r"\blength\((\d+)\)", realm.get("passwordPolicy", ""))
+    if not m or int(m.group(1)) < MIN_PASSWORD or "notUsername" not in realm["passwordPolicy"]:
+        problems.append(f"the password policy doesn't require {MIN_PASSWORD} characters and not the user name")
     if not realm.get("bruteForceProtected"):
         problems.append("brute-force protection is off")
     for c in realm["clients"]:
@@ -137,6 +177,8 @@ def main() -> None:
     ap.add_argument("--public-url", help="the https URL people open sūveryn at (also Keycloak's, under /realms)")
     ap.add_argument("--issuer-base", help="Keycloak's public base URL; default <public-url>/idp, as in keycloak.conf.example")
     ap.add_argument("--out", type=Path, help="folder to write suveryn-realm.json and gateway-oidc.env to (0600)")
+    ap.add_argument("--administrator", type=Path, metavar="FILE",
+                    help="JSON {name, email, password}: the office's administrator, added to the realm (web setup)")
     ap.add_argument("--update", metavar="REF", help="move realm-lock.json to this suveryn-core commit, tag or branch")
     a = ap.parse_args()
     lock = json.loads(LOCK.read_text())
@@ -155,6 +197,9 @@ def main() -> None:
         fail("suveryn-core's realm differs from realm-lock.json")
     secret = secrets.token_urlsafe(32)
     realm = production_realm(json.loads(data), public_url, secret)
+    if a.administrator:
+        admin = json.loads(a.administrator.read_text())
+        realm["users"] = [*realm.get("users", []), administrator_user(admin["name"], admin["email"], admin["password"])]
     a.out.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_private(a.out / "suveryn-realm.json", json.dumps(realm, indent=2, ensure_ascii=False) + "\n")
     write_private(a.out / "gateway-oidc.env", "".join(f"{k}={v}\n" for k, v in {
