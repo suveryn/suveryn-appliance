@@ -1,0 +1,120 @@
+# Web setup (the appliance's side)
+
+The first start of an appliance opens the web setup at `https://<name>.local/`, from another computer
+on the office's network (suveryn-tracker#37; design in
+[`docs/design/first-boot-setup`](../docs/design/first-boot-setup/README.md)). The screens are
+suveryn-core's chat UI (`setup.html`, packages/chat-ui). This folder is what answers them: it checks
+and keeps the office's answers, runs provisioning with them, and closes setup once it is done.
+
+| File | What |
+|---|---|
+| [`suveryn-setup`](suveryn-setup) | `prepare`, `serve`, `provision` (and `watch` for a machine without systemd) |
+| [`systemd/`](systemd) | `suveryn-setup.service` (prepare, then serve), `suveryn-setup-provision.path` and `.service` |
+| [`nginx-setup.conf`](nginx-setup.conf) | The setup locations: the page at `/` and the API at `/setup/v1/`, from private addresses only |
+| [`nginx-setup-site.conf.template`](nginx-setup-site.conf.template) | The site before provisioning: only those locations and the page's files |
+| [`tests/`](tests) | Unit tests, and a browser check from Welcome to Complete |
+
+`suveryn-provision image` installs the units and the `suveryn-setup` user; the units run this folder
+from the image's checkout at `/opt/suveryn/appliance`.
+
+## Three parts, so nothing on the network runs as root
+
+| Part | Runs as | Does |
+|---|---|---|
+| **prepare** (`ExecStartPre=+`) | root | Writes `/var/lib/suveryn/setup/facts.json`: the name, the language chosen at installation, the appliance's identity (UUID and key fingerprint, #35) and the installed models. Makes the appliance's own certificate for `<name>.local` and its address (the local CA's, as provisioning makes it; it is kept when the office chooses "self-signed"), copies it to `/etc/suveryn/tls/setup-cert.pem` for the console (C8), and gives nginx the setup site |
+| **serve** | `suveryn-setup`, no capabilities, writes only its own folder | Answers the screens on `127.0.0.1:8090`, through nginx. Checks every answer as the screens do, keeps it in `/var/lib/suveryn/setup/answers/` (0700) and asks for provisioning by writing `answers/start` |
+| **provision** (started by the path unit) | root | Reads the answers back as untrusted input, checks them again, runs `suveryn-provision first-boot` with them, reports progress in `progress.json`, and closes setup |
+
+The answers folder holds the administrator's password, a share's password and the office's private
+key until setup closes, each 0600, and is then deleted with everything in it. Files are written
+through a new file and a rename and read without following links, so neither side can be tricked
+into writing or reading elsewhere through a link the other left.
+
+## The API
+
+The contract is at the top of suveryn-core's
+[`packages/chat-ui/src/setup/api.ts`](https://github.com/suveryn/suveryn-core/blob/main/packages/chat-ui/src/setup/api.ts);
+`tests/test_setup.py` checks that every request in it is answered. Refusals are 422 with
+`{"errors": {field: code}}` or `{"error": code}`, and the screens show each code in the office's
+language.
+
+| Request | What the appliance checks |
+|---|---|
+| `GET state` | (The name, the address, gateway and resolver in use, the language, the identity, the models, the USB disks plugged in now, the answers so far without secrets, provisioning's progress) |
+| `PUT answers/network` | Connected (approved destinations or everything) or air-gapped |
+| `PUT answers/administrator` | A name; an email address; a password of at least 15 characters, not common, not containing the name, the email's local part or the appliance's name: the screen's rules, the same list |
+| `PUT answers/certificate` | Self-signed: names `<name>.local` and the address. Own: a PEM certificate (and its chain, in the same file or apart) and an unencrypted PEM private key; the key belongs to the certificate, it hasn't expired, it covers `<name>.local` (a `*.local` wildcard does), and the chain leads to it. With `openssl`, the files in memory only |
+| `POST manifest` | A support manifest ([`support/`](../support/README.md)): signed by a trusted portal key, for this appliance, not expired |
+| `PUT answers/support` | `{"skipped": true}` |
+| `POST backups/test` | The share's address (`\\server\share` or `server:/path`) is on the office's own network (private or link-local) and its server answers on 445 (SMB) or 2049 (NFS). **Reachability only**: signing in and writing a test file need the backup service's mount (tracker #33) |
+| `PUT answers/backups` | A USB disk plugged in now, or a share's address; 14, 30, 90 or 365 days; an age recipient (`age1…`, bech32 checksum checked). The recovery key's private half never reaches the appliance |
+| `POST provision` | Every step answered. Starts provisioning, or starts it again after a failure; while it runs or once done, answers can't change |
+| `GET provision` | (Progress: `running`, `done` or `failed`, per step) |
+
+A request that says where it comes from must come from the appliance's own page (`Origin`,
+`Sec-Fetch-Site`), and a body must be JSON (or the manifest's bytes), which a page elsewhere can't
+send without the browser asking first. The service logs method, path and status only.
+
+## Provisioning and closing
+
+`suveryn-setup provision` runs:
+
+```bash
+suveryn-provision first-boot --public-url https://<name>.local --network-mode <mode> [--outbound <outgoing>] \
+    --site on-premise --administrator <file in /run, deleted afterwards> [--models-from <a disk labelled SUVERYN-MODELS>]
+```
+
+and turns its `== step` lines into the screen's five steps: **database** (the GPU licence check, the
+network mode and its enforcement, PostgreSQL), **sign-in** (Keycloak and the production realm, with
+the office's administrator in it as a hash only; see [`keycloak/realm`](../keycloak/realm/README.md)),
+**models**, **web** (TLS, nginx, the services, `verify`) and **outgoing** (`suveryn-network-mode
+check`: limited, blocked, not limited, or not checked when all outgoing traffic is allowed). A
+failure marks its step, the screen offers Try again, and nothing entered is lost. The log is
+`/var/log/suveryn/setup-provision.log`, without secrets.
+
+Once done it keeps what later parts read: `/etc/suveryn/support/manifest.yaml`,
+`/etc/suveryn/backups.json` (where, how long, the recipient) and the share's password in
+`/etc/suveryn/backups-share.secret` (0600). Then it waits until the browser has shown Complete (at
+most 30 minutes) and closes setup:
+
+1. the office's own certificate, if chosen, replaces the local one, and its root certificate joins
+   the appliance's trust store (the gateway reaches Keycloak at the public name);
+2. `/etc/suveryn/nginx-setup.conf` is deleted and nginx reloaded: `/` is the chat, `/setup/` is 404;
+3. `/etc/suveryn/setup-answers.json` keeps what was chosen, without secrets, and
+   `/etc/suveryn/setup-complete` is written (the console shows setup as complete);
+4. the answers folder is deleted, and the setup units are disabled.
+
+The certificate the browser accepted during setup stays the same until Complete is on screen: the
+self-signed one is the one provisioning keeps, and the office's own goes in only at step 1.
+
+## Testing
+
+```bash
+python3 -m pytest setup/tests               # any machine with openssl; SUVERYN_CORE=<suveryn-core> for the contract checks
+sudo python3 setup/tests/browser_check.py   # a disposable machine only: see its header
+```
+
+The browser check serves suveryn-core's production setup page with nginx and the appliance's real
+headers, runs this service as `suveryn-setup`, and walks every screen in Chromium: a refused key, a
+manifest for another appliance, a share outside the office's network, a provisioning failure and Try
+again, Complete, and the switch to the real site afterwards (18 checks, no CSP violations). It
+stands in for suveryn-provision (`stand_in_provision.py`: the same steps, with the real TLS and
+nginx site), the outgoing-traffic check, the identity and the portal's key.
+
+**Not yet tested:** the units under systemd and a real `suveryn-provision first-boot` from the web
+setup; that is the end-to-end test in a virtual machine (#37 part 6).
+
+## Open
+
+- **The leaked-password list** (open point, #37): the common-password list is the screen's short
+  placeholder, kept identical by a test. The real list goes on the appliance, shared with Keycloak's
+  `passwordBlacklist`.
+- **The share test** reaches the server only. Signing in and writing come with the backup service
+  (#33), which mounts the share.
+- **Models from bundles:** on an appliance installed from the stick (mkosi), the installer copies
+  signed model bundles to `/var/lib/suveryn/bundles`; provisioning still takes the LLM files from
+  suveryn-core's manifest (downloaded, or from a `SUVERYN-MODELS` disk). Joining the two is the
+  image split (#39).
+- **Keycloak's temporary admin** (`suveryn-setup` in the master realm) is still created by
+  provisioning; with the office's administrator now made by the web setup it can be removed at the
+  end of provisioning.

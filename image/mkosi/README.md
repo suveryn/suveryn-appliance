@@ -193,7 +193,9 @@ systemd-resolved answers for the appliance's name over mDNS on the office's netw
 too). The network mode's outgoing rules let mDNS out on the office's link (224.0.0.251 and ff02::fb,
 port 5353). The inbound rules, when they come to the image, must let UDP 5353 in.
 
-Still to come in #37: the web setup (screens 0 to 8, in the browser).
+The web setup (screens 0 to 8, in the browser) is suveryn-core's `setup.html` with
+[`setup`](../../setup/README.md) on the appliance's side; it writes `setup-cert.pem` while open and
+`setup-complete` when it closes. It runs once the services are in this image (#39).
 
 ## The appliance's identity and system state (#35)
 
