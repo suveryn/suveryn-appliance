@@ -81,8 +81,10 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 }
 
 /* ---------------------------------------------------------------- the card */
+/* 560px wide, as the web setup's card (its design: "a 560 px card", the same frame as this sign-in;
+   suveryn-core packages/chat-ui/src/ui/ui.css, --card-width). */
 .suv-card.pf-v5-c-login__main {
-  width: 100%; max-width: 400px; margin: 0; align-self: center;
+  width: 100%; max-width: 560px; margin: 0; align-self: center;
   background: var(--suv-card); border: 1px solid var(--suv-line); border-radius: 14px;
   box-shadow: none; padding: 0;
 }
@@ -110,8 +112,18 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .suv-language .pf-v5-c-form-control { width: 9.5rem; }
 .suv-card .pf-v5-c-login__main-header-utilities .pf-v5-c-form-control {
   --pf-v5-c-form-control--BorderRadius: 6px;
-  font-size: 13px; color: var(--suv-text-dim); background: transparent; min-width: 0;
+  --pf-v5-c-form-control--PaddingTop: 7px; --pf-v5-c-form-control--PaddingBottom: 7px;
+  --pf-v5-c-form-control--PaddingLeft: 10px;
+  font-size: 13px; color: var(--suv-text-dim); background: transparent; min-width: 0; min-height: 32px;
 }
+.suv-card .pf-v5-c-login__main-header-utilities .pf-v5-c-form-control > select { line-height: 16px; }
+
+/* ---------------------------------------------------------------- sizes
+   The heights of the web setup and the chat UI (suveryn-core packages/chat-ui/src/ui/ui.css,
+   "sizes"; the setup design): fields and buttons 44px (fields 11px 14px at 15px, the button 12px
+   20px at 14.5px), the language menu 32px. Measured on Keycloak 26.8: PatternFly's own were 34.5px
+   for fields and 42.5px for the button. PatternFly's line-height variable doesn't reach the input,
+   so its line height is set on it directly. */
 
 /* ---------------------------------------------------------------- form fields */
 .suv-card .pf-v5-c-form { gap: 16px; }
@@ -122,8 +134,11 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-form-control--after--BorderColor: transparent;
   --pf-v5-c-form-control--hover--after--BorderBottomColor: transparent;
   --pf-v5-c-form-control--focus--after--BorderBottomColor: transparent;
-  border-radius: 6px; background: var(--suv-bg); font-family: var(--suv-font-body); font-size: 15px;
+  --pf-v5-c-form-control--PaddingTop: 11px; --pf-v5-c-form-control--PaddingBottom: 11px;
+  --pf-v5-c-form-control--PaddingLeft: 14px; --pf-v5-c-form-control--PaddingRight: 14px;
+  border-radius: 6px; background: var(--suv-bg); font-family: var(--suv-font-body); font-size: 15px; min-height: 44px;
 }
+.suv-card .pf-v5-c-form-control > :is(input, select) { line-height: 20px; }
 .suv-card .pf-v5-c-form-control::before { border: 1px solid var(--suv-line); border-radius: 6px; }
 .suv-card .pf-v5-c-form-control::after { display: none; }
 /* teal focus on the inputs, replacing the browser outline */
@@ -150,6 +165,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
   display: inline-flex; align-items: center; justify-content: center;  /* icon centred, not on the text baseline */
+  min-height: 44px;  /* as high as the field it sits in */
 }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control .suv-icon { display: block; }
 /* field and button are one box: no line between them, and the whole box turns teal on focus */
@@ -185,7 +201,8 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-button--m-primary--active--BackgroundColor: var(--suv-accent-hover);
   --pf-v5-c-button--m-primary--active--Color: var(--suv-on-accent);
   background-color: var(--suv-accent); color: var(--suv-on-accent);
-  border-radius: 6px; font-family: var(--suv-font-body); font-weight: 600; font-size: 15px; padding: 10px 16px;
+  border-radius: 6px; font-family: var(--suv-font-body); font-weight: 600; font-size: 14.5px; line-height: 1.2;
+  padding: 12px 20px; min-height: 44px;
 }
 .suv-card .pf-v5-c-button.pf-m-primary:hover,
 .suv-card .pf-v5-c-button.pf-m-primary:focus { background-color: var(--suv-accent-hover); color: var(--suv-on-accent); }
