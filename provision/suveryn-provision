@@ -66,6 +66,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -336,15 +337,22 @@ def users() -> None:
 
 
 # ---------------------------------------------------------------------------- 5. PostgreSQL
+def start_daemon(cmd: list[str], what: str) -> None:
+    """Start a server that puts itself in the background (without systemd: a test container). It
+    keeps the input, output and error output it was started with for as long as it runs, so it gets
+    a file and nothing else: never a pipe, which whoever reads it would wait on forever."""
+    with tempfile.TemporaryFile("w+") as err:
+        r = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=err, stderr=err)
+        if r.returncode != 0:
+            err.seek(0)
+            fail(f"{what} didn't start: {error_lines(err.read())}")
+
+
 def start_postgres() -> None:
     if systemd_running():
         run("systemctl", "enable", "--now", "postgresql")
     elif subprocess.run(["pg_ctlcluster", "16", "main", "status"], capture_output=True).returncode != 0:
-        # Its output to nowhere, as nginx's: the server keeps what it was started with.
-        r = subprocess.run(["pg_ctlcluster", "16", "main", "start"], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        if r.returncode != 0:
-            fail(f"PostgreSQL didn't start: {error_lines(r.stderr)}")
+        start_daemon(["pg_ctlcluster", "16", "main", "start"], "PostgreSQL")
 
 
 def postgres() -> tuple[str, str]:
@@ -735,10 +743,8 @@ def start_nginx() -> None:
         run("systemctl", "reload", "nginx")
     elif _nginx_running():
         run("nginx", "-s", "reload")
-    else:  # without systemd: nginx keeps the output it was started with, so it gets none of ours
-        r = subprocess.run(["nginx"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-        if r.returncode != 0:
-            fail(f"nginx didn't start: {error_lines(r.stderr)}")
+    else:
+        start_daemon(["nginx"], "nginx")
 
 
 def firewall_rules() -> list[list[str]]:
