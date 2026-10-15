@@ -81,8 +81,10 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 }
 
 /* ---------------------------------------------------------------- the card */
+/* 560px wide, as the web setup's card (its design: "a 560 px card", the same frame as this sign-in;
+   suveryn-core packages/chat-ui/src/ui/ui.css, --card-width). */
 .suv-card.pf-v5-c-login__main {
-  width: 100%; max-width: 400px; margin: 0; align-self: center;
+  width: 100%; max-width: 560px; margin: 0; align-self: center;
   background: var(--suv-card); border: 1px solid var(--suv-line); border-radius: 14px;
   box-shadow: none; padding: 0;
 }
