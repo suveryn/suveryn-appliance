@@ -719,6 +719,7 @@ def nginx_setup_site(host: str) -> None:
         code, out = run("nginx", "-t")
         if code != 0:
             raise SystemExit(f"suveryn-setup: nginx refuses the setup site: {out[-300:]}")
+        p.sites_loaded(SETUP_SITE_MARK if SETUP_SITE_MARK in site.read_text() else f"server_name {host};")
         p.start_nginx()
 
 
@@ -813,18 +814,26 @@ def provision() -> int:
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                                 stdin=subprocess.DEVNULL)
-        last = ""
-        for line in proc.stdout:
-            log.write(line)
-            log.flush()
-            if line.startswith("== "):
-                title = line[3:].strip()
-                ui = next((v for k, v in PROVISION_STEPS.items() if title.startswith(k)), None)
-                if ui and STEPS.index(ui) > STEPS.index(prog.current()):
-                    prog.step(ui, "running")
-            elif line.strip():
-                last = line.strip()
+        lines = {"last": ""}
+
+        def follow():
+            for line in proc.stdout:
+                log.write(line)
+                log.flush()
+                if line.startswith("== "):
+                    title = line[3:].strip()
+                    ui = next((v for k, v in PROVISION_STEPS.items() if title.startswith(k)), None)
+                    if ui and STEPS.index(ui) > STEPS.index(prog.current()):
+                        prog.step(ui, "running")
+                elif line.strip():
+                    lines["last"] = line.strip()
+        # Until provisioning ends, not until its output closes: a service it starts without systemd (a
+        # test container) can keep that output open for as long as the service runs.
+        reader = threading.Thread(target=follow, daemon=True)
+        reader.start()
         code = proc.wait()
+        reader.join(5)
+        last = lines["last"]
     finally:
         remove(admin_file)
         if models:

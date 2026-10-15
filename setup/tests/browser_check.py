@@ -83,6 +83,21 @@ def checkout() -> Path:
     return copy
 
 
+def sites_enabled() -> None:
+    """A test machine whose own nginx.conf doesn't load sites-enabled/ (RunPod's): add it, as the
+    provisioning README says. Ubuntu's own nginx.conf, and the appliance's, have it already."""
+    conf = Path("/etc/nginx/nginx.conf")
+    text = conf.read_text()
+    if re.search(r"^\s*include\s+/etc/nginx/sites-enabled/\*;", text, re.M):
+        return
+    m = re.search(r"^\s*http\s*\{", text, re.M)
+    if not m:
+        sys.exit("browser_check.py: /etc/nginx/nginx.conf has no http block to add sites-enabled to")
+    conf.write_text(text[:m.end()] + "\n    include /etc/nginx/sites-enabled/*;  # added by browser_check.py (sūveryn)\n"
+                    + text[m.end():])
+    print("(nginx.conf didn't load sites-enabled/: added, as on Ubuntu)", flush=True)
+
+
 def machine() -> dict:
     """The disposable machine as an appliance would be at its first start."""
     global SETUP, HERE
@@ -129,9 +144,13 @@ def machine() -> dict:
            "SUVERYN_NETWORK_MODE_TOOL": str(check_tool), "STAND_IN_FAIL_AT": "Keycloak", "SUVERYN_SETUP_SEEN_DONE_WAIT": "60"}
     if REAL:  # the real suveryn-provision first-boot and outgoing-traffic check, as a test machine
         env = {**os.environ, "SUVERYN_SETUP_SITE": "test", "SUVERYN_SETUP_SEEN_DONE_WAIT": "300"}
-    r = subprocess.run([sys.executable, SETUP / "suveryn-setup", "prepare"], env=env, capture_output=True, text=True)
+    sites_enabled()
+    # Its output to a file, not a pipe: without systemd, prepare starts nginx, which keeps it open.
+    with open(OUT / "prepare.log", "w") as log:
+        r = subprocess.run([sys.executable, SETUP / "suveryn-setup", "prepare"], env=env, stdin=subprocess.DEVNULL,
+                           stdout=log, stderr=subprocess.STDOUT, timeout=600)
     if r.returncode != 0:
-        sys.exit(f"prepare failed: {r.stdout[-500:]} {r.stderr[-500:]}")
+        sys.exit(f"prepare failed: {(OUT / 'prepare.log').read_text()[-800:]}")
     serve = subprocess.Popen(["runuser", "-u", "suveryn-setup", "--", sys.executable, "-I", SETUP / "suveryn-setup", "serve"],
                              env=env, stdout=open(OUT / "serve.log", "w"), stderr=subprocess.STDOUT)
     watch = subprocess.Popen([sys.executable, "-u", SETUP / "suveryn-setup", "watch"], env=env,
