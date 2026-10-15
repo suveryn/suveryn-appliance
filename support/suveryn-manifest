@@ -90,7 +90,10 @@ def load(name: str, path: Path):
 
 
 # The bundles' checker: the same fingerprint and Ed25519 verification (bundles/README.md).
-bundle = load("suveryn_bundle", REPO / "image" / "mkosi" / "mkosi.extra" / "usr" / "lib" / "suveryn" / "bundle")
+# From this checkout, or on the read-only system where the checkout has no image/ folder, the system's own.
+BUNDLE_TOOL = next(p for p in (REPO / "image" / "mkosi" / "mkosi.extra" / "usr" / "lib" / "suveryn" / "bundle",
+                               Path("/usr/lib/suveryn/bundle")) if p.exists())
+bundle = load("suveryn_bundle", BUNDLE_TOOL)
 
 
 def signed_text(body: bytes) -> bytes:

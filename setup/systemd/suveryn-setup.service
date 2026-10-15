@@ -7,6 +7,8 @@ Documentation=file:/opt/suveryn/appliance/setup/README.md
 After=network-online.target suveryn-identity.service
 Wants=network-online.target
 ConditionPathExists=!/etc/suveryn/setup-complete
+# Not on the installer stick (image/mkosi): there /var is in memory.
+ConditionPathExists=!/run/suveryn/installer-mode
 # An appliance set up from first-boot.env (the earlier way) has no web setup.
 ConditionPathExists=!/var/lib/suveryn/.first-boot-done
 ConditionPathExists=!/boot/efi/suveryn/first-boot.env
@@ -42,6 +44,9 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# ip (the address on the Network screen) drops its own capabilities when it runs unprivileged:
+# capset, with nothing left to drop. Without it ip is stopped and the screen shows no address.
+SystemCallFilter=capset
 
 [Install]
 WantedBy=multi-user.target
