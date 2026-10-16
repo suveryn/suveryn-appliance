@@ -15,7 +15,14 @@ It writes two files, both 0600 and git-ignored here:
 - `suveryn-realm.json`: to import once, then delete, because it holds the client secret (and, with
   `--administrator FILE`, the office's administrator from the web setup);
 - `gateway-oidc.env`: `SUVERYN_OIDC_ISSUER`, `SUVERYN_OIDC_CLIENT_ID`, `SUVERYN_OIDC_CLIENT_SECRET` and
-  `SUVERYN_PUBLIC_URL` for the gateway's environment file.
+  `SUVERYN_PUBLIC_URL` for the gateway's environment file; and, when suveryn-core's realm has the
+  `suveryn-directory` client (cases, suveryn-tracker#10), `SUVERYN_DIRECTORY_CLIENT_ID` and a fresh
+  `SUVERYN_DIRECTORY_CLIENT_SECRET` for it.
+
+The `suveryn-directory` client is the gateway's read-only view of the office's accounts, so a case's
+manager can add colleagues by name: a service account whose only role is `view-users`, no sign-in
+flow, no redirect URIs. The build refuses a realm where that service account has any other role,
+where the chat client has a service account, or where the directory client could sign in.
 
 ## What production changes
 
@@ -26,7 +33,7 @@ It writes two files, both 0600 and git-ignored here:
 | Admin events | off | on, kept 180 days, no details | Who changed which user, role or client; not the changed data itself |
 | Redirect, base and logout URLs | `http://localhost:5173/…` | exactly `<public-url>/…` | No wildcards: a wildcard lets a crafted link send the sign-in code elsewhere |
 | Themes | Keycloak's | `suveryn` (login, account, email) | This repository's [theme](../theme/README.md) |
-| Client secret | none in the file | new random one per build | Rotation: build again and re-import the client |
+| Client secrets | none in the file | new random ones per build (`suveryn-chat`, and `suveryn-directory` when present) | Rotation: build again and re-import the clients |
 | Password policy | at least 12 characters, not the user name or email | at least **15**, not the user name or email | The web setup's rule for the administrator (#37), for every account. The leaked-password list (`passwordBlacklist`) joins once it is on the appliance |
 | The office's administrator | none | with `--administrator FILE` (`{name, email, password}`, from the web setup): signs in with the email address; realm role `suveryn-admin` and user management in the admin console (`manage-users`, `view-users`, `query-users`, `query-groups`), nothing on the realm's settings | Made by the realm import, so no password passes through Keycloak's admin API. The file holds only a pbkdf2-sha512 hash (210,000 iterations), which Keycloak 26 reads; checked by signing in with Keycloak 26.8 |
 
