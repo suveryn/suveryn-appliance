@@ -56,6 +56,7 @@ PUBLIC_URL=https://suveryn.office.example
 NETWORK_MODE=air-gapped          # connected | air-gapped
 OUTBOUND=approved                # connected only: approved (the default) | all
 SITE=on-premise                  # required with a GeForce card: on-premise | datacenter (refused) | test
+CASES_ACCESS=members             # who sees a new case by default: members (the default) | office (everyone signed in)
 MODELS_FROM=/media/suveryn-models
 TLS_CERT=/boot/efi/suveryn/server.pem   # optional: the office's certificate (full chain) and key;
 TLS_KEY=/boot/efi/suveryn/server.key    # without them a local CA on the box issues one
