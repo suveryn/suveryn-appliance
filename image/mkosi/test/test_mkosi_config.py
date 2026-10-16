@@ -332,3 +332,15 @@ def test_the_web_setup_runs_on_the_installed_appliance_from_the_image():
         text = (MKOSI.parent.parent / "setup" / "systemd" / unit).read_text()
         assert "ConditionPathExists=!/run/suveryn/installer-mode" in text, unit
         assert "/opt/suveryn/appliance/setup/suveryn-setup" in text or unit.endswith(".path"), unit
+
+
+def test_nvidia_licence_text_ships_without_usr_share_doc():
+    """WithDocs=no drops the packages' copyright files; NVIDIA's driver licence (§1.1(d)) requires the
+    text to reach every recipient, so it is in mkosi.extra and the build stops without it (#49)."""
+    assert "WithDocs=no" in (MKOSI / "mkosi.conf").read_text()
+    licence = MKOSI / "mkosi.extra" / "usr" / "share" / "suveryn" / "licences" / "nvidia-graphics-drivers-580.copyright"
+    text = licence.read_text()
+    assert "License: NVIDIA-graphics-drivers" in text and "NVIDIA Driver License Agreement" in text
+    assert "kernel-open" in text and "dual licensed as MIT/GPL" in text
+    assert "/usr/share/suveryn/licences/nvidia-graphics-drivers-580.copyright" in POSTINST
+    assert "dpkg-query -W 'nvidia-utils-*'" in POSTINST and "exit 1" in POSTINST
