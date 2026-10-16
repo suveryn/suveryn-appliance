@@ -3,7 +3,7 @@
  * Values from the reviewed login mockup and the Sūveryn Design System. Contrast rule: text on the
  * accent orange is always ink (#020205), never white. All text meets 4.5:1 measured the Design
  * System's way, from OKLCH lightness (tests/oklch_contrast.py); the colours are suveryn-brand's
- * tokens (version 3, written in OKLCH): links use accent-ink, the accent's hue at a lower
+ * tokens (version 3.1, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
  * lightness. A wash, a glow or a dimmed line is the token's own hue with an alpha
  * (oklch(from var(--suv-…) l c h / alpha)), never a hex or rgba of its own.
  *
@@ -18,21 +18,21 @@
 @font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
 
 :root {
-  --suv-bg: oklch(1.0000 0.0000 0.00);
-  --suv-card: oklch(0.9851 0.0000 0.00);
-  --suv-surface-alt: oklch(0.9587 0.0027 286.35);
+  --suv-bg: oklch(1.0000 0.0000 258.00);
+  --suv-card: oklch(0.9800 0.0020 258.00);
+  --suv-surface-alt: oklch(0.9550 0.0040 258.00);
   --suv-line: oklch(from var(--suv-text) l c h / 0.12);
-  --suv-text: oklch(0.0885 0.0139 283.18);
+  --suv-text: oklch(0.0900 0.0140 258.00);
   --suv-text-dim: oklch(from var(--suv-text) l c h / 0.62);
   --suv-text-dimmer: oklch(from var(--suv-text) l c h / 0.55);
-  --suv-accent: oklch(0.6771 0.2013 34.62);
-  --suv-accent-hover: oklch(0.6171 0.1925 33.15);
-  --suv-on-accent: oklch(0.0885 0.0139 283.18);          /* ink: the only colour allowed on the accent */
-  --suv-accent-ink: oklch(0.5382 0.1909 34.55);         /* brand accent-ink: OKLCH 0.538 0.191 34.5, 4.5:1 on every light surface */
-  --suv-accent-ink-hover: oklch(0.4884 0.1733 34.54);
-  --suv-teal: oklch(0.7902 0.1248 188.43);               /* brand teal: fills and washes only, never text */
-  --suv-teal-ink: oklch(0.5375 0.0935 188.04);           /* brand teal-ink: OKLCH 0.537 0.093 188.0, 4.5:1 incl. the badge wash */
-  --suv-teal-focus: oklch(0.5719 0.0969 187.53);         /* input focus border (a UI boundary, 3:1) */
+  --suv-accent: oklch(0.6770 0.2010 34.60);
+  --suv-accent-hover: oklch(0.6170 0.2010 34.60);
+  --suv-on-accent: oklch(0.0900 0.0140 258.00);          /* ink: the only colour allowed on the accent */
+  --suv-accent-ink: oklch(0.5270 0.1867 34.60);         /* brand accent-ink: the accent's lightness minus 0.15; 4.5:1 on every light surface */
+  --suv-accent-ink-hover: oklch(0.4770 0.1690 34.60);
+  --suv-teal: oklch(0.7900 0.1250 188.40);               /* brand teal: fills and washes only, never text */
+  --suv-teal-ink: oklch(0.5200 0.0903 188.40);           /* brand teal-ink: the teal's lightness minus 0.27; 4.5:1 incl. the badge wash */
+  --suv-teal-focus: oklch(0.5720 0.0970 188.40);         /* input focus border (a UI boundary, 3:1) */
   --suv-teal-glow: oklch(from var(--suv-teal) l c h / 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
