@@ -54,6 +54,36 @@ def test_production_settings_are_laid_over_the_development_realm(dev):
         assert c[key] == dev["clients"][0][key], key
 
 
+DIRECTORY = {"clientId": "suveryn-directory", "enabled": True, "protocol": "openid-connect", "publicClient": False,
+             "standardFlowEnabled": False, "implicitFlowEnabled": False, "directAccessGrantsEnabled": False,
+             "serviceAccountsEnabled": True, "redirectUris": [], "webOrigins": [],
+             "attributes": {"pkce.code.challenge.method": "S256"}}
+SERVICE_ACCOUNT = {"username": "service-account-suveryn-directory", "enabled": True,
+                   "serviceAccountClientId": "suveryn-directory", "clientRoles": {"realm-management": ["view-users"]}}
+
+
+def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
+    """suveryn-tracker#10, stage 2: suveryn-core's realm carries a second client, suveryn-directory,
+    whose service account reads the office's accounts for a case's members. Shaped here as that
+    realm has it, so the test holds whatever commit realm-lock.json points at."""
+    with_dir = {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT]}
+    prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret")
+    chat, directory = prod["clients"]
+    assert chat["secret"] == "chat-secret" and directory["secret"] == "directory-secret"
+    assert directory["redirectUris"] == [] and not directory["standardFlowEnabled"]
+    assert not chat["serviceAccountsEnabled"]
+    with pytest.raises(SystemExit):
+        build_realm.production_realm(with_dir, URL, "chat-secret")  # the client without a secret: refused
+    # a service account with more rights, on the chat client, or a directory client that could sign in: refused
+    for bad in ({"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["manage-users"]}}]},
+                {"users": [{**SERVICE_ACCOUNT, "serviceAccountClientId": "suveryn-chat"}]},
+                {"clients": [{**dev["clients"][0], "serviceAccountsEnabled": True}, DIRECTORY]},
+                {"clients": [dev["clients"][0], {**DIRECTORY, "standardFlowEnabled": True}]}):
+        with pytest.raises(SystemExit):
+            build_realm.production_realm({**with_dir, **bad}, URL, "chat-secret", "directory-secret")
+    assert not build_realm.has_directory_client(dev) and build_realm.has_directory_client(with_dir)
+
+
 def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash_in_the_file():
     import base64
     import hashlib
