@@ -33,14 +33,24 @@ def dev():
     return json.loads(data)
 
 
+def build(dev, chat_secret="test-secret-not-real"):
+    """The production realm, with a directory secret when the realm has that client (cases, stage 2)."""
+    return build_realm.production_realm(dev, URL, chat_secret, "directory-secret" if build_realm.has_directory_client(dev) else "")
+
+
+def chat_client(realm):
+    [c] = [c for c in realm["clients"] if c["clientId"] == "suveryn-chat"]
+    return c
+
+
 def test_production_settings_are_laid_over_the_development_realm(dev):
-    prod = build_realm.production_realm(dev, URL, "test-secret-not-real")
+    prod = build(dev)
     assert prod["sslRequired"] == "all" and dev["sslRequired"] == "external"
     assert prod["eventsEnabled"] and prod["eventsExpiration"] == 180 * 86400
     assert prod["adminEventsEnabled"] and not prod["adminEventsDetailsEnabled"]
     assert prod["attributes"]["adminEventsExpiration"] == str(180 * 86400)
     assert (prod["loginTheme"], prod["accountTheme"], prod["emailTheme"]) == ("suveryn",) * 3
-    [c] = prod["clients"]
+    c = chat_client(prod)
     assert c["redirectUris"] == [f"{URL}/auth/callback"] and c["baseUrl"] == f"{URL}/"
     assert c["attributes"]["post.logout.redirect.uris"] == f"{URL}/" and c["webOrigins"] == []
     assert c["secret"] == "test-secret-not-real"
@@ -51,7 +61,7 @@ def test_production_settings_are_laid_over_the_development_realm(dev):
                 "registrationAllowed", "identityProviders", "supportedLocales"):
         assert prod[key] == dev[key], key
     for key in ("standardFlowEnabled", "implicitFlowEnabled", "directAccessGrantsEnabled", "publicClient", "fullScopeAllowed"):
-        assert c[key] == dev["clients"][0][key], key
+        assert c[key] == chat_client(dev)[key], key
 
 
 DIRECTORY = {"clientId": "suveryn-directory", "enabled": True, "protocol": "openid-connect", "publicClient": False,
@@ -66,7 +76,8 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     """suveryn-tracker#10, stage 2: suveryn-core's realm carries a second client, suveryn-directory,
     whose service account reads the office's accounts for a case's members. Shaped here as that
     realm has it, so the test holds whatever commit realm-lock.json points at."""
-    with_dir = {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT]}
+    with_dir = dev if build_realm.has_directory_client(dev) else {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT]}
+    without = {**dev, "clients": [chat_client(dev)], "users": []}
     prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret")
     chat, directory = prod["clients"]
     assert chat["secret"] == "chat-secret" and directory["secret"] == "directory-secret"
@@ -77,11 +88,12 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     # a service account with more rights, on the chat client, or a directory client that could sign in: refused
     for bad in ({"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["manage-users"]}}]},
                 {"users": [{**SERVICE_ACCOUNT, "serviceAccountClientId": "suveryn-chat"}]},
-                {"clients": [{**dev["clients"][0], "serviceAccountsEnabled": True}, DIRECTORY]},
-                {"clients": [dev["clients"][0], {**DIRECTORY, "standardFlowEnabled": True}]}):
+                {"clients": [{**chat_client(dev), "serviceAccountsEnabled": True}, DIRECTORY]},
+                {"clients": [chat_client(dev), {**DIRECTORY, "standardFlowEnabled": True}]}):
         with pytest.raises(SystemExit):
             build_realm.production_realm({**with_dir, **bad}, URL, "chat-secret", "directory-secret")
-    assert not build_realm.has_directory_client(dev) and build_realm.has_directory_client(with_dir)
+    assert not build_realm.has_directory_client(without) and build_realm.has_directory_client(with_dir)
+    assert "secret" not in json.dumps(build_realm.production_realm(without, URL, "chat-secret")["clients"][1:])  # builds without it
 
 
 def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash_in_the_file():
@@ -103,7 +115,7 @@ def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash
 
 
 def test_a_production_realm_with_a_weaker_password_policy_is_refused(dev):
-    prod = build_realm.production_realm(dev, URL, "test-secret-not-real")
+    prod = build(dev)
     with pytest.raises(SystemExit, match="password policy"):
         build_realm.verify({**prod, "passwordPolicy": "length(12) and notUsername and notEmail"}, URL)
 
@@ -118,7 +130,7 @@ def test_a_weakened_development_realm_is_refused(dev, change, problem):
     weak = json.loads(json.dumps(dev))
     change(weak)
     with pytest.raises(SystemExit, match=problem):
-        build_realm.production_realm(weak, URL, "x")
+        build(weak, "x")
 
 
 @pytest.mark.parametrize("url", ["http://suveryn.office.example", "https://*.office.example", "https://x.example/path",
