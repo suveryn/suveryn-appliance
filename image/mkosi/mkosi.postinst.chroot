@@ -58,7 +58,18 @@ printf '[Unit]\nConditionPathExists=/etc/nginx/sites-enabled/suveryn\n' > /usr/l
 systemctl enable nginx.service
 printf 'd /var/lib/suveryn/nginx 0755 root root -\nd /var/log/nginx 0755 www-data adm -\n' > /usr/lib/tmpfiles.d/suveryn-nginx.conf
 
-# 4. No pcrlock: the data partition is bound to PCR 7 (#34); pcrlock policies (and the TPM NV index
+# 4. Third-party licences the packages would otherwise carry in /usr/share/doc, which WithDocs=no
+#    leaves out. NVIDIA's driver licence (§1.1(d)) lets the image ship the driver only if the licence
+#    text reaches every recipient, so a build that has the driver without the text stops here
+#    (development context §2, tracker #49).
+if dpkg-query -W 'nvidia-utils-*' 'libnvidia-compute-*' >/dev/null 2>&1; then
+  test -s /usr/share/suveryn/licences/nvidia-graphics-drivers-580.copyright || {
+    echo "the NVIDIA driver is installed but its licence text is not: see mkosi.extra/usr/share/suveryn/licences" >&2
+    exit 1
+  }
+fi
+
+# 5. No pcrlock: the data partition is bound to PCR 7 (#34); pcrlock policies (and the TPM NV index
 #    they write) are decision D2, postponed. systemd 255 would generate one at every boot.
 for u in /usr/lib/systemd/system/systemd-pcrlock*.service; do
   [ -e "$u" ] && systemctl mask "$(basename "$u")"
