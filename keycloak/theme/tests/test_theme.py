@@ -66,12 +66,12 @@ def test_badge_matches_the_website_component():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     rule = re.search(r"\.suv-badge-airgapped \{(.*?)\}", css, re.S).group(1)
     for decl in ("gap: 5px", "font-size: 10px", "font-weight: 600", "color: var(--suv-teal-ink)",
-                 "background: rgba(58, 212, 202, 0.10)", "border: 1px solid rgba(58, 212, 202, 0.35)",
+                 "background: oklch(from var(--suv-teal) l c h / 0.10)", "border: 1px solid oklch(from var(--suv-teal) l c h / 0.35)",
                  "border-radius: 20px", "padding: 3px 8px", "display: inline-flex"):
         assert decl in rule, decl
     svg = re.search(r'<span class="suv-badge-airgapped">\s*(<svg.*?</svg>)', (SRC / "login" / "template.ftl").read_text(), re.S).group(1)
     # the brand's teal-ink (tokens v2), which holds 4.5:1 on the wash; see test_text_contrast_by_oklch
-    assert 'width="9" height="9"' in svg and 'stroke="#007F78"' in svg and 'stroke-width="2.4"' in svg
+    assert 'width="9" height="9"' in svg and 'stroke="currentColor"' in svg  # the badge's teal-ink, from CSS and 'stroke-width="2.4"' in svg
     assert svg.count("<path") == 7  # Lucide wifi-off
 
 
@@ -82,16 +82,17 @@ def test_no_white_text_on_the_accent():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     primary = re.search(r"\.suv-card \.pf-v5-c-button\.pf-m-primary \{(.*?)\}", login, re.S).group(1)
     assert "--pf-v5-c-button--m-primary--Color: var(--suv-on-accent)" in primary
-    assert "--suv-on-accent: #020205" in login
+    ink = "oklch(0.0900 0.0140 258.00)"  # #020205, the brand's ink, as tokens v3 writes it
+    assert f"--suv-on-accent: {ink}" in login
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
-    assert "--pf-v5-c-button--m-primary--Color: #020205" in account
+    assert f"--pf-v5-c-button--m-primary--Color: {ink}" in account
 
 
 def test_teal_focus_on_inputs():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     focus = re.search(r"\.pf-v5-c-form-control:focus-within::before \{(.*?)\}", css, re.S).group(1)
-    assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15)" in focus
-    assert "--suv-teal-focus: #0F8A82" in css
+    assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15)" in focus
+    assert "--suv-teal-focus: oklch(0.5720 0.0970 188.40)" in css  # #0F8A82
 
 
 def test_nothing_is_loaded_from_the_internet():
@@ -170,7 +171,7 @@ def test_text_contrast_by_oklch():
     """Every text colour meets 4.5:1 (and UI boundaries 3:1), measured from OKLCH lightness."""
     v = css_vars(SRC / "login" / "resources" / "css" / "suveryn.css")
     card, page = v["--suv-card"], v["--suv-bg"]
-    wash = "rgba(58, 212, 202, 0.10)"
+    wash = "oklch(from var(--suv-teal) l c h / 0.10)"  # the badge's background
     pairs = [
         (v["--suv-text"], card, 4.5), (v["--suv-text-dim"], card, 4.5), (v["--suv-text-dim"], page, 4.5),
         (v["--suv-text-dimmer"], card, 4.5),
@@ -179,7 +180,7 @@ def test_text_contrast_by_oklch():
         (v["--suv-on-accent"], v["--suv-accent"], 4.5), (v["--suv-on-accent"], v["--suv-accent-hover"], 4.5),
         (v["--suv-teal-ink"], wash, 4.5), (v["--suv-teal-focus"], page, 3.0),
     ]
-    failing = [(fg, bg, round(ratio(fg, bg), 2)) for fg, bg, need in pairs if ratio(fg, bg) < need]
+    failing = [(fg, bg, round(ratio(fg, bg, vars=v), 2)) for fg, bg, need in pairs if ratio(fg, bg, vars=v) < need]
     assert failing == []
     # the reference point: white on the accent fails, which is why buttons use ink
     assert round(ratio("#FFFFFF", v["--suv-accent"]), 1) == 2.9
@@ -189,7 +190,8 @@ def test_no_text_in_the_plain_accent_or_tertiary_colour():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover)\)", login)
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
-    assert "--pf-v5-global--link--Color: #C42F00" in account
+    assert "--pf-v5-global--link--Color: oklch(0.5270 0.1867 34.60)" in account  # #C42F00
+    # the email keeps hex: email clients don't draw oklch()
     assert ".suv-body a { color: #C42F00" in (SRC / "email" / "html" / "template.ftl").read_text()
 
 
@@ -236,9 +238,9 @@ def test_notices_are_neutral_with_a_brand_signal():
     for kind in ("Error", "Warning", "Success", "Info"):
         assert props_[f"kcFeedback{kind}Icon"].startswith("suv-icon suv-icon-")  # Lucide, not Font Awesome
     v = css_vars(SRC / "login" / "resources" / "css" / "suveryn.css")
-    assert ratio(v["--suv-text"], v["--suv-surface-alt"]) >= 4.5
-    assert ratio(v["--suv-accent-ink"], v["--suv-surface-alt"]) >= 4.5  # icon and bar
-    assert ratio(v["--suv-accent"], v["--suv-surface-alt"]) < 3  # why the plain accent isn't used here
+    assert ratio(v["--suv-text"], v["--suv-surface-alt"], vars=v) >= 4.5
+    assert ratio(v["--suv-accent-ink"], v["--suv-surface-alt"], vars=v) >= 4.5  # icon and bar
+    assert ratio(v["--suv-accent"], v["--suv-surface-alt"], vars=v) < 3  # why the plain accent isn't used here
 
 
 def test_field_errors_use_the_brand_not_a_red():

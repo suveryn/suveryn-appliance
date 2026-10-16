@@ -3,7 +3,9 @@
  * Values from the reviewed login mockup and the Sūveryn Design System. Contrast rule: text on the
  * accent orange is always ink (#020205), never white. All text meets 4.5:1 measured the Design
  * System's way, from OKLCH lightness (tests/oklch_contrast.py); the colours are suveryn-brand's
- * tokens (version 2): links use accent-ink, the accent's hue at a lower lightness.
+ * tokens (version 3.1, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
+ * lightness. A wash, a glow or a dimmed line is the token's own hue with an alpha
+ * (oklch(from var(--suv-…) l c h / alpha)), never a hex or rgba of its own.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
  * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
@@ -16,21 +18,22 @@
 @font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
 
 :root {
-  --suv-bg: #FFFFFF;
-  --suv-card: #FAFAFA;
-  --suv-surface-alt: #F1F1F3;
-  --suv-line: rgba(2, 2, 5, 0.12);
-  --suv-text: #020205;
-  --suv-text-dim: rgba(2, 2, 5, 0.62);
-  --suv-text-dimmer: rgba(2, 2, 5, 0.55);
-  --suv-accent: #FA5B35;
-  --suv-accent-hover: #E14A2C;
-  --suv-on-accent: #020205;          /* ink: the only colour allowed on the accent */
-  --suv-accent-ink: #C42F00;         /* brand accent-ink: OKLCH 0.538 0.191 34.5, 4.5:1 on every light surface */
-  --suv-accent-ink-hover: #AC2800;
-  --suv-teal-ink: #007F78;           /* brand teal-ink: OKLCH 0.537 0.093 188.0, 4.5:1 incl. the badge wash */
-  --suv-teal-focus: #0F8A82;         /* input focus border (a UI boundary, 3:1) */
-  --suv-teal-glow: rgba(58, 212, 202, 0.15);
+  --suv-bg: oklch(1.0000 0.0000 258.00);
+  --suv-card: oklch(0.9800 0.0020 258.00);
+  --suv-surface-alt: oklch(0.9550 0.0040 258.00);
+  --suv-line: oklch(from var(--suv-text) l c h / 0.12);
+  --suv-text: oklch(0.0900 0.0140 258.00);
+  --suv-text-dim: oklch(from var(--suv-text) l c h / 0.62);
+  --suv-text-dimmer: oklch(from var(--suv-text) l c h / 0.55);
+  --suv-accent: oklch(0.6770 0.2010 34.60);
+  --suv-accent-hover: oklch(0.6170 0.2010 34.60);
+  --suv-on-accent: oklch(0.0900 0.0140 258.00);          /* ink: the only colour allowed on the accent */
+  --suv-accent-ink: oklch(0.5270 0.1867 34.60);         /* brand accent-ink: the accent's lightness minus 0.15; 4.5:1 on every light surface */
+  --suv-accent-ink-hover: oklch(0.4770 0.1690 34.60);
+  --suv-teal: oklch(0.7900 0.1250 188.40);               /* brand teal: fills and washes only, never text */
+  --suv-teal-ink: oklch(0.5200 0.0903 188.40);           /* brand teal-ink: the teal's lightness minus 0.27; 4.5:1 incl. the badge wash */
+  --suv-teal-focus: oklch(0.5720 0.0970 188.40);         /* input focus border (a UI boundary, 3:1) */
+  --suv-teal-glow: oklch(from var(--suv-teal) l c h / 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
   color-scheme: light;
@@ -76,7 +79,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-badge-airgapped {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: var(--suv-font-body); font-size: 10px; font-weight: 600; line-height: 1.2;
-  color: var(--suv-teal-ink); background: rgba(58, 212, 202, 0.10); border: 1px solid rgba(58, 212, 202, 0.35);
+  color: var(--suv-teal-ink); background: oklch(from var(--suv-teal) l c h / 0.10); border: 1px solid oklch(from var(--suv-teal) l c h / 0.35);
   border-radius: 20px; padding: 3px 8px;
 }
 
@@ -142,7 +145,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .pf-v5-c-form-control::before { border: 1px solid var(--suv-line); border-radius: 6px; }
 .suv-card .pf-v5-c-form-control::after { display: none; }
 /* teal focus on the inputs, replacing the browser outline */
-.suv-card .pf-v5-c-form-control:focus-within::before { border-color: var(--suv-teal-focus); box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.suv-card .pf-v5-c-form-control:focus-within::before { border-color: var(--suv-teal-focus); box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15); }
 .suv-card .pf-v5-c-form-control > input:focus,
 .suv-card .pf-v5-c-form-control > input:focus-visible { outline: none; box-shadow: none; }
 /* Field errors use the brand, not PatternFly's red: the brand has no separate error colour (a red
@@ -171,7 +174,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 /* field and button are one box: no line between them, and the whole box turns teal on focus */
 .suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-m-fill .pf-v5-c-form-control::before { border-right-width: 0; }
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control::after { border-left-width: 0; }
-.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within { border-radius: 6px; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within { border-radius: 6px; box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15); }
 .suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-form-control::before,
 .suv-card .pf-v5-c-input-group:has(.pf-m-control):focus-within .pf-v5-c-button.pf-m-control::after { border-color: var(--suv-teal-focus); }
 .suv-card .pf-v5-c-input-group:has(.pf-m-control) .pf-v5-c-form-control:focus-within::before { box-shadow: none; }
