@@ -9,6 +9,7 @@ Also converts OKLCH back to sRGB, to darken a colour by lowering L while keeping
 """
 
 import math
+import re
 
 
 def _lin(c: float) -> float:
@@ -19,11 +20,31 @@ def _gamma(c: float) -> float:
     return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
 
 
-def parse(color: str, over: str = "#FFFFFF") -> tuple[float, float, float]:
-    """sRGB 0..1 of "#RRGGBB" or "rgba(r, g, b, a)", alpha-blended over ``over``."""
+def parse(color: str, over: str = "#FFFFFF", vars: dict[str, str] | None = None) -> tuple[float, float, float]:
+    """sRGB 0..1 of "#RRGGBB", "rgba(r, g, b, a)", "oklch(L C h)", "oklch(L C h / a)" or
+    "oklch(from var(--x) l c h / a)" (``vars`` resolving the variable), alpha-blended over ``over``."""
     color = color.strip()
     if color.startswith("#"):
         return tuple(int(color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    if color.startswith("oklch("):
+        inner = color[6:-1].strip()
+        alpha = 1.0
+        if "/" in inner:
+            inner, a = inner.rsplit("/", 1)
+            alpha = float(a)
+        if inner.startswith("from "):
+            m = re.fullmatch(r"from\s+var\((--[\w-]+)\)\s+l\s+c\s+h\s*", inner)
+            if not m or not vars or m.group(1) not in vars:
+                raise ValueError(f"can't resolve {color}")
+            rgb = parse(vars[m.group(1)], over, vars)
+        else:
+            L, C, h = (float(x) for x in inner.split())
+            hexed = to_hex(L, C, h)
+            if hexed is None:
+                raise ValueError(f"{color} is outside sRGB")
+            rgb = parse(hexed)
+        base = parse(over)
+        return tuple(alpha * c + (1 - alpha) * bc for c, bc in zip(rgb, base, strict=True))
     r, g, b, a = (float(x) for x in color[color.index("(") + 1:-1].split(","))
     base = parse(over)
     return tuple(a * c / 255 + (1 - a) * bc for c, bc in zip((r, g, b), base, strict=True))
@@ -44,11 +65,11 @@ def oklch(color: str, over: str = "#FFFFFF") -> tuple[float, float, float]:
     return L, math.hypot(a, b), math.degrees(math.atan2(b, a)) % 360
 
 
-def ratio(fg: str, bg: str, page: str = "#FFFFFF") -> float:
+def ratio(fg: str, bg: str, page: str = "#FFFFFF", vars: dict[str, str] | None = None) -> float:
     """Contrast of text ``fg`` on ``bg`` (both may be translucent; bg sits on ``page``)."""
-    bg_rgb = parse(bg, page)
+    bg_rgb = parse(bg, page, vars)
     bg_hex = "#" + "".join(f"{round(c * 255):02X}" for c in bg_rgb)
-    y1, y2 = (oklab(parse(c, bg_hex))[0] ** 3 for c in (fg, bg_hex))
+    y1, y2 = (oklab(parse(c, bg_hex, vars))[0] ** 3 for c in (fg, bg_hex))
     hi, lo = max(y1, y2), min(y1, y2)
     return (hi + 0.05) / (lo + 0.05)
 
