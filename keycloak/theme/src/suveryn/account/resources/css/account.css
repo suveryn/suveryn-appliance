@@ -11,40 +11,41 @@
   color-scheme: light;
   --pf-v5-global--FontFamily--text: "Inter", system-ui, sans-serif;
   --pf-v5-global--FontFamily--heading: "Space Grotesk", "Inter", system-ui, sans-serif;
-  --pf-v5-global--Color--100: #020205;
-  --pf-v5-global--Color--200: rgba(2, 2, 5, 0.62);
-  --pf-v5-global--BorderColor--100: rgba(2, 2, 5, 0.12);
-  --pf-v5-global--primary-color--100: #FA5B35;
-  --pf-v5-global--primary-color--200: #E14A2C;
-  --pf-v5-global--link--Color: #C42F00;        /* brand accent-ink: 4.5:1 by OKLCH lightness */
-  --pf-v5-global--link--Color--hover: #AC2800;
+  --suv-teal: oklch(0.7900 0.1250 188.40);       /* brand teal: the focus glow's hue; never text */
+  --pf-v5-global--Color--100: oklch(0.0900 0.0140 258.00);
+  --pf-v5-global--Color--200: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62);
+  --pf-v5-global--BorderColor--100: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12);
+  --pf-v5-global--primary-color--100: oklch(0.6770 0.2010 34.60);
+  --pf-v5-global--primary-color--200: oklch(0.6170 0.2010 34.60);
+  --pf-v5-global--link--Color: oklch(0.5270 0.1867 34.60);        /* brand accent-ink: 4.5:1 by OKLCH lightness */
+  --pf-v5-global--link--Color--hover: oklch(0.4770 0.1690 34.60);
   --pf-v5-global--BorderRadius--sm: 6px;
-  --pf-v5-c-button--m-primary--BackgroundColor: #FA5B35;
-  --pf-v5-c-button--m-primary--Color: #020205;
-  --pf-v5-c-button--m-primary--hover--BackgroundColor: #E14A2C;
-  --pf-v5-c-button--m-primary--hover--Color: #020205;
-  --pf-v5-c-button--m-primary--focus--BackgroundColor: #E14A2C;
-  --pf-v5-c-button--m-primary--focus--Color: #020205;
-  --pf-v5-c-button--m-primary--active--BackgroundColor: #E14A2C;
-  --pf-v5-c-button--m-primary--active--Color: #020205;
+  --pf-v5-c-button--m-primary--BackgroundColor: oklch(0.6770 0.2010 34.60);
+  --pf-v5-c-button--m-primary--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-primary--hover--BackgroundColor: oklch(0.6170 0.2010 34.60);
+  --pf-v5-c-button--m-primary--hover--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-primary--focus--BackgroundColor: oklch(0.6170 0.2010 34.60);
+  --pf-v5-c-button--m-primary--focus--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-primary--active--BackgroundColor: oklch(0.6170 0.2010 34.60);
+  --pf-v5-c-button--m-primary--active--Color: oklch(0.0900 0.0140 258.00);
   --pf-v5-c-button--BorderRadius: 6px;
 }
-body { font-family: "Inter", system-ui, sans-serif; color: #020205; background: #FFFFFF; }
-.pf-v5-c-button.pf-m-primary, .pf-v5-c-button.pf-m-primary:hover, .pf-v5-c-button.pf-m-primary:focus { color: #020205; }
-.pf-v5-c-masthead { --pf-v5-c-masthead--BackgroundColor: #FFFFFF; border-bottom: 1px solid rgba(2, 2, 5, 0.12); }
+body { font-family: "Inter", system-ui, sans-serif; color: oklch(0.0900 0.0140 258.00); background: oklch(1.0000 0.0000 258.00); }
+.pf-v5-c-button.pf-m-primary, .pf-v5-c-button.pf-m-primary:hover, .pf-v5-c-button.pf-m-primary:focus { color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-masthead { --pf-v5-c-masthead--BackgroundColor: oklch(1.0000 0.0000 258.00); border-bottom: 1px solid oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
 .pf-v5-c-masthead .pf-v5-c-brand, .pf-v5-c-masthead__brand img { height: 32px; width: auto; }
-.pf-v5-c-masthead .pf-v5-c-button.pf-m-plain, .pf-v5-c-masthead .pf-v5-c-menu-toggle { color: #020205; }
-.pf-v5-c-page__sidebar { --pf-v5-c-page__sidebar--BackgroundColor: #FAFAFA; border-right: 1px solid rgba(2, 2, 5, 0.12); }
+.pf-v5-c-masthead .pf-v5-c-button.pf-m-plain, .pf-v5-c-masthead .pf-v5-c-menu-toggle { color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-page__sidebar { --pf-v5-c-page__sidebar--BackgroundColor: oklch(0.9800 0.0020 258.00); border-right: 1px solid oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
 .pf-v5-c-nav {
-  --pf-v5-c-nav__link--Color: #020205; --pf-v5-c-nav__link--hover--Color: #020205;
-  --pf-v5-c-nav__link--BackgroundColor: transparent; --pf-v5-c-nav__link--hover--BackgroundColor: #F1F1F3;
-  --pf-v5-c-nav__link--m-current--Color: #020205; --pf-v5-c-nav__link--m-current--BackgroundColor: #F1F1F3;
-  --pf-v5-c-nav__link--m-current--after--BorderColor: #FA5B35;
+  --pf-v5-c-nav__link--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-nav__link--hover--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-nav__link--BackgroundColor: transparent; --pf-v5-c-nav__link--hover--BackgroundColor: oklch(0.9550 0.0040 258.00);
+  --pf-v5-c-nav__link--m-current--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-nav__link--m-current--BackgroundColor: oklch(0.9550 0.0040 258.00);
+  --pf-v5-c-nav__link--m-current--after--BorderColor: oklch(0.6770 0.2010 34.60);
 }
 /* PatternFly's sidebar is dark by default: keep the selected and hovered item light, with ink text */
-.pf-v5-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current:hover { background-color: #F1F1F3; color: #020205; }
-.pf-v5-c-nav__link:hover { background-color: #F1F1F3; color: #020205; }
-.pf-v5-c-form-control:focus-within { --pf-v5-c-form-control--after--BorderBottomColor: #0F8A82; }
+.pf-v5-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current:hover { background-color: oklch(0.9550 0.0040 258.00); color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-nav__link:hover { background-color: oklch(0.9550 0.0040 258.00); color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-form-control:focus-within { --pf-v5-c-form-control--after--BorderBottomColor: oklch(0.5720 0.0970 188.40); }
 .pf-v5-c-card { border-radius: 14px; }
 
 /* ---------------------------------------------------------------- fields, buttons and sizes
@@ -56,26 +57,26 @@ body { font-family: "Inter", system-ui, sans-serif; color: #020205; background: 
   --pf-v5-c-form-control--PaddingTop: 11px; --pf-v5-c-form-control--PaddingBottom: 11px;
   --pf-v5-c-form-control--PaddingLeft: 14px; --pf-v5-c-form-control--PaddingRight: 14px;
   --pf-v5-c-form-control--BorderRadius: 6px;
-  --pf-v5-c-form-control--before--BorderColor: rgba(2, 2, 5, 0.12);
+  --pf-v5-c-form-control--before--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12);
   --pf-v5-c-form-control--after--BorderColor: transparent;
   --pf-v5-c-form-control--hover--after--BorderBottomColor: transparent;
   --pf-v5-c-form-control--focus--after--BorderBottomColor: transparent;
   border-radius: 6px; font-size: 15px; min-height: 44px;
 }
 .pf-v5-c-form-control > :is(input, select, textarea) { line-height: 20px; }
-.pf-v5-c-form-control::before { border: 1px solid rgba(2, 2, 5, 0.12); border-radius: 6px; }
+.pf-v5-c-form-control::before { border: 1px solid oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); border-radius: 6px; }
 .pf-v5-c-form-control::after { display: none; }
-.pf-v5-c-form-control:focus-within::before { border-color: #0F8A82; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+.pf-v5-c-form-control:focus-within::before { border-color: oklch(0.5720 0.0970 188.40); box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15); }
 .pf-v5-c-form-control > :is(input, select, textarea):focus { outline: none; }
-.pf-v5-c-form-control.pf-m-disabled { background: #F1F1F3; color: rgba(2, 2, 5, 0.62); }
+.pf-v5-c-form-control.pf-m-disabled { background: oklch(0.9550 0.0040 258.00); color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62); }
 
 /* a select in a form is a menu toggle: the same as a field */
 .pf-v5-c-form .pf-v5-c-menu-toggle {
-  min-height: 44px; padding: 11px 14px; font-size: 15px; line-height: 20px; border-radius: 6px; background: #FFFFFF;
+  min-height: 44px; padding: 11px 14px; font-size: 15px; line-height: 20px; border-radius: 6px; background: oklch(1.0000 0.0000 258.00);
 }
-:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain)::before { border: 1px solid rgba(2, 2, 5, 0.12); border-radius: 6px; }
+:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain)::before { border: 1px solid oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); border-radius: 6px; }
 :is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain)::after { display: none; }
-:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain):focus-visible::before { border-color: #0F8A82; box-shadow: 0 0 0 3px rgba(58, 212, 202, 0.15); }
+:is(.pf-v5-c-form, .pf-v5-c-masthead) .pf-v5-c-menu-toggle:not(.pf-m-plain):focus-visible::before { border-color: oklch(0.5720 0.0970 188.40); box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15); }
 /* the user menu in the masthead: small, as the sign-in's language menu */
 .pf-v5-c-masthead .pf-v5-c-menu-toggle:not(.pf-m-plain) { min-height: 32px; padding: 7px 10px; font-size: 13px; line-height: 16px; border-radius: 6px; }
 
@@ -86,31 +87,31 @@ body { font-family: "Inter", system-ui, sans-serif; color: #020205; background: 
 
 /* labels as the sign-in's; the required mark in accent-ink (the brand has no separate red) */
 .pf-v5-c-form__label-text { font-size: 13.5px; font-weight: 600; }
-.pf-v5-c-form__label-required { color: #C42F00; }
+.pf-v5-c-form__label-required { color: oklch(0.5270 0.1867 34.60); }
 
 /* the sidebar's dividers: the hairline, not the dark line of PatternFly's dark sidebar (#3c3f42, on
    the links' ::before) */
-.pf-v5-c-nav { --pf-v5-c-nav__link--before--BorderColor: rgba(2, 2, 5, 0.12); --pf-v5-c-nav__item--before--BorderColor: rgba(2, 2, 5, 0.12); }
-.pf-v5-c-nav__link::before, .pf-v5-c-nav__item::before, .pf-v5-c-nav__item.pf-m-expandable::before { border-color: rgba(2, 2, 5, 0.12); }
+.pf-v5-c-nav { --pf-v5-c-nav__link--before--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); --pf-v5-c-nav__item--before--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
+.pf-v5-c-nav__link::before, .pf-v5-c-nav__item::before, .pf-v5-c-nav__item.pf-m-expandable::before { border-color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
 /* the current item's bar in the accent, in sub-menus too (PatternFly's is light blue there) */
-.pf-v5-c-nav__subnav { --pf-v5-c-nav__subnav__link--m-current--after--BorderColor: #FA5B35; }
-.pf-v5-c-nav__link.pf-m-current::after { border-color: #FA5B35; }
+.pf-v5-c-nav__subnav { --pf-v5-c-nav__subnav__link--m-current--after--BorderColor: oklch(0.6770 0.2010 34.60); }
+.pf-v5-c-nav__link.pf-m-current::after { border-color: oklch(0.6770 0.2010 34.60); }
 
 /* Link and secondary buttons in the brand's colours, set on the buttons themselves: PatternFly's own
    blue (#0066cc) came back on some pages, its variables being set again after this stylesheet. */
 .pf-v5-c-button.pf-m-link {
-  --pf-v5-c-button--m-link--Color: #C42F00; --pf-v5-c-button--m-link--hover--Color: #AC2800;
-  --pf-v5-c-button--m-link--focus--Color: #AC2800; --pf-v5-c-button--m-link--active--Color: #AC2800;
-  color: #C42F00;
+  --pf-v5-c-button--m-link--Color: oklch(0.5270 0.1867 34.60); --pf-v5-c-button--m-link--hover--Color: oklch(0.4770 0.1690 34.60);
+  --pf-v5-c-button--m-link--focus--Color: oklch(0.4770 0.1690 34.60); --pf-v5-c-button--m-link--active--Color: oklch(0.4770 0.1690 34.60);
+  color: oklch(0.5270 0.1867 34.60);
 }
-.pf-v5-c-button.pf-m-link:hover { color: #AC2800; }
+.pf-v5-c-button.pf-m-link:hover { color: oklch(0.4770 0.1690 34.60); }
 .pf-v5-c-button.pf-m-secondary {
-  --pf-v5-c-button--m-secondary--Color: #020205; --pf-v5-c-button--m-secondary--hover--Color: #020205;
-  --pf-v5-c-button--m-secondary--focus--Color: #020205; --pf-v5-c-button--m-secondary--active--Color: #020205;
-  --pf-v5-c-button--m-secondary--after--BorderColor: rgba(2, 2, 5, 0.12);
-  --pf-v5-c-button--m-secondary--hover--after--BorderColor: rgba(2, 2, 5, 0.62);
-  --pf-v5-c-button--m-secondary--focus--after--BorderColor: rgba(2, 2, 5, 0.62);
-  color: #020205;
+  --pf-v5-c-button--m-secondary--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-button--m-secondary--hover--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-secondary--focus--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-button--m-secondary--active--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-secondary--after--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12);
+  --pf-v5-c-button--m-secondary--hover--after--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62);
+  --pf-v5-c-button--m-secondary--focus--after--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62);
+  color: oklch(0.0900 0.0140 258.00);
 }
-.pf-v5-c-button.pf-m-secondary::after { border-color: rgba(2, 2, 5, 0.12); }
-.pf-v5-c-button.pf-m-secondary:hover::after { border-color: rgba(2, 2, 5, 0.62); }
+.pf-v5-c-button.pf-m-secondary::after { border-color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
+.pf-v5-c-button.pf-m-secondary:hover::after { border-color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62); }
