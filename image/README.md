@@ -109,6 +109,27 @@ access except, when connected, for the LLM files.
 - **Already provisioned:** the reader sandbox, the gateway's own hardening, and the proxy's security
   headers.
 
+## Licences
+
+The image redistributes NVIDIA's driver (Ubuntu's `linux-modules-nvidia-580-open-generic`,
+`nvidia-utils-580`, `libnvidia-compute-580` and the `nvidia-firmware-580` package they need). That
+is allowed (decided October 2026, development context §2, tracker #49): the open kernel modules are
+MIT, and the NVIDIA Driver License Agreement (§1.1(d)) lets the driver be distributed for use with an
+open-source kernel on two conditions, which every build keeps to:
+
+- **The binaries are Canonical's packages, unmodified.** Nothing patches, re-signs or translates the
+  driver's user-space libraries or firmware. (Signing the kernel modules would be fine, they are MIT;
+  Canonical's are signed already.)
+- **The licence text ships with the image.** In this build the packages' own
+  `/usr/share/doc/*/copyright` files stay in place (`cleanup.sh` doesn't remove them). The mkosi
+  build has no `/usr/share/doc` (`WithDocs=no`), so the text is in
+  `mkosi/mkosi.extra/usr/share/suveryn/licences/`, and `mkosi.postinst.chroot` stops a build that has
+  the driver without it.
+
+The licence is between the office and NVIDIA. For GeForce cards it only covers hardware the office
+owns, outside a datacenter (development context §2); that is a condition on the office's use, not on
+this image.
+
 ## Testing
 
 **Built** on a RunPod pod without KVM, with software emulation (`accelerator=tcg`).
@@ -121,9 +142,6 @@ dev pod.
 
 ## Open
 
-- **The NVIDIA driver in the image** (Ubuntu's `linux-modules-nvidia-580-open-generic`,
-  `nvidia-utils-580`, `libnvidia-compute-580`) means sūveryn redistributes it. It needs the same
-  licence review the CUDA libraries had (development context §2).
 - **Remote support access** (SSH or otherwise): none in the image.
 - **Updates for offline installations:** a signed bundle on media, tied to the signing decisions
   (development context §8, §11).
