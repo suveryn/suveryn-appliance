@@ -82,7 +82,7 @@ def test_no_white_text_on_the_accent():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     primary = re.search(r"\.suv-card \.pf-v5-c-button\.pf-m-primary \{(.*?)\}", login, re.S).group(1)
     assert "--pf-v5-c-button--m-primary--Color: var(--suv-on-accent)" in primary
-    ink = "oklch(0.0885 0.0139 283.18)"  # #020205, the brand's ink, as tokens v3 writes it
+    ink = "oklch(0.0900 0.0140 258.00)"  # #020205, the brand's ink, as tokens v3 writes it
     assert f"--suv-on-accent: {ink}" in login
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
     assert f"--pf-v5-c-button--m-primary--Color: {ink}" in account
@@ -92,7 +92,7 @@ def test_teal_focus_on_inputs():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     focus = re.search(r"\.pf-v5-c-form-control:focus-within::before \{(.*?)\}", css, re.S).group(1)
     assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15)" in focus
-    assert "--suv-teal-focus: oklch(0.5719 0.0969 187.53)" in css  # #0F8A82
+    assert "--suv-teal-focus: oklch(0.5720 0.0970 188.40)" in css  # #0F8A82
 
 
 def test_nothing_is_loaded_from_the_internet():
@@ -190,7 +190,7 @@ def test_no_text_in_the_plain_accent_or_tertiary_colour():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover)\)", login)
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
-    assert "--pf-v5-global--link--Color: oklch(0.5382 0.1909 34.55)" in account  # #C42F00
+    assert "--pf-v5-global--link--Color: oklch(0.5270 0.1867 34.60)" in account  # #C42F00
     # the email keeps hex: email clients don't draw oklch()
     assert ".suv-body a { color: #C42F00" in (SRC / "email" / "html" / "template.ftl").read_text()
 
