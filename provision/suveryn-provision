@@ -796,7 +796,7 @@ def updates(mode: str) -> None:
 
 
 def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: list[dict],
-              cases_access: str = "members") -> None:
+              cases_access: str = "members", cases_keep: str = "manual") -> None:
     step("Configuration and services")
     (ETC / "llama-presets.ini").write_text(presets(llms))
     default = next(m["id"] for m in llms if m.get("default"))
@@ -808,6 +808,9 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
                # (law firms with conflict walls, healthcare, government). "office": everyone signed in
                # (notary offices, where all staff share the same secrecy). A manager can still restrict one.
                "SUVERYN_CASES_DEFAULT_ACCESS": cases_access,
+               # How long a closed case is kept before it is deleted with everything in it (decision 11):
+               # 6m, 1y, 5y, or manual (until someone deletes it; the default: nothing is chosen for the office).
+               "SUVERYN_CASES_KEEP": cases_keep,
                # The system's CA bundle, which includes the local CA: the gateway reaches Keycloak at its public https URL.
                "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt", **oidc, **reader}
     write_env(ETC / "gateway.env", gateway, "suveryn", header=(
@@ -1263,7 +1266,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     host = a.public_url.split("://", 1)[1].rstrip("/")
     tls(host, a.tls_cert, a.tls_key)
     reverse_proxy(host)
-    configure(db_url, oidc, reader, llms, a.cases_access or "members")
+    configure(db_url, oidc, reader, llms, a.cases_access or "members", a.cases_keep or "manual")
     step("Starting the services")
     services("start")
     ok = verify(a.public_url)
@@ -1276,9 +1279,11 @@ def first_boot_config(path: Path) -> dict[str, str]:
     """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
     values = read_env(path)
     unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY",
-                             "CASES_ACCESS"}
+                             "CASES_ACCESS", "CASES_KEEP"}
     if values.get("CASES_ACCESS", "members") not in ("members", "office"):
         fail(f"CASES_ACCESS in {path} must be 'members' or 'office'")
+    if values.get("CASES_KEEP", "manual") not in ("6m", "1y", "5y", "manual"):
+        fail(f"CASES_KEEP in {path} must be '6m', '1y', '5y' or 'manual'")
     if unknown:
         fail(f"unknown setting in {path}: {', '.join(sorted(unknown))}")
     return values
@@ -1299,6 +1304,9 @@ def main() -> None:
         p.add_argument("--cases-access", choices=["members", "office"],
                        help="who sees a new case by default: its members only (the default, fail closed), or everyone "
                             "signed in at this office (a notary office, where all staff share the same secrecy)")
+        p.add_argument("--cases-keep", choices=["6m", "1y", "5y", "manual"],
+                       help="how long a closed case is kept before it is deleted with everything in it: 6m, 1y, 5y, "
+                            "or manual (the default: until someone deletes it)")
         p.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
         p.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
         p.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
@@ -1348,6 +1356,7 @@ def main() -> None:
             a.outbound = a.outbound or c.get("OUTBOUND")
             a.site = a.site or c.get("SITE")
             a.cases_access = a.cases_access or c.get("CASES_ACCESS")
+            a.cases_keep = a.cases_keep or c.get("CASES_KEEP")
             for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
                 if not getattr(a, attr) and c.get(key):
                     setattr(a, attr, Path(c[key]))

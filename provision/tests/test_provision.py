@@ -50,6 +50,16 @@ def test_environment_files_round_trip_and_refuse_injection(tmp_path, monkeypatch
     assert "SUVERYN_EXTRACT_UNSANDBOXED" not in path.read_text()
 
 
+def test_first_boot_settings_for_cases_are_checked(tmp_path):
+    env = tmp_path / "first-boot.env"
+    env.write_text("PUBLIC_URL=https://suveryn.office.example\nCASES_ACCESS=office\nCASES_KEEP=1y\n")
+    assert p.first_boot_config(env) == {"PUBLIC_URL": "https://suveryn.office.example", "CASES_ACCESS": "office", "CASES_KEEP": "1y"}
+    for bad in ("CASES_ACCESS=everyone", "CASES_KEEP=2y", "CASES_PERIOD=1y"):
+        env.write_text(f"PUBLIC_URL=https://suveryn.office.example\n{bad}\n")
+        with pytest.raises(SystemExit):
+            p.first_boot_config(env)
+
+
 def test_the_test_runner_reads_the_same_units_systemd_does():
     unit = p.parse_unit(HERE / "systemd" / "suveryn-gateway.service")
     assert unit["User"] == "suveryn"
