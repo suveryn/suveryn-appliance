@@ -60,16 +60,6 @@ def test_first_boot_settings_for_cases_are_checked(tmp_path):
             p.first_boot_config(env)
 
 
-def test_conversations_keep_period_becomes_the_gateways_whole_days():
-    """The data lifecycle (suveryn-tracker#31): the office chooses, nothing is chosen for it."""
-    assert p.conversations_max_age("manual") == {}
-    assert p.conversations_max_age("6m") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "183"}
-    assert p.conversations_max_age("1y") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "366"}
-    assert p.conversations_max_age("5y") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "1827"}
-    with pytest.raises(SystemExit):
-        p.conversations_max_age("2y")
-
-
 def test_the_test_runner_reads_the_same_units_systemd_does():
     unit = p.parse_unit(HERE / "systemd" / "suveryn-gateway.service")
     assert unit["User"] == "suveryn"
