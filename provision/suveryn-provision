@@ -795,8 +795,18 @@ def updates(mode: str) -> None:
          f"automatic updates off ({mode}): updates arrive as a signed bundle on media (not built yet)")
 
 
+KEEP_DAYS = {"6m": 183, "1y": 366, "5y": 1827}  # a keep period as the gateway's whole days; "manual": no cap
+
+
+def conversations_max_age(keep: str) -> dict[str, str]:
+    """``SUVERYN_CONVERSATION_MAX_AGE_DAYS`` for a keep period; nothing for ``manual`` (kept until deleted)."""
+    if keep not in ("manual", *KEEP_DAYS):
+        fail(f"conversations keep period must be '6m', '1y', '5y' or 'manual', not {keep!r}")
+    return {} if keep == "manual" else {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": str(KEEP_DAYS[keep])}
+
+
 def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: list[dict],
-              cases_access: str = "members", cases_keep: str = "manual") -> None:
+              cases_access: str = "members", cases_keep: str = "manual", conversations_keep: str = "manual") -> None:
     step("Configuration and services")
     (ETC / "llama-presets.ini").write_text(presets(llms))
     default = next(m["id"] for m in llms if m.get("default"))
@@ -811,6 +821,9 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
                # How long a closed case is kept before it is deleted with everything in it (decision 11):
                # 6m, 1y, 5y, or manual (until someone deletes it; the default: nothing is chosen for the office).
                "SUVERYN_CASES_KEEP": cases_keep,
+               # How long saved conversations are kept, counted from their last change, in cases too; the same
+               # choices, and the same default. The gateway takes whole days (the data lifecycle, suveryn-tracker#31).
+               **conversations_max_age(conversations_keep),
                # The system's CA bundle, which includes the local CA: the gateway reaches Keycloak at its public https URL.
                "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt", **oidc, **reader}
     write_env(ETC / "gateway.env", gateway, "suveryn", header=(
@@ -1266,7 +1279,8 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     host = a.public_url.split("://", 1)[1].rstrip("/")
     tls(host, a.tls_cert, a.tls_key)
     reverse_proxy(host)
-    configure(db_url, oidc, reader, llms, a.cases_access or "members", a.cases_keep or "manual")
+    configure(db_url, oidc, reader, llms, a.cases_access or "members", a.cases_keep or "manual",
+              a.conversations_keep or "manual")
     step("Starting the services")
     services("start")
     ok = verify(a.public_url)
@@ -1279,11 +1293,12 @@ def first_boot_config(path: Path) -> dict[str, str]:
     """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
     values = read_env(path)
     unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY",
-                             "CASES_ACCESS", "CASES_KEEP"}
+                             "CASES_ACCESS", "CASES_KEEP", "CONVERSATIONS_KEEP"}
     if values.get("CASES_ACCESS", "members") not in ("members", "office"):
         fail(f"CASES_ACCESS in {path} must be 'members' or 'office'")
-    if values.get("CASES_KEEP", "manual") not in ("6m", "1y", "5y", "manual"):
-        fail(f"CASES_KEEP in {path} must be '6m', '1y', '5y' or 'manual'")
+    for key in ("CASES_KEEP", "CONVERSATIONS_KEEP"):
+        if values.get(key, "manual") not in ("6m", "1y", "5y", "manual"):
+            fail(f"{key} in {path} must be '6m', '1y', '5y' or 'manual'")
     if unknown:
         fail(f"unknown setting in {path}: {', '.join(sorted(unknown))}")
     return values
@@ -1307,6 +1322,9 @@ def main() -> None:
         p.add_argument("--cases-keep", choices=["6m", "1y", "5y", "manual"],
                        help="how long a closed case is kept before it is deleted with everything in it: 6m, 1y, 5y, "
                             "or manual (the default: until someone deletes it)")
+        p.add_argument("--conversations-keep", choices=["6m", "1y", "5y", "manual"],
+                       help="how long saved conversations are kept, counted from their last change: 6m, 1y, 5y, "
+                            "or manual (the default: until their owner deletes them)")
         p.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
         p.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
         p.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
@@ -1357,6 +1375,7 @@ def main() -> None:
             a.site = a.site or c.get("SITE")
             a.cases_access = a.cases_access or c.get("CASES_ACCESS")
             a.cases_keep = a.cases_keep or c.get("CASES_KEEP")
+            a.conversations_keep = a.conversations_keep or c.get("CONVERSATIONS_KEEP")
             for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
                 if not getattr(a, attr) and c.get(key):
                     setattr(a, attr, Path(c[key]))

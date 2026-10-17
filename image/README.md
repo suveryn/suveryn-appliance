@@ -58,6 +58,7 @@ OUTBOUND=approved                # connected only: approved (the default) | all
 SITE=on-premise                  # required with a GeForce card: on-premise | datacenter (refused) | test
 CASES_ACCESS=members             # who sees a new case by default: members (the default) | office (everyone signed in)
 CASES_KEEP=manual                # how long a closed case is kept: 6m | 1y | 5y | manual (the default: until deleted by hand)
+CONVERSATIONS_KEEP=manual        # how long saved conversations are kept, from their last change: the same choices and default
 MODELS_FROM=/media/suveryn-models
 TLS_CERT=/boot/efi/suveryn/server.pem   # optional: the office's certificate (full chain) and key;
 TLS_KEY=/boot/efi/suveryn/server.key    # without them a local CA on the box issues one

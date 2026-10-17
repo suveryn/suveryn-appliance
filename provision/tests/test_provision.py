@@ -54,10 +54,20 @@ def test_first_boot_settings_for_cases_are_checked(tmp_path):
     env = tmp_path / "first-boot.env"
     env.write_text("PUBLIC_URL=https://suveryn.office.example\nCASES_ACCESS=office\nCASES_KEEP=1y\n")
     assert p.first_boot_config(env) == {"PUBLIC_URL": "https://suveryn.office.example", "CASES_ACCESS": "office", "CASES_KEEP": "1y"}
-    for bad in ("CASES_ACCESS=everyone", "CASES_KEEP=2y", "CASES_PERIOD=1y"):
+    for bad in ("CASES_ACCESS=everyone", "CASES_KEEP=2y", "CASES_PERIOD=1y", "CONVERSATIONS_KEEP=forever"):
         env.write_text(f"PUBLIC_URL=https://suveryn.office.example\n{bad}\n")
         with pytest.raises(SystemExit):
             p.first_boot_config(env)
+
+
+def test_conversations_keep_period_becomes_the_gateways_whole_days():
+    """The data lifecycle (suveryn-tracker#31): the office chooses, nothing is chosen for it."""
+    assert p.conversations_max_age("manual") == {}
+    assert p.conversations_max_age("6m") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "183"}
+    assert p.conversations_max_age("1y") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "366"}
+    assert p.conversations_max_age("5y") == {"SUVERYN_CONVERSATION_MAX_AGE_DAYS": "1827"}
+    with pytest.raises(SystemExit):
+        p.conversations_max_age("2y")
 
 
 def test_the_test_runner_reads_the_same_units_systemd_does():
