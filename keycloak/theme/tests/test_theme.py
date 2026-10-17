@@ -65,7 +65,8 @@ def test_air_gapped_badge_shows_only_when_the_network_mode_is_air_gapped():
 def test_badge_matches_the_website_component():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     rule = re.search(r"\.suv-badge-airgapped \{(.*?)\}", css, re.S).group(1)
-    for decl in ("gap: 5px", "font-size: 10px", "font-weight: 600", "color: var(--suv-teal-ink)",
+    # the brand's label style (11px, tokens v3.2); the website's product mockup draws the same badge at illustration scale
+    for decl in ("gap: 5px", "font-size: 11px", "font-weight: 600", "color: var(--suv-teal-ink)",
                  "background: oklch(from var(--suv-teal) l c h / 0.10)", "border: 1px solid oklch(from var(--suv-teal) l c h / 0.35)",
                  "border-radius: 20px", "padding: 3px 8px", "display: inline-flex"):
         assert decl in rule, decl
@@ -311,3 +312,12 @@ def test_fonts_are_preloaded_and_never_swapped_in_late():
     for font in ("Inter-Variable.woff2", "SpaceGrotesk-Variable.woff2"):
         assert f'<link rel="preload" href="${{url.resourcesPath}}/fonts/{font}" as="font" type="font/woff2" crossorigin>' in template
         assert f'url("../fonts/{font}")' in css  # the same file the stylesheet uses (css/ is one level down)
+
+
+def test_text_sizes_are_the_brands_type_scale():
+    """suveryn-brand tokens v3.2: a surface uses the scale's sizes and nothing else."""
+    scale = {"48px", "28px", "22px", "18px", "15px", "14.5px", "13.5px", "13px", "12px", "11px", "32px"}
+    for path in STYLES:
+        css = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
+        sizes = set(re.findall(r"font-size:\s*([0-9.]+px)", css))
+        assert sizes <= scale, f"{path.name}: {sorted(sizes - scale)} are not on the type scale"
