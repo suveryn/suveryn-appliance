@@ -3,9 +3,10 @@
  * Values from the reviewed login mockup and the Sūveryn Design System. Contrast rule: text on the
  * accent orange is always ink (#020205), never white. All text meets 4.5:1 measured the Design
  * System's way, from OKLCH lightness (tests/oklch_contrast.py); the colours are suveryn-brand's
- * tokens (version 3.1, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
+ * tokens (version 3.2, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
  * lightness. A wash, a glow or a dimmed line is the token's own hue with an alpha
- * (oklch(from var(--suv-…) l c h / alpha)), never a hex or rgba of its own.
+ * (oklch(from var(--suv-…) l c h / alpha)), never a hex or rgba of its own. Text sizes are the brand's
+ * type scale (tokens v3.2): body 15, control 14.5, body-sm 13.5, ui-sm 13, label 11, title 22; no others.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
  * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
@@ -32,7 +33,7 @@
   --suv-accent-ink-hover: oklch(0.4770 0.1690 34.60);
   --suv-teal: oklch(0.7900 0.1250 188.40);               /* brand teal: fills and washes only, never text */
   --suv-teal-ink: oklch(0.5200 0.0903 188.40);           /* brand teal-ink: the teal's lightness minus 0.27; 4.5:1 incl. the badge wash */
-  --suv-teal-focus: oklch(0.5720 0.0970 188.40);         /* input focus border (a UI boundary, 3:1) */
+  --suv-teal-focus: oklch(0.5720 0.0970 188.40);         /* brand focus (tokens v3.2): the teal as a UI boundary, 3:1 on every light surface */
   --suv-teal-glow: oklch(from var(--suv-teal) l c h / 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
@@ -78,7 +79,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
    (version 2 of the tokens: #007F78, which holds 4.5:1 on the badge's own wash). */
 .suv-badge-airgapped {
   display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--suv-font-body); font-size: 10px; font-weight: 600; line-height: 1.2;
+  font-family: var(--suv-font-body); font-size: 11px; font-weight: 600; line-height: 1.2;  /* brand label */
   color: var(--suv-teal-ink); background: oklch(from var(--suv-teal) l c h / 0.10); border: 1px solid oklch(from var(--suv-teal) l c h / 0.35);
   border-radius: 20px; padding: 3px 8px;
 }
@@ -102,7 +103,7 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .pf-v5-c-login__main-body { padding: 8px 28px 28px; }
 .suv-card .pf-v5-c-login__main-footer:empty { display: none; }
 #kc-page-title.pf-v5-c-title {
-  font-family: var(--suv-font-display); font-weight: 600; font-size: 24px; line-height: 1.2;
+  font-family: var(--suv-font-display); font-weight: 600; font-size: 22px; line-height: 1.2;  /* brand title */
   color: var(--suv-text); margin: 0;
   word-break: normal; overflow-wrap: normal; hyphens: none; /* never split a word */
 }
