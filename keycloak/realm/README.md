@@ -20,8 +20,9 @@ It writes two files, both 0600 and git-ignored here:
   `SUVERYN_DIRECTORY_CLIENT_SECRET` for it.
 
 The `suveryn-directory` client is the gateway's read-only view of the office's accounts, so a case's
-manager can add colleagues by name: a service account whose only role is `view-users`, no sign-in
-flow, no redirect URIs. The build refuses a realm where that service account has any other role,
+manager can add colleagues by name, and to know who administers (the badge on their avatar, suveryn-core
+`docs/design/avatars.md`): a service account whose only roles are `view-users` and `view-realm`, both
+read-only, no sign-in flow, no redirect URIs. The build refuses a realm where that service account has any other role,
 where the chat client has a service account, or where the directory client could sign in.
 
 ## What production changes
