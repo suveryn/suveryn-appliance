@@ -69,7 +69,7 @@ DIRECTORY = {"clientId": "suveryn-directory", "enabled": True, "protocol": "open
              "serviceAccountsEnabled": True, "redirectUris": [], "webOrigins": [],
              "attributes": {"pkce.code.challenge.method": "S256"}}
 SERVICE_ACCOUNT = {"username": "service-account-suveryn-directory", "enabled": True,
-                   "serviceAccountClientId": "suveryn-directory", "clientRoles": {"realm-management": ["view-users"]}}
+                   "serviceAccountClientId": "suveryn-directory", "clientRoles": {"realm-management": ["view-users", "view-realm"]}}
 
 
 def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
@@ -87,6 +87,8 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
         build_realm.production_realm(with_dir, URL, "chat-secret")  # the client without a secret: refused
     # a service account with more rights, on the chat client, or a directory client that could sign in: refused
     for bad in ({"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["manage-users"]}}]},
+                {"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["view-users", "view-realm", "manage-realm"]}}]},
+                {"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["view-users"], "account": ["manage-account"]}}]},
                 {"users": [{**SERVICE_ACCOUNT, "serviceAccountClientId": "suveryn-chat"}]},
                 {"clients": [{**chat_client(dev), "serviceAccountsEnabled": True}, DIRECTORY]},
                 {"clients": [chat_client(dev), {**DIRECTORY, "standardFlowEnabled": True}]}):
