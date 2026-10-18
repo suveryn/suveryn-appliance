@@ -63,6 +63,7 @@ MIN_PASSWORD = 15
 # What the office's administrator may do in Keycloak's admin console for this realm: manage the
 # office's own accounts. Nothing on the realm's settings, clients or other realms.
 ADMIN_CLIENT_ROLES = ["manage-users", "view-users", "query-users", "query-groups"]
+DIRECTORY_ROLES = {"view-users", "view-realm"}  # the directory service account: read-only, nothing else (avatars: view-realm lists who administers)
 # Keycloak's pbkdf2-sha512 credential (its default before Keycloak 24, still read by 26): the
 # password never appears in the realm file, only its hash.
 HASH_ITERATIONS = 210_000
@@ -188,8 +189,9 @@ def verify(realm: dict, public_url: str) -> None:
             problems.append(f"client {c['clientId']} doesn't require PKCE S256")
     for u in realm.get("users", []):
         if u.get("serviceAccountClientId"):
-            if u["serviceAccountClientId"] != DIRECTORY_CLIENT or u.get("clientRoles") != {"realm-management": ["view-users"]}:
-                problems.append(f"service account {u.get('username')} has more than view-users, or belongs to another client")
+            roles = set(u.get("clientRoles", {}).get("realm-management", [])) if u.get("clientRoles", {}).keys() <= {"realm-management"} else None
+            if u["serviceAccountClientId"] != DIRECTORY_CLIENT or roles is None or not roles or not roles <= DIRECTORY_ROLES:
+                problems.append(f"service account {u.get('username')} has a role beyond {', '.join(sorted(DIRECTORY_ROLES))}, or belongs to another client")
     if problems:
         fail("refusing to build a production realm: " + "; ".join(problems))
 
