@@ -189,3 +189,31 @@ def test_the_read_check_deletes_its_test_pdf_by_scope(tmp_path):
     assert r.returncode == 0, r.stderr.decode()[-500:]
     assert out.count("DELETED_ALL") == 2  # a clean space before the upload, and after
     assert json.loads(out.strip().splitlines()[-1]) == {"state": "ready", "status": "ready", "pages": 1, "error": None, "warnings": []}
+
+
+def test_restarting_under_systemd_restarts_the_running_units(monkeypatch):
+    """After an update the running gateway must come back on the new code: ``systemctl start`` leaves a
+    running unit as it is, ``restart`` doesn't (and starts a stopped one, as on a first boot)."""
+    calls = []
+    monkeypatch.setattr(p, "systemd_running", lambda: True)
+    monkeypatch.setattr(p, "run", lambda *cmd, **kw: calls.append(list(cmd)) or "")
+    p.services("restart")
+    assert ["systemctl", "restart", *p.UNITS] in calls
+    assert ["systemctl", "start", "postgresql"] in calls and ["systemctl", "start", "nginx"] in calls
+
+
+def test_restarting_with_the_test_runner_stops_then_starts(monkeypatch):
+    """Without systemd (a test pod) a restart is a stop and a start: the start alone skipped a service that
+    still ran, which is how an updated pod kept the old gateway."""
+    real, done = p.services, []
+    monkeypatch.setattr(p, "systemd_running", lambda: False)
+    monkeypatch.setattr(p, "services", lambda action: done.append(action) if action != "restart" else real(action))
+    real("restart")
+    assert done == ["stop", "start"]
+
+
+def test_first_boot_restarts_the_services():
+    """first-boot is what install runs again after an update; it must not merely start what isn't running."""
+    import inspect
+    source = inspect.getsource(p.first_boot)
+    assert 'services("restart")' in source and 'services("start")' not in source
