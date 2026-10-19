@@ -153,3 +153,39 @@ def test_a_server_started_without_systemd_never_holds_a_pipe(tmp_path):
     failing.chmod(0o755)
     with pytest.raises(SystemExit):
         p.start_daemon([str(failing)], "the stand-in")
+
+
+def test_the_read_check_deletes_its_test_pdf_by_scope(tmp_path):
+    """READ_CHECK runs inside suveryn-core's virtualenv; here against a stand-in for suveryn_rag with
+    core's signatures (accept_upload and job by owner, deleting by Scope). Deleting with a plain owner
+    string, as before core's cases, fails here as it did on the pod. The space is emptied before the
+    upload too: an earlier run's leftover is the same file, which core would return instead of reading."""
+    pkg = tmp_path / "suveryn_rag"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "config.py").write_text("class RagSettings:\n    @classmethod\n    def from_env(cls): return cls()\n")
+    (pkg / "store.py").write_text(
+        "from dataclasses import dataclass\n"
+        "@dataclass(frozen=True)\nclass Scope:\n    owner: str | None = None\n    case_id: object = None\n"
+        "    @classmethod\n    def personal(cls, owner): return cls(owner=owner)\n"
+        "    def where(self): return ('owner = %s', (self.owner,))\n")
+    (pkg / "service.py").write_text(
+        "import types\nfrom suveryn_rag.store import Scope\n"
+        "DELETED = []\n"
+        "class DocumentService:\n"
+        "    state, error = 'ready', None\n"
+        "    def __init__(self, settings): pass\n"
+        "    def start(self): pass\n"
+        "    def accept_upload(self, src, filename, owner): assert isinstance(owner, str); src.read(); return types.SimpleNamespace(id='j1')\n"
+        "    def job(self, job_id, owner): return types.SimpleNamespace(status='ready', pages=1, error=None, warnings=[], document_id='d1')\n"
+        "    def delete(self, document_id, scope): scope.where(); DELETED.append(scope)\n"
+        "    def delete_all(self, scope):\n"
+        "        scope.where()\n"
+        "        assert scope == Scope.personal('provisioning-check')\n"
+        "        print('DELETED_ALL', flush=True); return 1\n")
+    r = subprocess.run([sys.executable, "-c", p.READ_CHECK], input=p.test_pdf(), capture_output=True,
+                       env={"PYTHONPATH": str(tmp_path)}, timeout=60)
+    out = r.stdout.decode()
+    assert r.returncode == 0, r.stderr.decode()[-500:]
+    assert out.count("DELETED_ALL") == 2  # a clean space before the upload, and after
+    assert json.loads(out.strip().splitlines()[-1]) == {"state": "ready", "status": "ready", "pages": 1, "error": None, "warnings": []}
