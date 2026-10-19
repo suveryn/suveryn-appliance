@@ -847,13 +847,24 @@ def parse_unit(path: Path) -> dict:
 
 
 def services(action: str) -> None:
+    """start, stop, restart or show the services. first-boot restarts them: run again after an update
+    (install), a start alone left the running gateway on the old code while it started its reader from
+    the new, and when the two spoke different versions every upload failed."""
     if systemd_running():
         if action == "start":
             run("systemctl", "start", "postgresql", *UNITS, "nginx")
+        elif action == "restart":  # starts a stopped unit too: the same on a first boot
+            run("systemctl", "start", "postgresql")
+            run("systemctl", "restart", *UNITS)
+            run("systemctl", "start", "nginx")
         elif action == "stop":
             run("systemctl", "stop", *reversed(UNITS))
         else:
             subprocess.run(["systemctl", "--no-pager", "status", "postgresql", *UNITS], check=False)
+        return
+    if action == "restart":
+        services("stop")
+        services("start")
         return
     RUN.mkdir(parents=True, exist_ok=True)
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -1279,7 +1290,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     configure(db_url, oidc, reader, llms, a.cases_access or "members", a.cases_keep or "manual",
               a.conversations_keep or "manual")
     step("Starting the services")
-    services("start")
+    services("restart")  # an update installs new code under services that may be running
     ok = verify(a.public_url)
     if ok and not staging:
         FIRST_BOOT_DONE.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()))
@@ -1339,8 +1350,8 @@ def main() -> None:
                    help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
     sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
     sub.add_parser("verify", help="check every service, end to end")
-    s = sub.add_parser("services", help="start, stop or show the services (systemd, or the test runner)")
-    s.add_argument("action", choices=["start", "stop", "status"])
+    s = sub.add_parser("services", help="start, stop, restart or show the services (systemd, or the test runner)")
+    s.add_argument("action", choices=["start", "stop", "restart", "status"])
     a = ap.parse_args()
     if os.geteuid() != 0:
         fail("run as root")
