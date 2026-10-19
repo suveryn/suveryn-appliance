@@ -935,7 +935,9 @@ READ_CHECK = r'''
 import io, json, sys, time
 from suveryn_rag.config import RagSettings
 from suveryn_rag.service import DocumentService
+from suveryn_rag.store import Scope
 docs = DocumentService(RagSettings.from_env())
+check = Scope.personal("provisioning-check")  # the check's own personal space, nobody's documents
 docs.start()
 for _ in range(300):
     if docs.state != "starting":
@@ -943,6 +945,9 @@ for _ in range(300):
     time.sleep(1)
 if docs.state != "ready":
     print(json.dumps({"state": docs.state, "error": docs.error})); sys.exit(1)
+# A clean space first: an earlier run's test PDF, still there, is the same file (by SHA-256), and an
+# upload of it would return that stored copy instead of reading it through the sandbox.
+docs.delete_all(check)
 job = docs.accept_upload(io.BytesIO(sys.stdin.buffer.read()), "provisioning-check.pdf", "provisioning-check")
 for _ in range(600):
     j = docs.job(job.id, "provisioning-check")
@@ -950,8 +955,9 @@ for _ in range(600):
         break
     time.sleep(1)
 result = {"state": docs.state, "status": j.status, "pages": j.pages, "error": j.error, "warnings": [w["kind"] for w in j.warnings]}
-if j.document_id:
-    docs.delete(j.document_id, "provisioning-check")
+# And afterwards (suveryn-core deletes by Scope since its cases: a plain owner string made this crash
+# and left the test PDF behind).
+docs.delete_all(check)
 print(json.dumps(result))
 '''
 
