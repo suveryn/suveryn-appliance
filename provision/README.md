@@ -8,10 +8,12 @@ step before an OS image: run it directly on a test box; the image will run it at
 sudo provision/suveryn-provision install --public-url https://suveryn.office.example \
      --network-mode connected [--outbound approved|all] --site on-premise [--models-from /media/suveryn-models]
 sudo provision/suveryn-provision verify            # again later, any time
-sudo provision/suveryn-provision services start    # start | stop | status
+sudo provision/suveryn-provision services start    # start | stop | restart | status
 ```
 
 Every step is idempotent: running `install` again continues where it stopped or changes nothing.
+It ends by restarting the services, so after an update they run the new code (a start alone left a
+running gateway on the old one).
 Secrets are generated on the machine and never printed.
 
 ## What it installs
