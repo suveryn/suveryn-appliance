@@ -67,6 +67,10 @@ still open decision 3 in the development context).
 - **Keycloak**: ready; through the admin API, realm `suveryn` has sslRequired `all`, theme
   `suveryn` and 180-day events; its discovery, asked as the reverse proxy will ask it (`https` in
   `X-Forwarded-Proto`), gives exactly the issuer the gateway is configured with.
+- **The directory**: the gateway's `suveryn-directory` client gets a token and lists the accounts and
+  the holders of `suveryn-admin`, as adding a member to a case does. `install` first adds
+  `view-users` and `view-realm` to that client's scope on a realm imported before the realm file had
+  them (the Pod check of 5e9a539 found members couldn't be added on a fresh install).
 - **The reader sandbox**: the wrapper is set and the bypass is not; then a fictional one-page PDF is
   uploaded as the gateway's user, through the gateway's own document service, its inbox and the
   sandboxed reader, and must come back read (one page), after which it is deleted. It runs on the
