@@ -70,13 +70,15 @@ DIRECTORY = {"clientId": "suveryn-directory", "enabled": True, "protocol": "open
              "attributes": {"pkce.code.challenge.method": "S256"}}
 SERVICE_ACCOUNT = {"username": "service-account-suveryn-directory", "enabled": True,
                    "serviceAccountClientId": "suveryn-directory", "clientRoles": {"realm-management": ["view-users", "view-realm"]}}
+SCOPE = {"realm-management": [{"client": "suveryn-directory", "roles": ["view-users", "view-realm"]}]}
 
 
 def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     """suveryn-tracker#10, stage 2: suveryn-core's realm carries a second client, suveryn-directory,
     whose service account reads the office's accounts for a case's members. Shaped here as that
     realm has it, so the test holds whatever commit realm-lock.json points at."""
-    with_dir = dev if build_realm.has_directory_client(dev) else {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT]}
+    with_dir = dev if build_realm.has_directory_client(dev) else {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT],
+                                                                  "clientScopeMappings": SCOPE}
     without = {**dev, "clients": [chat_client(dev)], "users": []}
     prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret")
     chat, directory = prod["clients"]
@@ -165,3 +167,16 @@ def test_built_files_can_never_be_committed(tmp_path):
         r = subprocess.run(["git", "-C", str(HERE), "check-ignore", "-q", str(HERE / name)])
         assert r.returncode == 0, name
     assert "secret" not in (HERE / "realm-lock.json").read_text()
+
+
+def test_the_directory_client_must_carry_view_users_in_its_scope_and_nothing_more(dev):
+    """Pod check of d1f1918: with fullScopeAllowed off and no scope mapping, the directory client's token
+    had no roles and Keycloak refused the user list (403). A realm without the mapping is refused, and so
+    is one that maps more, or maps to another client."""
+    with_dir = {**dev, "clients": [chat_client(dev), DIRECTORY], "users": [SERVICE_ACCOUNT]}
+    build_realm.production_realm({**with_dir, "clientScopeMappings": SCOPE}, URL, "c", "d")
+    for bad in ({}, {"realm-management": [{"client": "suveryn-directory", "roles": ["view-realm"]}]},
+                {"realm-management": [{"client": "suveryn-directory", "roles": ["view-users", "manage-users"]}]},
+                {"realm-management": [*SCOPE["realm-management"], {"client": "suveryn-chat", "roles": ["view-users"]}]}):
+        with pytest.raises(SystemExit, match="scope"):
+            build_realm.production_realm({**with_dir, "clientScopeMappings": bad}, URL, "c", "d")
