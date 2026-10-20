@@ -192,6 +192,20 @@ def verify(realm: dict, public_url: str) -> None:
             roles = set(u.get("clientRoles", {}).get("realm-management", [])) if u.get("clientRoles", {}).keys() <= {"realm-management"} else None
             if u["serviceAccountClientId"] != DIRECTORY_CLIENT or roles is None or not roles or not roles <= DIRECTORY_ROLES:
                 problems.append(f"service account {u.get('username')} has a role beyond {', '.join(sorted(DIRECTORY_ROLES))}, or belongs to another client")
+    # The directory client's token carries only roles mapped to its scope (fullScopeAllowed off): without
+    # view-users there Keycloak refuses the user list, and members can't be added (Pod check of 5e9a539).
+    # Nothing else may be mapped, to it or to another client.
+    mapped: dict[str, set[str]] = {}
+    for client_id, entries in realm.get("clientScopeMappings", {}).items():
+        for e in entries:
+            mapped.setdefault(e.get("client", ""), set()).update(f"{client_id}/{r}" for r in e.get("roles", []))
+    allowed = {f"realm-management/{r}" for r in DIRECTORY_ROLES}
+    if any(c["clientId"] == DIRECTORY_CLIENT for c in realm["clients"]):
+        roles = mapped.get(DIRECTORY_CLIENT, set())
+        if "realm-management/view-users" not in roles:
+            problems.append(f"client {DIRECTORY_CLIENT} has no view-users in its scope: the user list would be refused")
+    if any(client != DIRECTORY_CLIENT or not roles <= allowed for client, roles in mapped.items()):
+        problems.append(f"a client scope mapping beyond {', '.join(sorted(DIRECTORY_ROLES))} for {DIRECTORY_CLIENT}")
     if problems:
         fail("refusing to build a production realm: " + "; ".join(problems))
 
