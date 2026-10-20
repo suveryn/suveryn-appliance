@@ -408,9 +408,11 @@ def suveryn_core() -> None:
     env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache")}
     run(UV, "sync", "-q", "--locked", "--all-packages", "--no-dev", cwd=CORE, env=env)
     note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
-    # It loads each model once as a check: on the CPU when there is no GPU (an image is built without one).
+    # It loads each model once as a check, always on the CPU: an image is built without a GPU, and on an
+    # update the running services hold the card (llama-server and the gateway left no room for the check:
+    # CUDA out of memory, Pod check of 13469bf). The services use the GPU as before.
     run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0",
-        **({"SUVERYN_RAG_DEVICE": "cpu"} if for_image() else {})}, cwd=CORE, capture=True)
+        "SUVERYN_RAG_DEVICE": "cpu", "CUDA_VISIBLE_DEVICES": ""}, cwd=CORE, capture=True)
     run("chmod", "-R", "a+rX", *[d for d in (HF_HOME, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
     note(f"embedding and Docling models in {HF_HOME}")
 
