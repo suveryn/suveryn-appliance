@@ -254,7 +254,10 @@ class Ink:
     """Colour pairs. On the appliance's console the 16 colours are set from the brand's dark theme
     (console-colours, loaded with setvtrgb): black is the background #0B0D10, red the accent #FA5B35,
     cyan the teal #3AD4CA, white the dim grey #A4A6A7, bright white the text #F3F4F5, blue the field
-    grey #272C32, magenta the bars' #12161B."""
+    grey #272C32, magenta the bars' and the window's #12161B, bright black the window's border #757E86.
+
+    ``panel=True`` gives the same ink on the bars' and the window's #12161B (design: one unbroken bar,
+    a filled window; setup check K1 and K2): text written on them keeps their colour behind it."""
 
     def __init__(self):
         self.ok = curses.has_colors()
@@ -262,21 +265,37 @@ class Ink:
             curses.start_color()
             curses.use_default_colors()
             # field: blue is the field grey (#272C32); bar: magenta is the bar black (#12161B).
+            # 7 and 8: accent and teal on the panel (dim and text there use pair 6); 9: the border, bright
+            # black where the terminal has 16 colours, else black made bright by bold (the Linux console's way).
+            self.grey = curses.COLORS >= 16
+            border = (8 if self.grey else curses.COLOR_BLACK, curses.COLOR_MAGENTA)
             for n, (fg, bg) in enumerate([(curses.COLOR_WHITE, -1), (curses.COLOR_RED, -1), (curses.COLOR_CYAN, -1),
                                           (curses.COLOR_BLACK, curses.COLOR_RED), (curses.COLOR_WHITE, curses.COLOR_BLUE),
-                                          (curses.COLOR_WHITE, curses.COLOR_MAGENTA)], start=1):
+                                          (curses.COLOR_WHITE, curses.COLOR_MAGENTA), (curses.COLOR_RED, curses.COLOR_MAGENTA),
+                                          (curses.COLOR_CYAN, curses.COLOR_MAGENTA), border], start=1):
                 try:
                     curses.init_pair(n, fg, bg)
                 except curses.error:
                     pass
 
-    def __call__(self, kind: str) -> int:
+    def __call__(self, kind: str, panel: bool = False) -> int:
         if not self.ok:
             return {"bar": curses.A_REVERSE, "focus": curses.A_REVERSE, "strong": curses.A_BOLD}.get(kind, 0)
+        if panel and kind in ("dim", "text", "strong", "accent", "ok"):
+            return {"dim": curses.color_pair(6), "text": curses.color_pair(6) | curses.A_BOLD,
+                    "strong": curses.color_pair(6) | curses.A_BOLD, "accent": curses.color_pair(7) | curses.A_BOLD,
+                    "ok": curses.color_pair(8) | curses.A_BOLD}[kind]
+        if kind == "border":
+            return curses.color_pair(9) | (0 if self.grey else curses.A_BOLD)
         return {"dim": curses.color_pair(1), "text": curses.color_pair(1) | curses.A_BOLD,
                 "strong": curses.color_pair(1) | curses.A_BOLD, "accent": curses.color_pair(2) | curses.A_BOLD,
                 "ok": curses.color_pair(3) | curses.A_BOLD, "focus": curses.color_pair(4),
-                "field": curses.color_pair(5) | curses.A_BOLD, "bar": curses.color_pair(6)}[kind]
+                "field": curses.color_pair(5) | curses.A_BOLD, "placeholder": curses.color_pair(5),
+                "bar": curses.color_pair(6)}[kind]
+
+
+# Never at the start of a line: the punctuation French writes after a space.
+NO_BREAK_BEFORE = (":", ";", "?", "!", "»")
 
 
 class Canvas:
@@ -307,6 +326,8 @@ class Canvas:
                 cut = len(last)
             else:
                 cut = last.rfind(" ", 0, room + 1)
+                while cut > 0 and last[cut + 1: cut + 2] in NO_BREAK_BEFORE:  # "navigateur :" stays together
+                    cut = last.rfind(" ", 0, cut)
                 cut = room if cut <= 0 else cut
             chunk, last = last[:cut].rstrip(), last[cut:].lstrip()
             self.lines.append([*head, (chunk, style)] if first else [(" " * cont, "text"), (chunk, style)])
@@ -316,7 +337,12 @@ class Canvas:
         return len(self.lines) - 1
 
     def wrap(self, text: str, style: str = "text", indent: int = 0, first: str = "") -> None:
-        words, line = text.split(), first
+        words, line = [], first
+        for w in text.split():  # French punctuation goes with the word before it (K9)
+            if words and w[0] in NO_BREAK_BEFORE:
+                words[-1] += " " + w
+            else:
+                words.append(w)
         for w in words:
             if len(line) + len(w) + (1 if line else 0) > self.width - indent:
                 self.add((line, style), indent=indent)
@@ -345,8 +371,8 @@ class Field:
 
 
 class Radio(Field):
-    def __init__(self, label, options, value=None, on_change=None, disabled=()):
-        self.label, self.options = label, options  # [(value, text)]
+    def __init__(self, label, options, value=None, on_change=None, disabled=(), width=40):
+        self.label, self.options, self.width = label, options, width  # [(value, text)]; width as a Select's
         self.disabled = set(disabled)
         selectable = [v for v, _ in options if v not in self.disabled]
         self.value = value if value in selectable else (selectable[0] if selectable else None)
@@ -373,8 +399,14 @@ class Radio(Field):
             mark = "(*)" if v == self.value else "( )"
             text = text_of(text)
             style = "focus" if focused and v == self.value else ("dim" if v in self.disabled else "text")
-            pieces = [(f" {mark} {text}".ljust(c.width - col - 2), style)]
-            c.add(((text_of(self.label) if first else "").ljust(col), "dim"), *pieces)
+            label = ((text_of(self.label) if first else "").ljust(col), "dim")
+            # as wide as a field, "[" to "]": the Select's w + 3; the mark in accent
+            width = min(self.width, c.width - col - 4) + 3
+            if len(text) + 5 <= c.width - col:
+                mark_style = style if style == "focus" or v in self.disabled else "accent"
+                c.add(label, (" ", style), (mark, mark_style), (f" {text}".ljust(max(width, len(text) + 5) - 4), style))
+            else:  # too long for one line: one piece, so it wraps under itself
+                c.add(label, (f" {mark} {text}".ljust(width), style))
             first = False
 
 
@@ -422,9 +454,10 @@ class Select(Field):
 
     def draw(self, c: Canvas, focused: bool, col: int):
         w = min(self.width, c.width - col - 4)
-        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", "dim"),
+        bracket = "accent" if focused else "dim"
+        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", bracket),
               ((text_of(self.text())[: w - 2]).ljust(w - 2) + "▾", "focus" if focused and not self.open else "field"),
-              (" ]", "dim"))
+              (" ]", bracket))
         if self.open:
             shown = self.shown()
             c.add((" " * col, "text"), ("  " + t("type_to_search"), "dim"), (self.filter + "_", "strong"))
@@ -451,14 +484,15 @@ class Text(Field):
         return None
 
     def draw(self, c: Canvas, focused: bool, col: int):
-        w = min(self.width, c.width - col - 4)
+        w = min(self.width, c.width - col - 4) - 1  # "[" to "]" as wide as a Select's
         shown = self.value[-(w - 1):] if self.value else ""
         if focused:
             body = (shown + "_").ljust(w)
         else:
             body = (shown or text_of(self.placeholder)).ljust(w)
-        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", "dim"),
-              (body, "field" if (self.value or focused) else "dim"), (" ]", "dim"))
+        bracket = "accent" if focused else "dim"
+        c.add((text_of(self.label).ljust(col), "dim"), ("[ ", bracket),
+              (body, "field" if (self.value or focused) else "placeholder"), (" ]", bracket))
         hint = self.hint() if callable(self.hint) else self.hint
         if hint:
             c.add((" " * col, "text"), (hint, "dim"))
@@ -1036,13 +1070,23 @@ class RecoveryKey(Screen):
     def fields(self):
         return [self.confirm, self.restart]
 
+    @property
+    def default(self):
+        """Enter restarts from the field too (once the key matches): the button shows it."""
+        return self.restart
+
     def body(self, c, focus):
         c.add((f"{CHECK} ", "ok"), (t("c7_encrypted"), "text"))
         c.wrap(t("c7_only_if"), "dim", indent=2)
         c.blank()
         groups = self.key_text.split("-")
-        c.add(("    " + "-".join(groups[:4]), "strong"))
-        c.add(("    " + "-".join(groups[4:]), "strong"))
+        lines = ["-".join(groups[:4]), "-".join(groups[4:])]
+        inner = max(len(x) for x in lines) + 4
+        pad = " " * max(0, (c.width - inner - 2) // 2)
+        c.lines.append([(pad, "text"), ("┌" + "─" * inner + "┐", "accent")])  # as drawn, never wrapped
+        for x in lines:
+            c.lines.append([(pad, "text"), ("│", "accent"), (x.center(inner), "strong"), ("│", "accent")])
+        c.lines.append([(pad, "text"), ("└" + "─" * inner + "┘", "accent")])
         c.blank()
         c.add((f"{WARN} ", "accent"), (t("c7_once"), "strong"))
         c.wrap(t("c7_paper"), "dim", indent=2)
@@ -1050,8 +1094,13 @@ class RecoveryKey(Screen):
         ok = self.confirm.value == groups[0]
         col = len(text_of(self.confirm.label))
         self.confirm.draw(c, focus is self.confirm, col)
-        if ok:
-            c.add((" " * col, "text"), (f"{CHECK} {t('c7_matches')}", "ok"))
+        if ok:  # on the field's own line when it fits
+            line = c.lines[-1]
+            mark = f"  {CHECK} {t('c7_matches')}"
+            if sum(len(x) for x, _ in line) + len(mark) <= c.width:
+                line.append((mark, "ok"))
+            else:
+                c.add((" " * col, "text"), (mark.strip(), "ok"))
 
     def leave(self):
         if self.confirm.value != self.key_text.split("-")[0]:
@@ -1107,17 +1156,17 @@ class App:
         scr, ink = self.scr, self.ink
         scr.erase()
         rows, cols = scr.getmaxyx()
-        def put(y, x, text, style="text"):
+        def put(y, x, text, style="text", panel=False):
             if 0 <= y < rows and x < cols:
                 try:
-                    scr.addstr(y, max(0, x), text[: max(0, cols - x - (1 if y == rows - 1 else 0))], ink(style))
+                    scr.addstr(y, max(0, x), text[: max(0, cols - x - (1 if y == rows - 1 else 0))], ink(style, panel))
                 except curses.error:
                     pass
         put(0, 0, " " * cols, "bar")
-        put(0, 1, "Sūveryn", "strong")
-        put(0, 9, self.top_left(), "dim")
+        put(0, 1, "Sūveryn", "strong", True)
+        put(0, 9, self.top_left(), "dim", True)
         right = self.top_right()
-        put(0, cols - len(right), right, "dim")
+        put(0, cols - len(right), right, "dim", True)
         width = min(cols - 4, 92)
         c = Canvas(width - 6)
         fields = self.fields()
@@ -1127,7 +1176,7 @@ class App:
         if self.screen.error:
             c.blank()
             c.add((f"{WARN} ", "accent"), (self.screen.error, "accent"))
-        lines = c.lines
+        lines = [[], *c.lines]  # a line under the title (design); the first to go on a small console
         while len(lines) + (4 if buttons else 2) > rows - 2 and [] in lines:  # a small console: fewer gaps
             lines.remove([])
         height = len(lines) + (4 if buttons else 2)
@@ -1135,20 +1184,23 @@ class App:
         left = (cols - width) // 2
         try:
             win = scr.derwin(min(height, rows - 2), width, top, left)
-            win.attrset(ink("dim"))
+            win.bkgd(" ", ink("bar"))  # the window filled with #12161B
+            win.attrset(ink("border"))
             win.border()
         except curses.error:
             win = None
-        put(top, left + 2, f" {self.screen.title} ", "strong")
+        put(top, left + 2, f" {self.screen.title} ", "strong", True)
         for i, line in enumerate(lines):
             x = left + 3
             for text, style in line:
-                put(top + 1 + i, x, text, style)
+                put(top + 1 + i, x, text, style, True)
                 x += len(text)
         if buttons:
             x = left + width - 3 - sum(len(b.label) + 3 for b in buttons)
+            default = getattr(self.screen, "default", None)
             for b in buttons:
-                put(top + height - 2, x, b.label, "focus" if b is focus else "text")
+                shown = b is focus or (b is default and not isinstance(focus, Button))
+                put(top + height - 2, x, b.label, "focus" if shown else "text", True)
                 x += len(b.label) + 3
         if self.help_open and self.screen.help:
             hc = Canvas(min(cols - 10, 70))
@@ -1173,9 +1225,9 @@ class App:
             if x + len(k) + 1 + len(v) > cols - 1:
                 break  # a narrow console: the keys that fit, whole
             if k:
-                put(rows - 1, x, k, "strong")
+                put(rows - 1, x, k, "strong", True)
                 x += len(k) + 1
-            put(rows - 1, x, v, "dim")
+            put(rows - 1, x, v, "dim", True)
             x += len(v) + 3
         scr.refresh()
 
