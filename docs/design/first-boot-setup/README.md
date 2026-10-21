@@ -84,6 +84,18 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
     welcome's narrower intro. The setup stays light only (decided by the owner; there are no dark
     mock-ups).
   - As expected: `√` for `✓` (Terminus has no ✓) and bold as bright white on the Linux console.
+- **Pod check of f0ff96c** (348 console screens):
+  - C8 fits 80×25 in Dutch and French: a shorter certificate line on a console under 30 lines, and the
+    label column as wide as its longest label (also on the QR screen, "Vingerafdruk van de sleutel").
+  - C8b, the disk unlock in the initrd, as designed: the bars full width, the keys in the bottom bar,
+    the text wrapped at word boundaries to the console's width (no blank lines on a 25-line console),
+    the field's brackets in accent. Its top bar has no host name: that is on the locked disk.
+  - A radio option that wraps keeps its accent mark and continues under its own text; C4's Address
+    options side by side, as designed; a number stays with its unit ("1 Gbit/s"), and a "·"
+    separator never ends or starts a line.
+  - The help is a box of its own, with its title on its border, as wide as the window's inside, so no
+    word of the screen beneath shows cut off beside it.
+  - A screen without buttons (C6) has a blank line before its bottom border.
 
 ## Not in this design
 
