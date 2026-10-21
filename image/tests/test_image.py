@@ -32,7 +32,7 @@ def test_a_bare_metal_disk_that_boots_on_any_uefi_machine():
 
 def test_nothing_unique_to_a_box_is_built_in():
     """Every office must get its own secrets, certificate and identity at first boot."""
-    image_steps = re.search(r"def image\(\) -> None:(.*?)\n\n\ndef ", (HERE.parent / "provision" / "suveryn-provision").read_text(), re.S).group(1)
+    image_steps = re.search(r"def image\([^)]*\) -> None:(.*?)\n\n\ndef ", (HERE.parent / "provision" / "suveryn-provision").read_text(), re.S).group(1)
     for first_boot_only in ("postgres(", "keycloak(", "tls(", "reverse_proxy(", "configure(", "llm_models(", "network_mode("):
         assert first_boot_only not in image_steps, first_boot_only
     cleanup = (HERE / "scripts" / "cleanup.sh").read_text()
