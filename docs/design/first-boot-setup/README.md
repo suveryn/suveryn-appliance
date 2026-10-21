@@ -68,6 +68,23 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - UK English. Dutch formal (u/uw). The product name is lower case "sūveryn" except at the start of a sentence; the company is "Sūveryn Labs". Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
 - No em dashes in UI copy. Errors use accent ink `#C42F00` with an icon, never a separate red. Lucide icons only.
 
+## Resolved while building
+
+- **Setup check of 21 October 2026** (the console screens and the web setup against these mock-ups):
+  - Console: the bars are one unbroken #12161B band and the window is filled with it, with its border in
+    #757E86 (bright black in the palette, or black made bright by bold on the Linux console); a blank line
+    under each title; a radio list's highlight is as wide as the fields, its marks in accent; a text
+    field's "]" lines up with a dropdown's, its field grey also when empty; a field's brackets are in
+    accent while it has the focus; the recovery key is centred in an accent frame, its match on the
+    field's own line, and *Restart* shows as what Enter does; French punctuation after a space never
+    starts a line.
+  - C8 after boot stays a centred window, not the full-width layout (decided by the owner).
+  - Web: the warning under "Allow all outgoing traffic" and the note for air-gapped; the appliance ID and
+    the short fingerprint on one line each, the QR code at 148 px; the ✓ on a loaded manifest; the
+    welcome's narrower intro. The setup stays light only (decided by the owner; there are no dark
+    mock-ups).
+  - As expected: `√` for `✓` (Terminus has no ✓) and bold as bright white on the Linux console.
+
 ## Not in this design
 
 - Admin dashboard screens (check-in QR, warnings, conversation retention, maintenance).
