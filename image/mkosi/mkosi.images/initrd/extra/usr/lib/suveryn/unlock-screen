@@ -37,27 +37,65 @@ cols=$(tput cols 2>/dev/null || echo 80)
 [ "$cols" -gt 20 ] 2>/dev/null || cols=80
 version=$(sed -n 's/^IMAGE_VERSION=//p' /sysroot/usr/lib/os-release 2>/dev/null)
 
+# The screen as designed (console-08b): the bars full width, the text wrapped to the console's width
+# (never inside a word, also at 80 columns), the keys in the bottom bar, the field's brackets in
+# accent (Pod check of f0ff96c). The host name is on the locked disk, so the top bar has none.
+rows=$(tput lines 2>/dev/null || echo 25)
+[ "$rows" -gt 10 ] 2>/dev/null || rows=25
+row=1    # the line the next say() writes
+field=0  # the input field's line
+
+say() {  # say <colour> <text> [indent] [first]: the text wrapped at word boundaries, <indent> columns
+  # in; <first> (as wide as the indent) begins the first line instead of spaces, such as "  ! "
+  local colour=$1 text=$2 indent=${3:-2} first=${4:-} width=$((cols - ${3:-2} - 2)) line="" w
+  local lead=${first:-$(printf '%*s' "$indent" "")}
+  for w in $text; do
+    if [ -n "$line" ] && [ $(( ${#line} + 1 + ${#w} )) -gt "$width" ]; then
+      printf '%s%s%s%s\n' "$lead" "$colour" "$line" "$R"; row=$((row + 1)); line=$w
+      lead=$(printf '%*s' "$indent" "")
+    else
+      line=${line:+$line }$w
+    fi
+  done
+  [ -n "$line" ] && { printf '%s%s%s%s\n' "$lead" "$colour" "$line" "$R"; row=$((row + 1)); }
+}
+gap() { [ "$rows" -ge 30 ] || return 0; printf '\n'; row=$((row + 1)); }  # no blank lines on a 25-line console: it all fits
+
+bars() {  # the top bar, and the bottom bar with the keys: bars <key> <what> [<key> <what>]
+  local right="tty1" x=2
+  printf '\e[0m\e[2J\e[H\e[45;1;37m Sūveryn\e[22m %s%*s%s \e[0m' "$version" \
+    $((cols - 10 - ${#version} - ${#right})) "" "$right"
+  printf '\e[%d;1H\e[45m%*s' "$rows" $((cols - 1)) ""  # the last cell can't be written without scrolling
+  while [ $# -ge 2 ]; do
+    printf '\e[%d;%dH\e[45;1;37m%s\e[22;37m %s' "$rows" "$x" "$1" "$2"
+    x=$((x + ${#1} + ${#2} + 4)); shift 2
+  done
+  printf '\e[0m\e[3;1H'; row=3
+}
+
 draw() {  # draw <attempt> <message>
-  printf '\e[0m\e[2J\e[H'
-  printf '\e[45;37m %-*s\e[0m\n\n\n' $((cols - 2)) "Sūveryn ${version}"
-  printf '  %s! %sThe disk can'"'"'t unlock by itself.%s\n' "$A" "$B" "$R"
-  printf '  %sDe schijf kan niet vanzelf ontgrendelen. Le disque ne peut pas se déverrouiller seul.%s\n\n' "$D" "$R"
-  printf '  %sThis happens after a BIOS or firmware update, a Secure Boot change, or when the disk is%s\n' "$D" "$R"
-  printf '  %smoved to another machine.%s\n\n' "$D" "$R"
-  printf '  %sEnter the recovery key from the sheet you kept at installation. Dashes are optional.%s\n' "$B" "$R"
-  printf '  %sTyp de herstelsleutel van het blad dat u bij de installatie bewaarde.%s\n' "$D" "$R"
-  printf '  %sTapez la clé de récupération de la feuille conservée à l'"'"'installation.%s\n\n' "$D" "$R"
-  printf '  [ %s%-71s%s ]\n' "$F" "" "$R"
-  printf '  %sAttempt %s of %s.%s %sThe key uses only letters that sit in the same place on AZERTY and QWERTY.%s\n' \
-    "$B" "$1" "$TRIES" "$R" "$D" "$R"
-  [ -n "$2" ] && printf '  %s! %s%s\n' "$A" "$2" "$R"
-  printf '\n  %sAfter unlocking, the appliance links the disk to this machine'"'"'s TPM again, so the next start\n' "$D"
-  printf '  is unattended.%s\n\n' "$R"
-  printf '  %sLost the key? The data on this disk can'"'"'t be read without it. Install a fresh appliance and%s\n' "$D" "$R"
-  printf '  %srestore the latest backup.%s\n\n' "$D" "$R"
-  printf '  %sEnter%s Unlock   %sCtrl+Alt+Del%s Restart\n' "$B" "$R" "$B" "$R"
-  # Back to the input field (line 14, after "[ ").
-  printf '\e[14;5H%s' "$F"
+  bars Enter Unlock Ctrl+Alt+Del Restart
+  gap
+  say "$B" "The disk can't unlock by itself." 4 "  $A!$R "
+  say "$D" "De schijf kan niet vanzelf ontgrendelen. Le disque ne peut pas se déverrouiller seul."
+  gap
+  say "$D" "This happens after a BIOS or firmware update, a Secure Boot change, or when the disk is moved to another machine."
+  gap
+  say "$B" "Enter the recovery key from the sheet you kept at installation. Dashes are optional."
+  say "$D" "Typ de herstelsleutel van het blad dat u bij de installatie bewaarde."
+  say "$D" "Tapez la clé de récupération de la feuille conservée à l'installation."
+  gap
+  width=$(( cols - 10 < 71 ? cols - 10 : 71 ))
+  field=$row
+  printf '  %s[%s %s%-*s%s %s]%s\n' "$A" "$R" "$F" "$width" "" "$R" "$A" "$R"; row=$((row + 1))
+  say "$D" "Attempt $1 of $TRIES. The key uses only letters that sit in the same place on AZERTY and QWERTY."
+  [ -n "$2" ] && say "$A" "$2" 4 "  $A!$R "
+  gap
+  say "$D" "After unlocking, the appliance links the disk to this machine's TPM again, so the next start is unattended."
+  gap
+  say "$D" "Lost the key? The data on this disk can't be read without it. Install a fresh appliance and restore the latest backup."
+  # Back to the input field, after "[ ".
+  printf '\e[%d;5H%s' "$field" "$F"
 }
 
 read_key() {  # the typed key, shown as dots, into $typed
@@ -88,7 +126,7 @@ message=""
 for ((attempt = 1; attempt <= TRIES; attempt++)); do
   draw "$attempt" "$message"
   read_key
-  printf '\e[%d;3H%sChecking the key…%s\e[K' 16 "$D" "$R"
+  printf '\e[%d;3H%sChecking the key…%s\e[K' $((field + 1)) "$D" "$R"
   normalise "$typed" > "$KEY"
   if /usr/lib/systemd/systemd-cryptsetup attach "$NAME" "$DATA" "$KEY" headless=true >/dev/null 2>&1; then
     printf '\e[2J\e[H\n  %s√%s %sThe disk is unlocked.%s\n' "$T" "$R" "$B" "$R"
@@ -115,13 +153,13 @@ for ((attempt = 1; attempt <= TRIES; attempt++)); do
 done
 
 # Five wrong keys: say so, and wait. Nothing else starts.
-printf '\e[0m\e[2J\e[H'
-printf '\e[45;37m %-*s\e[0m\n\n\n' $((cols - 2)) "Sūveryn ${version}"
-printf '  %s! %sThe disk couldn'"'"'t be unlocked: %s wrong keys.%s\n' "$A" "$B" "$TRIES" "$R"
-printf '  %sDe schijf kon niet worden ontgrendeld. Le disque n'"'"'a pas pu être déverrouillé.%s\n\n' "$D" "$R"
-printf '  %sPress Ctrl+Alt+Del to restart and try again with the recovery key.%s\n' "$B" "$R"
-printf '  %sLost the key? The data on this disk can'"'"'t be read without it. Install a fresh appliance and\n' "$D"
-printf '  restore the latest backup.%s\n' "$R"
+bars Ctrl+Alt+Del Restart
+gap
+say "$B" "The disk couldn't be unlocked: $TRIES wrong keys." 4 "  $A!$R "
+say "$D" "De schijf kon niet worden ontgrendeld. Le disque n'a pas pu être déverrouillé."
+gap
+say "$B" "Press Ctrl+Alt+Del to restart and try again with the recovery key."
+say "$D" "Lost the key? The data on this disk can't be read without it. Install a fresh appliance and restore the latest backup."
 echo "suveryn: the data partition couldn't be unlocked (${TRIES} wrong recovery keys)" > /dev/kmsg 2>/dev/null
 trap - EXIT
 stty sane 2>/dev/null
