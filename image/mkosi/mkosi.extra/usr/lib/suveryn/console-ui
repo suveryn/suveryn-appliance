@@ -161,7 +161,9 @@ class Status(ui.Screen):
             c.add((t("c8_setup_closed"), "dim"))
         elif st.get("fingerprint"):
             c.blank()
-            c.wrap(t("c8_cert_warning"), "dim")
+            # A 25-line console has no room for the long version in Dutch and French (Pod check of f0ff96c)
+            short = self.app.scr.getmaxyx()[0] < 30
+            c.wrap(t("c8_cert_warning_short" if short else "c8_cert_warning"), "dim")
             fp = st["fingerprint"]
             c.add(("  SHA-256  ", "dim"), (fp[:47], "strong"))
             if len(fp) > 47:
@@ -186,8 +188,9 @@ class Status(ui.Screen):
         rows.append((t("c8_id"), [(ident.get("uuid") or t("c8_id_pending"), "text")]))
         rows.append((t("c8_support"), [(self.support(), "text")]))
         rows.append((t("c8_time"), [(when(st["now"], st["timezone"]), "text")]))
+        col = max(20, max(len(label) for label, _ in rows) + 2)
         for label, pieces in rows:
-            c.add((label.ljust(20), "dim"), *pieces)
+            c.add((label.ljust(col), "dim"), *pieces)
         c.blank()
         for n, key in enumerate(("c8_menu_details", "c8_menu_change", "c8_menu_qr", "c8_menu_restart",
                                  "c8_menu_shutdown"), start=1):
@@ -248,9 +251,10 @@ class Registration(ui.Screen):
         for line in self.app.system.qr(url):
             c.lines.append([("  ", "text"), (line, "field")])  # as drawn, never wrapped
         c.blank()
-        c.add((t("c8_id").ljust(22), "dim"), (ident["uuid"], "text"))
-        c.add((t("c8_fingerprint").ljust(22), "dim"), (ident["fingerprint"][:32], "text"))
-        c.add((" " * 22, "dim"), (ident["fingerprint"][32:], "text"))
+        col = max(22, len(t("c8_id")) + 2, len(t("c8_fingerprint")) + 2)  # "Vingerafdruk van de sleutel"
+        c.add((t("c8_id").ljust(col), "dim"), (ident["uuid"], "text"))
+        c.add((t("c8_fingerprint").ljust(col), "dim"), (ident["fingerprint"][:32], "text"))
+        c.add((" " * col, "dim"), (ident["fingerprint"][32:], "text"))
 
 
 class Confirm(ui.Screen):
