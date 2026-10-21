@@ -474,3 +474,45 @@ def test_dutch_network_errors(console):
     c.type("192.168.1.50/24")
     c.press(ENTER)
     assert "Een vast adres heeft een DNS-server nodig." in c.text
+
+
+# ---------------------------------------------------------------------------- as designed (setup check of 21 October)
+def _ui_module(monkeypatch):
+    import importlib.machinery
+    import importlib.util
+    monkeypatch.setenv("SUVERYN_LIB", str(LIB))
+    monkeypatch.setattr(sys, "dont_write_bytecode", True)  # nothing written into the image tree
+    loader = importlib.machinery.SourceFileLoader("installer_ui", str(UI))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+def test_french_punctuation_never_starts_a_line(monkeypatch):
+    """K9: "navigateur :" wrapped with the colon alone on the next line."""
+    ui = _ui_module(monkeypatch)
+    for width in range(20, 90):
+        c = ui.Canvas(width)
+        c.add(("Sur un autre ordinateur de ce réseau, ouvrez l'une de ces adresses dans un navigateur :", "text"))
+        c.wrap("Votre navigateur signale le certificat une fois. Vérifiez que le navigateur affiche cette empreinte : oui ?")
+        for line in c.lines:
+            text = "".join(t for t, _ in line).strip()
+            assert not text or text[0] not in ui.NO_BREAK_BEFORE, (width, text)
+
+
+def test_a_text_field_lines_up_with_a_dropdown_and_the_key_is_framed(console):
+    """K5 and K6: "]" of Test it under "]" of Keyboard; the recovery key in a frame, its match on the field's line."""
+    c = console(cols=160, rows=50)
+    lines = c.text.splitlines()
+    keyboard = next(x for x in lines if "Belgian (AZERTY)" in x)
+    test_it = next(x for x in lines if "type here to check" in x)
+    assert keyboard.rindex("]") == test_it.rindex("]")
+    to_summary(c)
+    c.type("ERASE")
+    c.press(ENTER)
+    c.wait("Write down the disk recovery key", timeout=10)
+    c.type("fjkcbvgt")
+    lines = c.text.splitlines()
+    first = next(i for i, x in enumerate(lines) if "fjkcbvgt-lrhnedui" in x)
+    assert "┌" in lines[first - 1] and "└" in lines[first + 2] and lines[first].count("│") >= 3
+    assert any("[ fjkcbvgt" in x and "√ matches" in x for x in lines)
