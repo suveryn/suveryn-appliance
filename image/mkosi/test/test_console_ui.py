@@ -154,3 +154,40 @@ def test_in_dutch(console):
     assert "De installatie is voltooid. De configuratie wacht op u." in s and "versleuteld · ontgrendeld door de TPM" in s
     assert "Netwerkgegevens tonen" in s and "Uitschakelen" in s
     assert "dinsdag" in s or "maandag" in s or "zondag" in s  # the date in Dutch
+
+
+@pytest.mark.parametrize("language", ["en", "nl", "fr"])
+def test_c8_fits_a_25_line_console_in_every_language(console, language):
+    """Pod check of 7c48279: in Dutch and French the menu ran over the bottom border and the prompt was gone."""
+    c = console(lambda m: m["status"].update(language=language), cols=80, rows=25)
+    c.pump(1.0)
+    lines = c.text.splitlines()
+    bottom = next(i for i, x in enumerate(lines) if "└" in x)
+    assert set(lines[bottom].strip().strip("└┘")) == {"─"}  # nothing drawn over the border
+    prompt = {"en": "Choose an option:", "nl": "Kies een optie:", "fr": "Choisissez une option :"}[language]
+    assert any(prompt in x and "█" in x for x in lines[:bottom])
+
+
+def test_the_disk_unlock_screen_wraps_at_word_boundaries_and_has_its_bars(tmp_path):
+    """C8b at 80 columns (Pod check of 7c48279): lines broke inside words ("opt / ional"), no bottom bar."""
+    import os
+    import re
+    import subprocess
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parent.parent / "mkosi.images" / "initrd" / "extra" / "usr" / "lib" / "suveryn" / "unlock-screen"
+    text = script.read_text()
+    body = text[text.index("A=$'"):text.index("read_key() {")]
+    body = "\n".join(x for x in body.splitlines() if not x.startswith(("cols=", '[ "$cols"', "version=")))
+    harness = tmp_path / "draw.sh"
+    harness.write_text("TRIES=5; version=2026.10; cols=80\n" + body +
+                       '\ndraw 2 "That key doesn\'t open this disk. Check it against the sheet and try again."\n')
+    out = subprocess.run(["bash", str(harness)], capture_output=True, text=True, env={**os.environ, "LINES": "25"},
+                         check=True).stdout
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "\n", out)
+    known = set(re.findall(r"\w+", text))  # every word the script writes, whole
+    for line in plain.splitlines():
+        assert len(line) <= 79, line  # never into the last column, where the console would wrap it itself
+        for w in re.findall(r"\w+", line):
+            assert w in known or w.isdigit(), (w, line)  # a word broken in two isn't one of them
+    assert "\x1b[25;1H\x1b[45m" in out and "Ctrl+Alt+Del" in out  # the bottom bar, with the keys
