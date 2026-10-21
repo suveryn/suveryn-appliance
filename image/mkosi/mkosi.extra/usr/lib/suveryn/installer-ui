@@ -305,8 +305,9 @@ class Canvas:
         self.width = width
         self.lines: list[list[tuple[str, str]]] = []
 
-    def add(self, *pieces, indent: int = 0) -> int:
-        """One line; when it is wider than the box, its last piece wraps under where that piece began."""
+    def add(self, *pieces, indent: int = 0, cont: int | None = None) -> int:
+        """One line; when it is wider than the box, its last piece wraps under where that piece began,
+        or under ``cont`` when given (a radio option: under its text, after the mark)."""
         pieces = [(" " * indent, "text"), *pieces]
         head, (last, style) = pieces[:-1], pieces[-1]
         start = sum(len(t) for t, _ in head)
@@ -318,15 +319,20 @@ class Canvas:
         # line's own indent (a sentence made of several styled pieces).
         joined = "".join(t for t, _ in head)
         prev = head[-1][0] if head else ""
-        cont = start if (not prev.strip() or prev.endswith("  ") or len(head) <= 2 and prev.endswith(" ") and
-                         len(prev.strip()) <= 2) else len(joined) - len(joined.lstrip())
+        if cont is None:
+            cont = start if (not prev.strip() or prev.endswith("  ") or len(head) <= 2 and prev.endswith(" ") and
+                             len(prev.strip()) <= 2) else len(joined) - len(joined.lstrip())
         first = True
         while last:
             if len(last) <= room:
                 cut = len(last)
             else:
                 cut = last.rfind(" ", 0, room + 1)
-                while cut > 0 and last[cut + 1: cut + 2] in NO_BREAK_BEFORE:  # "navigateur :" stays together
+                # "navigateur :" stays together, and so does a number with its unit ("1 Gbit/s", "5 jours")
+                # and a "·" separator never ends or starts a line
+                while cut > 0 and (last[cut + 1: cut + 2] in NO_BREAK_BEFORE
+                                   or "·" in (last[cut - 1], last[cut + 1: cut + 2])
+                                   or (last[cut - 1].isdigit() and last[cut + 1: cut + 2].isalpha())):
                     cut = last.rfind(" ", 0, cut)
                 cut = room if cut <= 0 else cut
             chunk, last = last[:cut].rstrip(), last[cut:].lstrip()
@@ -371,8 +377,9 @@ class Field:
 
 
 class Radio(Field):
-    def __init__(self, label, options, value=None, on_change=None, disabled=(), width=40):
-        self.label, self.options, self.width = label, options, width  # [(value, text)]; width as a Select's
+    def __init__(self, label, options, value=None, on_change=None, disabled=(), width=40, inline=False):
+        # [(value, text)]; width as a Select's; inline: the options side by side on one line, when they fit
+        self.label, self.options, self.width, self.inline = label, options, width, inline
         self.disabled = set(disabled)
         selectable = [v for v, _ in options if v not in self.disabled]
         self.value = value if value in selectable else (selectable[0] if selectable else None)
@@ -394,20 +401,23 @@ class Radio(Field):
             self.move(1)
 
     def draw(self, c: Canvas, focused: bool, col: int):
-        first = True
+        label = text_of(self.label).ljust(col)
+        pieces = []
         for v, text in self.options:
-            mark = "(*)" if v == self.value else "( )"
-            text = text_of(text)
             style = "focus" if focused and v == self.value else ("dim" if v in self.disabled else "text")
-            label = ((text_of(self.label) if first else "").ljust(col), "dim")
-            # as wide as a field, "[" to "]": the Select's w + 3; the mark in accent
-            width = min(self.width, c.width - col - 4) + 3
-            if len(text) + 5 <= c.width - col:
-                mark_style = style if style == "focus" or v in self.disabled else "accent"
-                c.add(label, (" ", style), (mark, mark_style), (f" {text}".ljust(max(width, len(text) + 5) - 4), style))
-            else:  # too long for one line: one piece, so it wraps under itself
-                c.add(label, (f" {mark} {text}".ljust(width), style))
-            first = False
+            mark = "(*)" if v == self.value else "( )"
+            pieces.append((v, f" {text_of(text)}", style, mark, style if style == "focus" or v in self.disabled else "accent"))
+        if self.inline and col + sum(len(t) + 7 for _, t, _, _, _ in pieces) <= c.width:
+            line = [(label, "dim")]
+            for _, text, style, mark, mark_style in pieces:
+                line += [(" ", style), (mark, mark_style), (text + " ", style), ("  ", "text")]
+            c.lines.append(line[:-1])
+            return
+        # as wide as a field, "[" to "]": the Select's w + 3
+        width = min(self.width, c.width - col - 4) + 3
+        for i, (v, text, style, mark, mark_style) in enumerate(pieces):
+            c.add((label if i == 0 else " " * col, "dim"), (" ", style), (mark, mark_style),
+                  (text.ljust(width - 4), style), cont=col + 5)
 
 
 class Select(Field):
@@ -809,7 +819,7 @@ class Network(Screen):
         self.name = Text(lambda: t("c4_name"), a.get("name", ""), placeholder=lambda: t("c4_name_placeholder"),
                          hint=lambda: t("c4_name_hint", name=self.name.value or t("c4_name_word")))
         self.mode = Radio(lambda: t("c4_address"), [("dhcp", lambda: t("c4_dhcp")), ("fixed", lambda: t("c4_fixed"))],
-                          a.get("address_mode", "dhcp"))
+                          a.get("address_mode", "dhcp"), inline=True)
         self.ip = Text(lambda: t("c4_ip"), a.get("fixed_address", ""), placeholder="192.168.1.50/24", width=24)
         self.gw = Text(lambda: t("c4_gateway"), a.get("fixed_gateway", ""), placeholder="192.168.1.1", width=24)
         self.dns = Text(lambda: t("c4_dns"), a.get("fixed_dns", ""), placeholder="192.168.1.1", width=24)
@@ -1177,6 +1187,8 @@ class App:
             c.blank()
             c.add((f"{WARN} ", "accent"), (self.screen.error, "accent"))
         lines = [[], *c.lines]  # a line under the title (design); the first to go on a small console
+        if not buttons:
+            lines.append([])  # a blank line before the bottom border, as above it
         while len(lines) + (4 if buttons else 2) > rows - 2 and [] in lines:  # a small console: fewer gaps
             lines.remove([])
         height = len(lines) + (4 if buttons else 2)
@@ -1203,21 +1215,26 @@ class App:
                 put(top + height - 2, x, b.label, "focus" if shown else "text", True)
                 x += len(b.label) + 3
         if self.help_open and self.screen.help:
-            hc = Canvas(min(cols - 10, 70))
+            # A box of its own over the window, as wide as the window's inside, so no word of the screen
+            # beneath shows cut off beside it (Pod check of f0ff96c), with its title on its own border.
+            hc = Canvas(width - 10)
             for para in self.screen.help.split("\n"):
                 hc.wrap(para)
             hc.blank()
             hc.wrap(t("help_leave"), "dim")
             hc.wrap(t("help_close"), "dim")
-            hy = max(2, (rows - len(hc.lines) - 2) // 2)
-            hx = (cols - hc.width - 4) // 2
+            box = hc.width + 6
+            hy = max(2, (rows - len(hc.lines) - 4) // 2)
+            hx = left + 2
+            title = f" {t('help_title')} "
+            put(hy, hx, "┌─" + title + "─" * (box - 3 - len(title)) + "┐", "field")
             for i in range(len(hc.lines) + 2):
-                put(hy + i, hx, " " * (hc.width + 4), "field")
-            put(hy, hx + 2, f" {t('help_title')} ", "strong")
+                put(hy + 1 + i, hx, "│" + " " * (box - 2) + "│", "field")
+            put(hy + len(hc.lines) + 3, hx, "└" + "─" * (box - 2) + "┘", "field")
             for i, line in enumerate(hc.lines):
-                x = hx + 2
+                x = hx + 3
                 for text, style in line:
-                    put(hy + 1 + i, x, text, "field")
+                    put(hy + 2 + i, x, text, "field")
                     x += len(text)
         put(rows - 1, 0, " " * (cols - 1), "bar")
         x = 1

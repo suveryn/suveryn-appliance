@@ -854,6 +854,11 @@
     "nl": "Uw browser waarschuwt één keer voor het certificaat. Controleer of de browser deze vingerafdruk toont, zo weet u zeker dat u deze machine bereikt:",
     "fr": "Votre navigateur signale le certificat une fois. Pour être sûr d'avoir atteint cette machine, vérifiez que le navigateur affiche cette empreinte :"
   },
+  "c8_cert_warning_short": {
+    "en": "Check that the browser shows this fingerprint:",
+    "nl": "Controleer of de browser deze vingerafdruk toont:",
+    "fr": "Vérifiez que le navigateur affiche cette empreinte :"
+  },
   "c8_setup_closed": {
     "en": "Setup is complete and no longer accepts connections.",
     "nl": "De configuratie is voltooid en aanvaardt geen verbindingen meer.",
