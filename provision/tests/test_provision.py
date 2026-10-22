@@ -330,3 +330,14 @@ def test_on_the_read_only_system_an_air_gapped_first_boot_without_a_bundle_says_
     monkeypatch.setattr(p, "download", lambda *a, **k: pytest.fail("no download when air-gapped"))
     with pytest.raises(SystemExit):
         p.llm_models(None, "air-gapped", staging=False)
+
+
+def test_the_read_only_images_python_is_uvs_own_and_the_build_host_has_java():
+    """Pod check of #47: uv took the build host's Python (the venv pointed at /usr/local/bin), and
+    Keycloak's build found no java."""
+    src = (HERE / "suveryn-provision").read_text()
+    core = src[src.index("def suveryn_core("):src.index("def cuda_libraries(")]
+    assert '"UV_PYTHON_PREFERENCE": "only-managed"' in core
+    assert "openjdk-21-jre-headless" in p.BUILD_HOST_PACKAGES
+    main = src[src.index('if a.command == "prebuild":'):]
+    assert main.index("build_host_packages()") < main.index("keycloak_software()")
