@@ -73,6 +73,7 @@ in it are links into the data partition, because they belong to this office:
 | `/etc/default/keyboard` | `/var/lib/suveryn/host/keyboard` | The console keyboard layout (set in the installer, C1) |
 | `/etc/machine-id` | `/var/lib/suveryn/host/machine-id`, mounted over it in the initrd (systemd won't follow a link for this one) | Unique per appliance |
 | `/etc/systemd/network/` office part | `/var/lib/suveryn/network` | Fixed address or DHCP (#37, C4) |
+| `/etc/postgresql` | `/var/lib/suveryn/postgresql-etc` | PostgreSQL's cluster configuration, made with the cluster at first boot (#47) |
 
 Everything else stays where the image puts it. Today's provisioning writes in a few more places;
 those move into the image itself (below). A test checks that nothing outside this list is written
@@ -152,6 +153,34 @@ What changes because the system is read-only:
 | `/etc/hosts` gets the public name | A link to the data partition (above) |
 | unattended-upgrades applies Ubuntu's security fixes | Fixes arrive as sūveryn updates (#40, decision D3) |
 | `/etc/resolv.conf` written at first boot | Fixed in the image: the appliance's own resolver (#38) |
+
+### The services in the image (#47)
+
+What `suveryn-provision image` installed on an ordinary Ubuntu goes into the read-only system, in four
+stages, each its own change (decided 23 October 2026):
+
+1. **System and layout** (`mkosi.conf.d/30-services.conf`, the `services/` tree, the appliance only):
+   the run-time packages (provision's `RUNTIME_PACKAGES`), the services' users (`sysusers.d`), their
+   folders on the data partition (`tmpfiles.d`), the reader's sudo rule, PostgreSQL without a cluster
+   (made at first boot, its configuration on the data partition), a fixed inbound table instead of
+   ufw (80 and 443, DHCP, mDNS; both profiles), the Packer image's hardening (sysctl, no core dumps,
+   a 1 GB journal; both profiles), and the trust bundle on the data partition
+   (`/etc/suveryn/tls/ca-bundle.crt`, given to the gateway as `SSL_CERT_FILE`).
+2. **sūveryn itself**: suveryn-core and its Python, compiled; the embedding and Docling models in
+   the read-only system (not the data partition); the chat UI; Keycloak, its writable parts on the
+   data partition and its host name from its environment rather than its configuration file;
+   llama-server from `prebuild.sh`, with the CUDA libraries it links against; the units, enabled in
+   the image and started only once first boot has written their settings.
+3. **The GPU driver**: Ubuntu's own NVIDIA 580 server driver, its kernel modules built and signed by
+   Canonical (they load with Secure Boot on, #45), and its licence text (#49). Then the real system
+   is measured against the 32 GiB slot.
+4. **First boot on the read-only system**: the web setup's real provisioning, the language models
+   only from the signed bundles the installer copied (one path), the network mode's outgoing units
+   and resolver, Keycloak's temporary administrator removed once the office's exists, and a test
+   that first boot writes nothing outside the listed paths.
+
+The full image is built on a Pod (it needs about 60 GB); the configuration is tested anywhere. The
+Packer build stays for developing and testing suveryn-core on a Pod.
 
 ## Updates (#40)
 

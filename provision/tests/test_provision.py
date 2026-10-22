@@ -217,3 +217,50 @@ def test_first_boot_restarts_the_services():
     import inspect
     source = inspect.getsource(p.first_boot)
     assert 'services("restart")' in source and 'services("start")' not in source
+
+
+# ---------------------------------------------------------------------------- the read-only system (#47)
+def test_on_the_read_only_system_the_trust_bundle_holds_the_systems_cas_and_the_local_one(tmp_path, monkeypatch):
+    system = tmp_path / "ca-certificates.crt"
+    system.write_bytes(b"SYSTEM CAS\n")
+    tls = tmp_path / "tls"
+    tls.mkdir()
+    (tls / "ca.crt").write_bytes(b"LOCAL CA\n")
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "SYSTEM_CA_BUNDLE", system)
+    monkeypatch.setattr(p, "TLS", tls)
+    monkeypatch.setattr(p, "TRUST_BUNDLE", tls / "ca-bundle.crt")
+    monkeypatch.setattr(p, "run", lambda *a, **k: pytest.fail(f"nothing is run on the read-only system: {a}"))
+    p.trust_local_ca()
+    assert (tls / "ca-bundle.crt").read_bytes() == b"SYSTEM CAS\n\nLOCAL CA\n"
+    assert p.ca_bundle() == tls / "ca-bundle.crt"
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    assert p.ca_bundle() == system  # an ordinary Ubuntu: its own bundle, which update-ca-certificates fills
+
+
+def test_on_the_read_only_system_the_firewall_and_updates_are_the_images(monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    p.updates("connected")
+    assert ran == [] and "sūveryn updates" in capsys.readouterr().out
+    monkeypatch.setattr(p, "UPSTREAM_RESOLV", Path("/nonexistent"))
+    with pytest.raises(SystemExit):
+        p.firewall()  # stops at the resolver check, after the inbound step
+    assert not any(a and a[0] == "ufw" for a in ran)
+
+
+def test_postgresqls_cluster_is_made_only_when_there_is_none(monkeypatch):
+    ran = []
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(p, "systemd_running", lambda: False)
+
+    class Listed:
+        def __init__(self, out):
+            self.stdout = out
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed("16 main 5432 online postgres /var/lib/postgresql/16/main\n"))
+    p.ensure_cluster()
+    assert ran == []
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed(""))
+    p.ensure_cluster()
+    assert ran == [("pg_createcluster", "16", "main")]
