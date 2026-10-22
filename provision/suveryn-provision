@@ -92,6 +92,8 @@ CORE = OPT / "core"
 LLAMA = OPT / "llama.cpp"
 MODELS = VAR / "models"
 HF_HOME = VAR / "hf"
+IMAGE_HF_HOME = OPT / "hf"  # the read-only system's: the embedding and Docling models are part of the image (#47)
+CUDA_LIBS = OPT / "lib" / "cuda"  # the read-only system's: the CUDA libraries llama-server links against
 UV = OPT / "bin" / "uv"
 UNITS = ["suveryn-llm", "keycloak", "suveryn-gateway"]
 # The network mode's units: the outgoing rules, then the resolver that fills the approved sets. Appliance only.
@@ -228,6 +230,11 @@ def read_only_system() -> bool:
         return False
 
 
+def hf_home() -> Path:
+    """Where the embedding and Docling models are: in the read-only system, or on an ordinary Ubuntu in /var."""
+    return IMAGE_HF_HOME if read_only_system() else HF_HOME
+
+
 def systemd_running() -> bool:
     return Path("/run/systemd/system").is_dir()
 
@@ -288,7 +295,8 @@ def install_network_mode_tool() -> None:
 
 def network_mode(mode: str | None, outbound: str | None = None) -> None:
     step("Network mode")
-    install_network_mode_tool()
+    if not read_only_system():  # the read-only system has it built in
+        install_network_mode_tool()
     if mode is None and sys.stdin.isatty():
         print("   Which network mode is this installation in, once in use?\n"
               "     connected | air-gapped")
@@ -423,7 +431,9 @@ def install_uv() -> None:
     os.chmod(UV, 0o755)
 
 
-def suveryn_core() -> None:
+def suveryn_core(hf: Path = HF_HOME, compiled: bool = False) -> None:
+    """suveryn-core and its non-LLM models into ``hf``. ``compiled``: Python's compiled files built now, for
+    the read-only system, where they can't be written later (prebuild --read-only-image)."""
     step("suveryn-core")
     install_uv()
     c = VERSIONS["suveryn_core"]
@@ -433,16 +443,21 @@ def suveryn_core() -> None:
     run("git", "-C", CORE, "checkout", "-q", "--detach", c["commit"])
     if run("git", "-C", CORE, "rev-parse", "HEAD", capture=True).strip() != c["commit"]:
         fail("suveryn-core isn't at the pinned commit")
-    env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache")}
+    env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache"),
+           **({"UV_COMPILE_BYTECODE": "1"} if compiled else {})}
     run(UV, "sync", "-q", "--locked", "--all-packages", "--no-dev", cwd=CORE, env=env)
+    if compiled:  # uv compiles the installed packages; this compiles suveryn-core's own and the Python it runs on
+        run(OPT / "python" / next(p.name for p in (OPT / "python").iterdir() if p.name.startswith("cpython")) / "bin" / "python3",
+            "-m", "compileall", "-q", "-j", "0", CORE / "packages", OPT / "python", capture=True, check=False)
     note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
     # It loads each model once as a check, always on the CPU: an image is built without a GPU, and on an
     # update the running services hold the card (llama-server and the gateway left no room for the check:
     # CUDA out of memory, Pod check of 13469bf). The services use the GPU as before.
-    run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(HF_HOME), "HF_HUB_OFFLINE": "0",
+    hf.mkdir(parents=True, exist_ok=True)
+    run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(hf), "HF_HUB_OFFLINE": "0",
         "SUVERYN_RAG_DEVICE": "cpu", "CUDA_VISIBLE_DEVICES": ""}, cwd=CORE, capture=True)
-    run("chmod", "-R", "a+rX", *[d for d in (HF_HOME, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
-    note(f"embedding and Docling models in {HF_HOME}")
+    run("chmod", "-R", "a+rX", *[d for d in (hf, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
+    note(f"embedding and Docling models in {hf}")
 
 
 # ---------------------------------------------------------------------------- 7. llama-server and the models
@@ -469,6 +484,25 @@ def llama_server() -> None:
             env=env, capture=True)
     run("chmod", "-R", "a+rX", LLAMA)
     note(f"llama.cpp {v['tag']} ({v['commit'][:7]}): {binary}")
+
+
+def cuda_libraries(dest: Path = CUDA_LIBS) -> list[str]:
+    """The CUDA toolkit's libraries llama-server links against (cudart, cuBLAS), copied for the read-only
+    system, which has the driver but not the toolkit (#47). Redistributable under the CUDA EULA's
+    Attachment A; the licence review is suveryn-tracker#42."""
+    binary = LLAMA / "build" / "bin" / "llama-server"
+    out = run("ldd", binary, capture=True, env={"LD_LIBRARY_PATH": f"{LLAMA / 'build' / 'bin'}:/usr/local/cuda/lib64"})
+    for lib in (LLAMA / "build" / "bin").glob("*.so*"):  # ggml's CUDA backend is a library of its own
+        out += run("ldd", lib, capture=True, env={"LD_LIBRARY_PATH": "/usr/local/cuda/lib64"})
+    found = sorted({m.group(1) for m in re.finditer(r"=> (/usr/local/cuda[^ ]*/lib(?:64)?/libcu\S+) ", out)})
+    if not any("libcudart" in f for f in found):
+        fail("llama-server doesn't link the CUDA runtime from /usr/local/cuda: was it built with CUDA?")
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in found:
+        shutil.copy2(Path(f).resolve(), dest / Path(f).name)
+    run("chmod", "-R", "a+rX", dest)
+    note(f"{', '.join(Path(f).name for f in found)} in {dest}")
+    return [Path(f).name for f in found]
 
 
 def llm_models(models_from: Path | None, mode: str, staging: bool = True) -> list[dict]:
@@ -528,6 +562,38 @@ def ui_built_as() -> str:
     return f"suveryn-core@{VERSIONS['suveryn_core']['commit']} with node {VERSIONS['node']['version']}\n"
 
 
+def core_built_as() -> str:
+    return f"suveryn-core@{VERSIONS['suveryn_core']['commit']}\n"
+
+
+def llama_built_as() -> str:
+    return f"llama.cpp {VERSIONS['llama_cpp']['tag']} ({VERSIONS['llama_cpp']['commit']}) with CUDA\n"
+
+
+def prebuilt_problems(root: Path = Path("/")) -> list[str]:
+    """What is missing or stale in the prebuilt services under ``root`` (image/mkosi/prebuild-services):
+    each part must be the pinned one and have what the services run. Empty: all there (#47)."""
+    o, problems = root / "opt", []
+    for marker, want in ((o / "suveryn/core/.suveryn-built", core_built_as()),
+                         (o / "suveryn/llama.cpp/.suveryn-built", llama_built_as()),
+                         (o / "keycloak/.suveryn-built", keycloak_built_as()),
+                         (o / "suveryn/ui/.suveryn-built", ui_built_as())):
+        have = marker.read_text() if marker.exists() else None
+        if have != want:
+            problems.append(f"{marker.relative_to(root)}: {'missing' if have is None else have.strip()}, not {want.strip()}")
+    for path in ("suveryn/core/.venv/bin/suveryn-gateway", "suveryn/core/.venv/bin/python",
+                 "suveryn/llama.cpp/build/bin/llama-server", "keycloak/bin/kc.sh", "suveryn/ui/index.html"):
+        if not (o / path).exists():
+            problems.append(f"opt/{path}: missing")
+    if not any((o / "suveryn/lib/cuda").glob("libcudart.so*")):
+        problems.append("opt/suveryn/lib/cuda: no CUDA runtime")
+    if not any((o / "suveryn/hf").glob("hub/models--*")):
+        problems.append("opt/suveryn/hf: no models")
+    if (o / "suveryn/core/.git").exists():
+        problems.append("opt/suveryn/core/.git: the image carries no git history")
+    return problems
+
+
 def keycloak_software() -> None:
     """Keycloak, its theme and its build: the same for every office (image)."""
     step(f"Keycloak {VERSIONS['keycloak']['version']} and the theme")
@@ -560,13 +626,12 @@ def keycloak(public_url: str, keycloak_pw: str, administrator: Path | None = Non
     """The office's Keycloak: its host name, secrets and the production realm (first boot)."""
     step("Keycloak: host name, secrets and the production realm")
     host = public_url.split("://", 1)[1].rstrip("/")
-    conf = (REPO / "keycloak" / "keycloak.conf.example").read_text().replace("suveryn.office.example", host)
-    (KEYCLOAK / "conf" / "keycloak.conf").write_text(conf)
-    run("chown", "keycloak:keycloak", KEYCLOAK / "conf" / "keycloak.conf")
     env = read_env(ETC / "keycloak.env")
     admin_pw = env.get("KC_BOOTSTRAP_ADMIN_PASSWORD") or secrets.token_urlsafe(18)
-    kc_env = {"KC_DB_PASSWORD": keycloak_pw, "KC_BOOTSTRAP_ADMIN_USERNAME": "suveryn-setup",
-              "KC_BOOTSTRAP_ADMIN_PASSWORD": admin_pw}
+    # The office's host name from Keycloak's environment, which overrides keycloak.conf: the configuration
+    # file stays the image's (on the read-only system it can't change).
+    kc_env = {"KC_HOSTNAME": f"https://{host}/idp", "KC_DB_PASSWORD": keycloak_pw,
+              "KC_BOOTSTRAP_ADMIN_USERNAME": "suveryn-setup", "KC_BOOTSTRAP_ADMIN_PASSWORD": admin_pw}
     write_env(ETC / "keycloak.env", kc_env, "keycloak", header=(
         "# Keycloak's secrets (0600, owner keycloak). KC_BOOTSTRAP_ADMIN_* create a temporary admin in the\n"
         "# master realm on first start only; the office creates its own admin and deletes suveryn-setup.\n"))
@@ -862,7 +927,7 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
     (ETC / "llama-presets.ini").write_text(presets(llms))
     default = next(m["id"] for m in llms if m.get("default"))
     gateway = {"SUVERYN_HOST": "127.0.0.1", "SUVERYN_PORT": "8000", "SUVERYN_DATABASE_URL": db_url,
-               "SUVERYN_WORK_DIR": str(VAR / "work"), "HF_HOME": str(HF_HOME),
+               "SUVERYN_WORK_DIR": str(VAR / "work"), "HF_HOME": str(hf_home()),
                "SUVERYN_LLM_BASE_URL": "http://127.0.0.1:8080", "SUVERYN_LLM_DEFAULT_MODEL": default,
                "SUVERYN_OCR_JOBS": str(min(8, os.cpu_count() or 8)),
                # Cases (suveryn-tracker#10): who sees a new case by default. "members": its members only
@@ -881,11 +946,15 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
     write_env(ETC / "gateway.env", gateway, "suveryn", header=(
         "# suveryn-core's gateway (0600, owner suveryn). Written by suveryn-provision.\n"
         "# The reader sandbox is required: never add SUVERYN_EXTRACT_UNSANDBOXED here.\n"))
-    for unit in UNITS:
-        shutil.copy2(HERE / "systemd" / f"{unit}.service", f"/etc/systemd/system/{unit}.service")
-    if systemd_running():
-        run("systemctl", "daemon-reload")
-        run("systemctl", "enable", *UNITS)
+    if read_only_system():  # the units are in the image, enabled, and start once these settings exist
+        if systemd_running():
+            run("systemctl", "daemon-reload")
+    else:
+        for unit in UNITS:
+            shutil.copy2(HERE / "systemd" / f"{unit}.service", f"/etc/systemd/system/{unit}.service")
+        if systemd_running():
+            run("systemctl", "daemon-reload")
+            run("systemctl", "enable", *UNITS)
     note(f"/etc/suveryn: gateway.env, keycloak.env, gateway-oidc.env (0600), llama-presets.ini; units: {', '.join(UNITS)}")
 
 
@@ -1213,7 +1282,7 @@ def verify_sandbox_boundary(gw: dict[str, str]) -> list[tuple[str, bool, str]]:
     cmd = [RUNUSER, "-u", "suveryn", "--", *wrapper.split(), "/usr/bin/python3", "-I",
            str(OPT / "bin" / "suveryn-sandbox-probe.py"), str(ETC / "gateway.env"), str(VAR / "reader")]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
-                       env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HF_HOME": str(HF_HOME),
+                       env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HF_HOME": str(hf_home()),
                             "SUVERYN_EXTRACT_WORK_DIR": str(VAR / "reader")})
     try:
         probe = json.loads(r.stdout.strip().splitlines()[-1])
@@ -1478,8 +1547,13 @@ def main() -> None:
                    help="JSON {name, email, password}: the office's administrator (the web setup passes it)")
     f.add_argument("--config", type=Path,
                    help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
-    sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
+    pb = sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
+    pb.add_argument("--read-only-image", action="store_true",
+                    help="also suveryn-core compiled, its models in /opt/suveryn/hf and the CUDA libraries, for the "
+                         "read-only system (image/mkosi/prebuild-services)")
     sub.add_parser("verify", help="check every service, end to end")
+    cp = sub.add_parser("check-prebuilt", help="the image build: the prebuilt services are the pinned ones (image/mkosi)")
+    cp.add_argument("--root", type=Path, default=Path("/"), help="where they are (prebuild-services: image/mkosi/prebuilt)")
     s = sub.add_parser("services", help="start, stop, restart or show the services (systemd, or the test runner)")
     s.add_argument("action", choices=["start", "stop", "restart", "status"])
     a = ap.parse_args()
@@ -1487,6 +1561,14 @@ def main() -> None:
         fail("run as root")
     if a.command == "services":
         services(a.action)
+        return
+    if a.command == "check-prebuilt":
+        problems = prebuilt_problems(a.root)
+        for problem in problems:
+            print(f"   !! {problem}", file=sys.stderr)
+        if problems:
+            fail("the prebuilt services aren't the pinned ones: run image/mkosi/prebuild-services on a Pod again")
+        note("the prebuilt services are the pinned ones")
         return
     if a.command == "verify":
         sys.exit(0 if verify(None) else 1)
@@ -1496,8 +1578,13 @@ def main() -> None:
     if a.command == "prebuild":
         os.environ["SUVERYN_IMAGE_BUILD"] = "1"
         users()
-        suveryn_core()
+        if a.read_only_image:
+            suveryn_core(IMAGE_HF_HOME, compiled=True)
+        else:
+            suveryn_core()
         llama_server()
+        if a.read_only_image:
+            cuda_libraries()
         keycloak_software()
         chat_ui()
         return

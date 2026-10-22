@@ -157,3 +157,5 @@ image/mkosi/test/keys/
 image/mkosi/test/ui/
 # macOS folder settings (Finder)
 .DS_Store
+# The services built for the read-only system on a Pod, made by image/mkosi/prebuild-services: never committed
+image/mkosi/prebuilt/

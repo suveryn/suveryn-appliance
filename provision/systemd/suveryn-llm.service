@@ -3,6 +3,10 @@
 Description=sūveryn model server (llama-server)
 After=network.target
 
+# On the read-only system the unit is enabled in the image and starts once first boot has written
+# its settings (#47).
+ConditionPathExists=/etc/suveryn/llama-presets.ini
+
 [Service]
 User=suveryn-llm
 Group=suveryn-llm
