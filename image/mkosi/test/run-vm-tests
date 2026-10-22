@@ -327,7 +327,8 @@ def console_install(c: "Console") -> str:
         c.press(ch, settle=0)
     c.press("\r")
     s = c.wait("Schrijf de herstelsleutel van de schijf op", timeout=900)
-    m = re.search(r"([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})\s*│?\s*\n.*?([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})", s, re.S)
+    # The key's two lines, each inside its accent frame and the window's border (K6: two │ after it)
+    m = re.search(r"([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})[\s│]*\n.*?([cbdefghijklnrtuv]{8}(?:-[cbdefghijklnrtuv]{8}){3})", s, re.S)
     assert m, s
     key = f"{m.group(1)}-{m.group(2)}"
     for ch in key.split("-")[0]:
