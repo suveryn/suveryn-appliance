@@ -25,8 +25,11 @@ sudo mkosi -f --profile test build   # the test system: the same layout, small (
 ```
 
 The appliance's build stops without `prebuilt/`, or when a part in it isn't the pinned one
-(`suveryn-provision check-prebuilt`). `prebuild-services` needs what `image/prebuild.sh` needs: an
-Ubuntu 24.04 host with CUDA 12.8 (a Pod; no GPU needed) and about 60 GB free for it and the image.
+(`suveryn-provision check-prebuilt`). `prebuild-services` needs an Ubuntu 24.04 host with CUDA 12.8 (no
+GPU needed; it installs Java and the build tools itself) and takes about 25 minutes on 32 cores; the
+services come to about 13 GB (12 GiB as slot A's uncompressed EROFS). mkosi itself needs a host where
+it may create namespaces: a virtual or real machine, not a container like a RunPod pod (Pod check of
+#47: "mkosi was forbidden to unshare namespaces"). Both together need about 60 GB free.
 
 Needs Ubuntu 24.04 as the build host (systemd 255: `systemd-repart`, `ukify`), and `bubblewrap`,
 `erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify`. The result

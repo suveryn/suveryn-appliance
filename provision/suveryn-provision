@@ -342,6 +342,23 @@ def packages() -> None:
         fail("the CUDA toolkit (nvcc) is needed to build llama-server; install NVIDIA's cuda-toolkit first")
 
 
+# What building the services needs on the host (prebuild): Java for Keycloak's build, git for the pinned
+# sources, a compiler and cmake for llama-server. The CUDA toolkit comes from NVIDIA (the host's template).
+BUILD_HOST_PACKAGES = ["openjdk-21-jre-headless", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev"]
+
+
+def build_host_packages() -> None:
+    step("Build tools")
+    missing = [p for p in BUILD_HOST_PACKAGES if subprocess.run(["dpkg", "-s", p], capture_output=True).returncode != 0]
+    if missing:
+        env = {"DEBIAN_FRONTEND": "noninteractive"}
+        run("apt-get", "update", "-qq", env=env, capture=True)
+        run("apt-get", "install", "-y", "-qq", "--no-install-recommends", *missing, env=env, capture=True)
+        note(f"installed: {', '.join(missing)}")
+    else:
+        note("all present")
+
+
 def users() -> None:
     step("Users and folders")
     ensure_user("suveryn")
@@ -443,8 +460,10 @@ def suveryn_core(hf: Path = HF_HOME, compiled: bool = False) -> None:
     run("git", "-C", CORE, "checkout", "-q", "--detach", c["commit"])
     if run("git", "-C", CORE, "rev-parse", "HEAD", capture=True).strip() != c["commit"]:
         fail("suveryn-core isn't at the pinned commit")
+    # For the read-only system, only uv's own Python in /opt/suveryn/python: else uv takes the build host's
+    # when it is new enough, and the venv would point at a Python the image doesn't have (Pod check of #47).
     env = {"UV_PYTHON_INSTALL_DIR": str(OPT / "python"), "UV_CACHE_DIR": str(VAR / "uv-cache"),
-           **({"UV_COMPILE_BYTECODE": "1"} if compiled else {})}
+           **({"UV_COMPILE_BYTECODE": "1", "UV_PYTHON_PREFERENCE": "only-managed"} if compiled else {})}
     run(UV, "sync", "-q", "--locked", "--all-packages", "--no-dev", cwd=CORE, env=env)
     if compiled:  # uv compiles the installed packages; this compiles suveryn-core's own and the Python it runs on
         run(OPT / "python" / next(p.name for p in (OPT / "python").iterdir() if p.name.startswith("cpython")) / "bin" / "python3",
@@ -1608,6 +1627,7 @@ def main() -> None:
     if a.command == "prebuild":
         os.environ["SUVERYN_IMAGE_BUILD"] = "1"
         users()
+        build_host_packages()
         if a.read_only_image:
             suveryn_core(IMAGE_HF_HOME, compiled=True)
         else:
