@@ -1,5 +1,7 @@
 # suveryn-appliance
 
+Website: [suveryn.com](https://www.suveryn.com)
+
 OS image build, hardening and first-boot provisioning for sūveryn appliances, including the runtime services [suveryn-core](https://github.com/suveryn/suveryn-core) depends on but doesn't bundle: PostgreSQL with pgvector, Keycloak and the model server. Licensed under Apache-2.0 ([LICENSE](LICENSE)).
 
 | Folder | Contents |
