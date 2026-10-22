@@ -103,15 +103,20 @@ UI = OPT / "ui"
 NODE = OPT / "node"
 LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
-PACKAGES = [
-    "ufw", "nftables", "dnsmasq-base", "unattended-upgrades",
+# What the services need at run time: the read-only system's image has exactly these (image/mkosi,
+# checked by its tests); an ordinary Ubuntu gets them, and the rest below, from apt.
+RUNTIME_PACKAGES = [
+    "nftables", "dnsmasq-base",
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
-    "python3-seccomp", "nginx", "openssl", "sudo",
+    "python3-seccomp", "nginx", "openssl", "sudo", "ca-certificates",
     # Libraries suveryn-core's Python packages load (OpenCV in Docling) that Ubuntu's minimal installation
     # lacks: found by comparing every library they link against with the minimal image's package list.
-    "libgl1", "libsm6", "libice6", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
+    "libgl1", "libsm6", "libice6",
 ]
+# An ordinary Ubuntu only: its firewall and automatic updates (the read-only system has its own inbound
+# rules and gets fixes as sūveryn updates), and the tools to fetch and build the services.
+PACKAGES = ["ufw", "unattended-upgrades", *RUNTIME_PACKAGES, "git", "curl", "cmake", "build-essential", "libssl-dev"]
 READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"
 # What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
 # Not SETENV or --preserve-env: SETENV would let the gateway pass the reader any variable.
@@ -212,6 +217,15 @@ def for_image() -> bool:
     """Building for the appliance image: no GPU of the target in sight (the build VM has none, and a host
     pre-building llama.cpp for the image has its own). SUVERYN_IMAGE_BUILD=1 says so explicitly."""
     return os.environ.get("SUVERYN_IMAGE_BUILD") == "1" or not gpu_names()
+
+
+def read_only_system() -> bool:
+    """The appliance's read-only, verified system (image/mkosi; tracker #39, #47): /usr can't be written.
+    What would change the system there is in the image already; first boot writes the data partition only."""
+    try:
+        return bool(os.statvfs("/usr").f_flag & os.ST_RDONLY)
+    except OSError:
+        return False
 
 
 def systemd_running() -> bool:
@@ -349,8 +363,22 @@ def start_daemon(cmd: list[str], what: str) -> None:
             fail(f"{what} didn't start: {error_lines(err.read())}")
 
 
-def start_postgres() -> None:
+def ensure_cluster() -> None:
+    """PostgreSQL's cluster. Ubuntu's package makes one when it is installed; the read-only system's image
+    has none, so its first boot makes it on the data partition (/etc/postgresql links there, #47)."""
+    if subprocess.run(["pg_lsclusters", "-h"], capture_output=True, text=True).stdout.strip():
+        return
+    run("pg_createcluster", "16", "main", capture=True)
     if systemd_running():
+        run("systemctl", "daemon-reload")  # its generator adds postgresql@16-main for the new cluster
+    note("cluster 16/main made")
+
+
+def start_postgres() -> None:
+    ensure_cluster()
+    if systemd_running() and read_only_system():
+        run("systemctl", "start", "postgresql@16-main")  # enabled in the image: /etc can't be written here
+    elif systemd_running():
         run("systemctl", "enable", "--now", "postgresql")
     elif subprocess.run(["pg_ctlcluster", "16", "main", "status"], capture_output=True).returncode != 0:
         start_daemon(["pg_ctlcluster", "16", "main", "start"], "PostgreSQL")
@@ -568,6 +596,15 @@ def keycloak(public_url: str, keycloak_pw: str, administrator: Path | None = Non
 
 
 # ---------------------------------------------------------------------------- 9-10. reader sandbox and configuration
+def reader_sudoers() -> str:
+    """The gateway's sudo rule for the reader. The read-only system has the same file built in
+    (image/mkosi/services/etc/sudoers.d/suveryn-reader; image/mkosi/test checks they agree)."""
+    return ("# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).\n"
+            "Defaults:suveryn !requiretty\n"
+            f'Defaults>suveryn-reader env_keep += "{READER_ENV}"\n'
+            "suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *\n")
+
+
 def reader_sandbox() -> dict[str, str]:
     step("Reader sandbox")
     run("sh", REPO / "reader-sandbox" / "provision-reader.sh", "suveryn", VAR / "inbox", VAR / "reader")
@@ -576,11 +613,8 @@ def reader_sandbox() -> dict[str, str]:
     # verify's probe of the sandbox through the production route (readable by suveryn-reader)
     shutil.copy2(REPO / "reader-sandbox" / "tests" / "probe.py", OPT / "bin" / "suveryn-sandbox-probe.py")
     os.chmod(OPT / "bin" / "suveryn-sandbox-probe.py", 0o644)
-    rule = "suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *\n"
     tmp = Path("/etc/sudoers.d/.suveryn-reader.tmp")
-    tmp.write_text("# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).\n"
-                   "Defaults:suveryn !requiretty\n"
-                   f'Defaults>suveryn-reader env_keep += "{READER_ENV}"\n' + rule)
+    tmp.write_text(reader_sudoers())
     os.chmod(tmp, 0o440)
     run("visudo", "-cqf", tmp)
     os.replace(tmp, "/etc/sudoers.d/suveryn-reader")
@@ -659,11 +693,29 @@ def tls(host: str, cert: Path | None, key: Path | None, ips: list[str] | None = 
          "valid 397 days")
 
 
+SYSTEM_CA_BUNDLE = Path("/etc/ssl/certs/ca-certificates.crt")
+TRUST_BUNDLE = TLS / "ca-bundle.crt"  # the read-only system's: the system's CAs and the local one, on the data partition
+
+
+def ca_bundle() -> Path:
+    """The CA bundle the services verify https with (SSL_CERT_FILE): the system's, or on the read-only
+    system the trust bundle on the data partition, which also holds the local CA (#47)."""
+    return TRUST_BUNDLE if read_only_system() else SYSTEM_CA_BUNDLE
+
+
 def trust_local_ca() -> None:
     """The machine trusts its own local CA, so the gateway can reach Keycloak at the public https URL.
-    On the read-only system (image/mkosi) /usr/local can't be written: there the trust bundle on the
-    data partition takes its place (#39, not built yet), and this says so."""
+    On the read-only system /usr/local and /etc/ssl can't be written: the trust bundle on the data
+    partition takes their place (ca_bundle)."""
     ca = TLS / "ca.crt"
+    if read_only_system():
+        bundle = SYSTEM_CA_BUNDLE.read_bytes() + (b"\n" + ca.read_bytes() if ca.exists() else b"")
+        if not (TRUST_BUNDLE.exists() and TRUST_BUNDLE.read_bytes() == bundle):
+            tmp = TRUST_BUNDLE.with_suffix(".tmp")
+            tmp.write_bytes(bundle)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, TRUST_BUNDLE)
+        return
     if not ca.exists():
         return
     if LOCAL_CA.exists() and LOCAL_CA.read_bytes() == ca.read_bytes():
@@ -764,9 +816,12 @@ UPSTREAM_RESOLV = Path("/run/systemd/resolve/resolv.conf")
 
 def firewall() -> None:
     step("Firewall and outgoing traffic")
-    for rule in firewall_rules():
-        run("ufw", *rule, capture=True)
-    note("in: 80 and 443 only")
+    if read_only_system():
+        note("in: 80 and 443 only (the image's inbound rules, suveryn-inbound)")
+    else:
+        for rule in firewall_rules():
+            run("ufw", *rule, capture=True)
+        note("in: 80 and 443 only")
     if not UPSTREAM_RESOLV.exists():
         fail(f"{UPSTREAM_RESOLV} is missing: the appliance's resolver needs systemd-resolved for the office's DNS servers")
     for unit in EGRESS_UNITS:
@@ -791,6 +846,9 @@ RESOLV_TEXT = ("# Written by suveryn-provision: the appliance's own resolver (su
 
 def updates(mode: str) -> None:
     step("Security updates")
+    if read_only_system():
+        note("as sūveryn updates (the read-only system has no apt; design decision D3)")
+        return
     conf = Path("/etc/apt/apt.conf.d/20auto-upgrades")
     on = mode == "connected"
     conf.write_text(f'APT::Periodic::Update-Package-Lists "{int(on)}";\nAPT::Periodic::Unattended-Upgrade "{int(on)}";\n')
@@ -818,8 +876,8 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
                # choices and the same default (the data lifecycle, suveryn-tracker#31). All three are the initial
                # values; the administrator's dashboard changes them afterwards, and the web setup asks none of them.
                "SUVERYN_CONVERSATIONS_KEEP": conversations_keep,
-               # The system's CA bundle, which includes the local CA: the gateway reaches Keycloak at its public https URL.
-               "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt", **oidc, **reader}
+               # A CA bundle that includes the local CA: the gateway reaches Keycloak at its public https URL.
+               "SSL_CERT_FILE": str(ca_bundle()), **oidc, **reader}
     write_env(ETC / "gateway.env", gateway, "suveryn", header=(
         "# suveryn-core's gateway (0600, owner suveryn). Written by suveryn-provision.\n"
         "# The reader sandbox is required: never add SUVERYN_EXTRACT_UNSANDBOXED here.\n"))

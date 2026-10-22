@@ -18,6 +18,19 @@ link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 rm -f /etc/machine-id && : > /etc/machine-id
 mkdir -p /usr/lib/suveryn && : > /usr/lib/suveryn/empty-machine-id
 
+# The sūveryn services (tracker #47; mkosi.conf.d/30-services.conf, the appliance only). Their users
+# and the reader's sudo rule are made here; their folders on the data partition by tmpfiles.
+if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
+  systemd-sysusers /usr/lib/sysusers.d/suveryn.conf
+  chmod 0440 /etc/sudoers.d/suveryn-reader
+  visudo -cqf /etc/sudoers.d/suveryn-reader
+  # PostgreSQL's cluster is made at first boot on the data partition (suveryn-provision first-boot),
+  # with its configuration there too: drop the one the package made in the image.
+  if pg_lsclusters -h 2>/dev/null | grep -q '^16 main '; then pg_dropcluster 16 main; fi
+  rm -rf /var/lib/postgresql/16
+fi
+link /var/lib/suveryn/postgresql-etc   /etc/postgresql
+
 # 2. The image's own /var is hidden by the data partition. Keep a copy and restore what is missing
 #    on a fresh data partition (systemd-tmpfiles "C": copy only if absent).
 rm -rf /usr/share/factory/var
@@ -33,6 +46,8 @@ rm -rf /usr/share/factory/var/{cache,log,tmp}/* /usr/share/factory/var/lib/apt/l
 
 # 3. Services: the network by DHCP, the resolver and time. Nothing is ever installed later (no apt).
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
+# Inbound: the web ports only, before the network is up (/usr/lib/suveryn/inbound.nft).
+systemctl enable suveryn-inbound.service
 systemctl mask apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 # The appliance's identity, made at first boot on the data partition (#35).
 systemctl enable suveryn-identity.service
