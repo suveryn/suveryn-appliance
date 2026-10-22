@@ -171,13 +171,22 @@ stages, each its own change (decided 23 October 2026):
    data partition and its host name from its environment rather than its configuration file;
    llama-server from `prebuild.sh`, with the CUDA libraries it links against; the units, enabled in
    the image and started only once first boot has written their settings.
-3. **The GPU driver**: Ubuntu's own NVIDIA 580 server driver, its kernel modules built and signed by
-   Canonical (they load with Secure Boot on, #45), and its licence text (#49). Then the real system
-   is measured against the 32 GiB slot.
+3. **The GPU driver**: Ubuntu's own NVIDIA 580 driver with the open kernel modules
+   (`linux-modules-nvidia-580-open-generic`, from the `restricted` component), built and signed by
+   Canonical for linux-generic (they load with Secure Boot on, #45; cards from Turing on, which every
+   supported card is), nouveau kept off, and its licence text (#49). Then the real system is measured
+   against the 32 GiB slot.
 4. **First boot on the read-only system**: the web setup's real provisioning, the language models
    only from the signed bundles the installer copied (one path), the network mode's outgoing units
    and resolver, Keycloak's temporary administrator removed once the office's exists, and a test
    that first boot writes nothing outside the listed paths.
+
+Stages 1 to 3 are built (configuration tested anywhere; the full build on a Pod). In stage 2,
+everything that isn't from Ubuntu's archive is built beforehand on a Pod by `image/mkosi/prebuild-services`
+into `image/mkosi/prebuilt/`, which the image build copies in and checks against the pins
+(`suveryn-provision check-prebuilt`): no network, git or compiler inside the image build.
+`/opt/suveryn/core` carries no git history; the realm builder reads the realm file there and checks
+it against `realm-lock.json`'s sha256.
 
 The full image is built on a Pod (it needs about 60 GB); the configuration is tested anywhere. The
 Packer build stays for developing and testing suveryn-core on a Pod.

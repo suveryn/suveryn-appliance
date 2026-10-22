@@ -1,12 +1,15 @@
 # Keycloak for a sūveryn appliance, production mode (kc.sh start). Keycloak 26.8. suveryn-tracker#16.
-# Copy to Keycloak's conf/keycloak.conf and replace suveryn.office.example with the office's name.
+# suveryn-provision copies it to Keycloak's conf/keycloak.conf as it is; the office's name comes from
+# KC_HOSTNAME in /etc/suveryn/keycloak.env, which overrides hostname below (the read-only system's
+# configuration file can't change, #47).
 #
 # Layout: one host name and one certificate for the office. The appliance's TLS reverse proxy serves
 # the chat UI and the gateway at https://suveryn.office.example/ and Keycloak at /idp, forwarding to
 # Keycloak on 127.0.0.1:8180 with X-Forwarded-* headers. The gateway's issuer is then
 # https://suveryn.office.example/idp/realms/suveryn (build_realm.py's default).
 
-# The public URL, fixed: issuer, redirects and links never come from request headers.
+# The public URL, fixed: issuer, redirects and links never come from request headers. A stand-in here;
+# KC_HOSTNAME sets the office's.
 hostname=https://suveryn.office.example/idp
 hostname-strict=true
 http-relative-path=/idp

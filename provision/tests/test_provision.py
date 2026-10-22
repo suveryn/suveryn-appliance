@@ -264,3 +264,40 @@ def test_postgresqls_cluster_is_made_only_when_there_is_none(monkeypatch):
     monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed(""))
     p.ensure_cluster()
     assert ran == [("pg_createcluster", "16", "main")]
+
+
+def prebuilt_tree(root: Path) -> None:
+    o = root / "opt"
+    for f, text in (("suveryn/core/.suveryn-built", p.core_built_as()), ("suveryn/llama.cpp/.suveryn-built", p.llama_built_as()),
+                    ("keycloak/.suveryn-built", p.keycloak_built_as()), ("suveryn/ui/.suveryn-built", p.ui_built_as()),
+                    ("suveryn/core/.venv/bin/suveryn-gateway", ""), ("suveryn/core/.venv/bin/python", ""),
+                    ("suveryn/llama.cpp/build/bin/llama-server", ""), ("keycloak/bin/kc.sh", ""), ("suveryn/ui/index.html", ""),
+                    ("suveryn/lib/cuda/libcudart.so.12", ""), ("suveryn/hf/hub/models--x/config.json", "")):
+        (o / f).parent.mkdir(parents=True, exist_ok=True)
+        (o / f).write_text(text)
+
+
+def test_the_prebuilt_services_must_be_the_pinned_ones_and_complete(tmp_path):
+    prebuilt_tree(tmp_path)
+    assert p.prebuilt_problems(tmp_path) == []
+    (tmp_path / "opt/suveryn/core/.suveryn-built").write_text("suveryn-core@0000000\n")
+    (tmp_path / "opt/suveryn/lib/cuda/libcudart.so.12").unlink()
+    (tmp_path / "opt/suveryn/core/.git").mkdir()
+    problems = p.prebuilt_problems(tmp_path)
+    assert len(problems) == 3
+    assert "suveryn-core@0000000, not suveryn-core@" in problems[0]
+    assert "no CUDA runtime" in problems[1] and "no git history" in problems[2]
+
+
+def test_on_the_read_only_system_the_models_and_units_are_the_images(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    assert p.hf_home() == Path("/opt/suveryn/hf")
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    assert p.hf_home() == Path("/var/lib/suveryn/hf")
+
+
+def test_keycloaks_host_name_comes_from_its_environment_not_its_configuration_file():
+    src = (HERE / "suveryn-provision").read_text()
+    first_boot_part = src[src.index("def keycloak(public_url"):src.index("def reader_sudoers")]
+    assert '"KC_HOSTNAME": f"https://{host}/idp"' in first_boot_part
+    assert "keycloak.conf\").write_text" not in first_boot_part and "conf\" / \"keycloak.conf\").write" not in first_boot_part

@@ -18,6 +18,7 @@ link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 rm -f /etc/machine-id && : > /etc/machine-id
 mkdir -p /usr/lib/suveryn && : > /usr/lib/suveryn/empty-machine-id
 
+app=/opt/suveryn/appliance
 # The sūveryn services (tracker #47; mkosi.conf.d/30-services.conf, the appliance only). Their users
 # and the reader's sudo rule are made here; their folders on the data partition by tmpfiles.
 if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
@@ -28,6 +29,25 @@ if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
   # with its configuration there too: drop the one the package made in the image.
   if pg_lsclusters -h 2>/dev/null | grep -q '^16 main '; then pg_dropcluster 16 main; fi
   rm -rf /var/lib/postgresql/16
+  # sūveryn itself, from prebuilt/ (prebuild-services on a Pod): the build stops unless each part is the
+  # pinned one. Read-only for every service: owned by root.
+  python3 -I /opt/suveryn/appliance/provision/suveryn-provision check-prebuilt
+  chown -R root:root /opt/suveryn/core /opt/suveryn/python /opt/suveryn/hf /opt/suveryn/llama.cpp /opt/suveryn/lib \
+    /opt/suveryn/ui /opt/keycloak
+  chmod -R a+rX /opt/suveryn /opt/keycloak
+  # Keycloak writes only its data folder: on the data partition.
+  rm -rf /opt/keycloak/data && ln -s /var/lib/suveryn/keycloak /opt/keycloak/data
+  # llama-server finds the CUDA libraries it was built with (the driver itself is Ubuntu's).
+  echo /opt/suveryn/lib/cuda > /etc/ld.so.conf.d/suveryn-cuda.conf && ldconfig
+  # The reader sandbox and the network mode's tool, where provisioning puts them on an ordinary Ubuntu.
+  install -d /opt/suveryn/bin /opt/suveryn/network-mode
+  install -m 0755 "$app"/reader-sandbox/suveryn-reader-sandbox /opt/suveryn/bin/suveryn-reader-sandbox
+  install -m 0644 "$app"/reader-sandbox/tests/probe.py /opt/suveryn/bin/suveryn-sandbox-probe.py
+  install -m 0755 "$app"/network-mode/suveryn-network-mode /opt/suveryn/network-mode/suveryn-network-mode
+  install -m 0644 "$app"/network-mode/builtin-destinations /opt/suveryn/network-mode/builtin-destinations
+  ln -sf /opt/suveryn/network-mode/suveryn-network-mode /opt/suveryn/bin/suveryn-network-mode
+  # Enabled now (/etc can't change later); each starts once first boot has written its settings.
+  systemctl enable suveryn-llm.service keycloak.service suveryn-gateway.service
 fi
 link /var/lib/suveryn/postgresql-etc   /etc/postgresql
 
