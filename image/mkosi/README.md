@@ -17,11 +17,16 @@ mode (#37), and the sūveryn services in this system.
 ```bash
 pip install "git+https://github.com/systemd/mkosi.git@v25.3"   # in a venv; pinned
 cd image/mkosi
-sudo mkosi -f build                  # the appliance: linux-generic and firmware, slot A of 32 GiB
+sudo ./prebuild-services             # the appliance's sūveryn services, built on this host into prebuilt/ (#47)
+sudo mkosi -f build                  # the appliance: linux-generic and firmware, the services, slot A of 32 GiB
 test/make-test-keys                  # once: the test system's bundle and portal keys (#36, #37), never committed
 test/make-test-ui                    # the chat UI's build for the test system's web setup (#37), never committed
 sudo mkosi -f --profile test build   # the test system: the same layout, small (for run-vm-tests)
 ```
+
+The appliance's build stops without `prebuilt/`, or when a part in it isn't the pinned one
+(`suveryn-provision check-prebuilt`). `prebuild-services` needs what `image/prebuild.sh` needs: an
+Ubuntu 24.04 host with CUDA 12.8 (a Pod; no GPU needed) and about 60 GB free for it and the image.
 
 Needs Ubuntu 24.04 as the build host (systemd 255: `systemd-repart`, `ukify`), and `bubblewrap`,
 `erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify`. The result
@@ -40,7 +45,8 @@ pre-24.04 names and can't build for noble. Packages come from Ubuntu's archives 
 | `mkosi.images/initrd/` | Our initrd: mkosi's own, plus the TPM libraries and `suveryn-boot-mode` (installed appliance or installer, and `/var` for it) with `boot-disk` and its udev rule |
 | `mkosi.repart/` | What a release brings: the EFI partition (1 GiB), slot A (EROFS, 32 GiB) and its verity. mkosi puts the root hash in the boot file (`roothash=`) |
 | `mkosi.extra/` | Files in the system: `/etc/fstab` (`/tmp` in memory), an empty `/etc/crypttab`, the tmpfiles that create the office's folders, DHCP by default, `/usr/lib/suveryn/install`, `installer-ui` and `install-disk`, `identity` and `system-state` with `suveryn-identity.service`, `bundle` and `bundle-keys/` |
-| `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock |
+| `mkosi.conf.d/30-services.conf`, `services/`, `prebuild-services` | The sūveryn services (#47, the appliance only): their packages, users, folders on the data partition and sudo rule; sūveryn itself from `prebuilt/`; the units, enabled and waiting for first boot's settings |
+| `mkosi.postinst.chroot` | The `/etc` links into the data partition (only those the design lists), a copy of the image's own `/var` restored on a fresh data partition, no apt timers, no pcrlock; the services' users and checks |
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `make-stick` | Makes an installer stick: the disk image and a bundles partition with signed bundles |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |

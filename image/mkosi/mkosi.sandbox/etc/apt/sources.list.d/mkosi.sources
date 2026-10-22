@@ -1,13 +1,14 @@
 # Ubuntu's archives over HTTPS. mkosi would use HTTP (and always HTTP for the security archive);
-# a file with this name replaces mkosi's own list.
+# a file with this name replaces mkosi's own list. restricted: NVIDIA's driver, built and signed by
+# Canonical (#47).
 Types: deb
 URIs: https://archive.ubuntu.com/ubuntu
 Suites: noble noble-updates
-Components: main universe
+Components: main universe restricted
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 Types: deb
 URIs: https://security.ubuntu.com/ubuntu
 Suites: noble-security
-Components: main universe
+Components: main universe restricted
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

@@ -209,7 +209,7 @@ def test_every_extra_tree_exists():
         found = trees(conf)
         assert found, conf
         for t in found:
-            if t in ("../../test/keys/public", "../../test/ui"):  # made by test/make-test-keys and make-test-ui, never committed
+            if t in ("../../test/keys/public", "../../test/ui", "prebuilt"):  # made by test/make-test-keys, make-test-ui and prebuild-services, never committed
                 continue
             assert (base / t).is_dir(), f"{conf.name}: {t}"
 
@@ -451,3 +451,49 @@ def test_the_packer_images_hardening_is_in_the_read_only_system_too():
     assert "SystemMaxUse=1G" in (extra / "usr/lib/systemd/journald.conf.d/90-suveryn.conf").read_text()
     assert "Storage=none" in (extra / "usr/lib/systemd/coredump.conf.d/90-suveryn.conf").read_text()
     assert "* hard core 0" in (extra / "etc/security/limits.d/90-suveryn.conf").read_text()
+
+
+def test_suveryn_itself_comes_prebuilt_and_checked_against_the_pins():
+    conf = (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    assert re.search(r"^\s+prebuilt$", conf, re.M) and "../../provision/systemd:/usr/lib/systemd/system" in conf
+    assert "image/mkosi/prebuilt/" in (REPO / ".gitignore").read_text()
+    assert "suveryn-provision check-prebuilt" in POSTINST
+    script = (MKOSI / "prebuild-services").read_text()
+    assert "prebuild --read-only-image" in script and "check-prebuilt --root" in script
+    assert "--exclude=opt/suveryn/core/.git" in script and "--exclude=opt/keycloak/data" in script
+
+
+def test_on_the_read_only_system_the_services_write_only_the_data_partition():
+    assert "ln -s /var/lib/suveryn/keycloak /opt/keycloak/data" in POSTINST
+    tmpfiles = (SERVICES / "usr/lib/tmpfiles.d/suveryn-services.conf").read_text()
+    assert re.search(r"^d /var/lib/suveryn/keycloak\s+0700 keycloak\s+keycloak", tmpfiles, re.M)
+    assert "/opt/suveryn/lib/cuda > /etc/ld.so.conf.d/suveryn-cuda.conf && ldconfig" in POSTINST
+
+
+def test_the_services_are_enabled_in_the_image_and_wait_for_first_boots_settings():
+    assert "systemctl enable suveryn-llm.service keycloak.service suveryn-gateway.service" in POSTINST
+    for unit, settings in (("suveryn-gateway", "/etc/suveryn/gateway.env"), ("keycloak", "/etc/suveryn/keycloak.env"),
+                           ("suveryn-llm", "/etc/suveryn/llama-presets.ini")):
+        text = (REPO / "provision" / "systemd" / f"{unit}.service").read_text()
+        unit_section = text.split("[Service]")[0]
+        assert f"ConditionPathExists={settings}" in unit_section, unit
+    # the network mode's outgoing units come with first boot on the read-only system (stage 4), not now
+    assert "suveryn-egress" not in POSTINST and "suveryn-dns.service" not in POSTINST
+
+
+def test_the_reader_sandbox_and_the_network_mode_tool_are_where_provisioning_puts_them():
+    p = provision()
+    assert f"/opt/suveryn/bin/suveryn-reader-sandbox" in POSTINST and p.READER_WRAPPER.endswith("/opt/suveryn/bin/suveryn-reader-sandbox")
+    assert "/opt/suveryn/bin/suveryn-sandbox-probe.py" in POSTINST
+    assert f"ln -sf /opt/suveryn/network-mode/suveryn-network-mode {p.NETWORK_MODE_TOOL}" in POSTINST
+
+
+def test_the_gpu_driver_is_ubuntus_signed_one_with_its_licence_and_nouveau_off():
+    have = packages(MKOSI / "mkosi.conf.d" / "30-services.conf")
+    assert {"linux-modules-nvidia-580-open-generic", "libnvidia-compute-580", "nvidia-utils-580"} <= have
+    assert not any("dkms" in p or "-server" in p for p in have)  # nothing built on the appliance; the licence file is 580's
+    sources = (MKOSI / "mkosi.sandbox" / "etc" / "apt" / "sources.list.d" / "mkosi.sources").read_text()
+    assert re.findall(r"^Components: (.+)$", sources, re.M) == ["main universe restricted"] * 2
+    assert "Repositories=universe,restricted" in (MKOSI / "mkosi.conf").read_text()
+    blacklist = (SERVICES / "usr/lib/modprobe.d/suveryn-nvidia.conf").read_text()
+    assert "blacklist nouveau" in blacklist and "options nouveau modeset=0" in blacklist
