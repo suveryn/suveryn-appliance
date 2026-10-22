@@ -1,6 +1,6 @@
 {
   "repo": "https://github.com/suveryn/suveryn-core.git",
-  "commit": "547f48e56c2909f8b4066084133968f0f596c1fb",
+  "commit": "f8f4be9d8bd617ddf774a5b006012cb7e87f71dc",
   "path": "packages/api-gateway/keycloak/suveryn-realm.json",
   "sha256": "ec6bc541189c064c7ab6ff54e6efa07bebc44ec3c917540fb0afcd54bdf13238"
 }
