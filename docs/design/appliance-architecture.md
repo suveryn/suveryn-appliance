@@ -181,7 +181,14 @@ stages, each its own change (decided 23 October 2026):
    and resolver, Keycloak's temporary administrator removed once the office's exists, and a test
    that first boot writes nothing outside the listed paths.
 
-Stages 1 to 3 are built (configuration tested anywhere; the full build on a Pod). In stage 2,
+Stages 1 to 3 are built, and of stage 4 the models and the network mode: the language models are
+used where the installer put their bundles (`/var/lib/suveryn/bundles/model/…`, checked against
+suveryn-core's manifest, never copied; media or a download only when no bundle has them), and the
+outgoing rules and resolver are enabled in the image and start once first boot has set a mode, with
+`/etc/resolv.conf` linking to `/run/suveryn/resolv.conf` (systemd-resolved's stub until
+`suveryn-dns` runs). Still to do in stage 4: removing Keycloak's temporary administrator once the
+office's exists, and first boot on real hardware (#48), where the read-only system itself refuses
+any write outside the data partition. In stage 2,
 everything that isn't from Ubuntu's archive is built beforehand on a Pod by `image/mkosi/prebuild-services`
 into `image/mkosi/prebuilt/`, which the image build copies in and checks against the pins
 (`suveryn-provision check-prebuilt`): no network, git or compiler inside the image build.

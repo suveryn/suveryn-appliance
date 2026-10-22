@@ -137,7 +137,7 @@ def test_only_the_listed_etc_paths_link_into_the_data_partition():
                                       "/etc/systemd/network", "/etc/nginx/sites-enabled/suveryn", "/etc/postgresql"}
     for path in into_var.values():
         assert f"`{path}" in DESIGN, f"{path} isn't in the design note's list"
-    assert links["/run/systemd/resolve/stub-resolv.conf"] == "/etc/resolv.conf"
+    assert links["/run/suveryn/resolv.conf"] == "/etc/resolv.conf"  # the stub, or suveryn-dns while it runs
 
 
 def test_the_images_own_var_is_restored_on_a_fresh_data_partition():
@@ -477,8 +477,21 @@ def test_the_services_are_enabled_in_the_image_and_wait_for_first_boots_settings
         text = (REPO / "provision" / "systemd" / f"{unit}.service").read_text()
         unit_section = text.split("[Service]")[0]
         assert f"ConditionPathExists={settings}" in unit_section, unit
-    # the network mode's outgoing units come with first boot on the read-only system (stage 4), not now
-    assert "suveryn-egress" not in POSTINST and "suveryn-dns.service" not in POSTINST
+    # the network mode's outgoing rules and resolver: enabled too, waiting for the mode first boot sets
+    assert "systemctl enable suveryn-egress.service suveryn-dns.service" in POSTINST
+    for unit in ("suveryn-egress", "suveryn-dns"):
+        text = (REPO / "provision" / "systemd" / f"{unit}.service").read_text()
+        assert "ConditionPathExists=/etc/suveryn/network-mode.env" in text.split("[Service]")[0], unit
+
+
+def test_resolv_conf_is_the_stub_until_the_appliances_own_resolver_runs():
+    var = (MKOSI / "mkosi.extra" / "usr" / "lib" / "tmpfiles.d" / "suveryn-var.conf").read_text()
+    assert "L /run/suveryn/resolv.conf - - - - /run/systemd/resolve/stub-resolv.conf" in var
+    dns = (REPO / "provision" / "systemd" / "suveryn-dns.service").read_text()
+    assert "nameserver 127.0.0.1" in dns.split("ExecStartPost=")[1].splitlines()[0]
+    assert "ln -s /run/systemd/resolve/stub-resolv.conf /run/suveryn/resolv.conf" in dns
+    assert "ReadWritePaths=-/run/suveryn" in dns  # ProtectSystem=strict leaves /run read-only otherwise
+    assert provision().RESOLV_TEXT.endswith("nameserver 127.0.0.1\noptions edns0 trust-ad\n")
 
 
 def test_the_reader_sandbox_and_the_network_mode_tool_are_where_provisioning_puts_them():
