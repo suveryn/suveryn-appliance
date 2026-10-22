@@ -341,3 +341,19 @@ def test_the_read_only_images_python_is_uvs_own_and_the_build_host_has_java():
     assert "openjdk-21-jre-headless" in p.BUILD_HOST_PACKAGES
     main = src[src.index('if a.command == "prebuild":'):]
     assert main.index("build_host_packages()") < main.index("keycloak_software()")
+
+
+def test_llama_server_needing_a_library_the_image_lacks_stops_the_prebuild(tmp_path, monkeypatch):
+    """VM check of #47: built with NCCL, llama-server couldn't start in the image (libnccl.so.2 not found)."""
+    (tmp_path / "build" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(p, "LLAMA", tmp_path)
+    ldd = ("\tlibcudart.so.12 => /usr/local/cuda/lib64/libcudart.so.12 (0x1)\n"
+           "\tlibcuda.so.1 => not found\n\tlibnccl.so.2 => not found\n")
+    monkeypatch.setattr(p, "run", lambda *a, **k: ldd)
+    with pytest.raises(SystemExit):
+        p.cuda_libraries(tmp_path / "out")
+    copied = []
+    monkeypatch.setattr(p, "run", lambda *a, **k: ldd.replace("\tlibnccl.so.2 => not found\n", "") if a[0] == "ldd" else "")
+    monkeypatch.setattr(p.shutil, "copy2", lambda src, dst: copied.append(Path(dst).name))
+    assert p.cuda_libraries(tmp_path / "out") == ["libcudart.so.12"]  # the driver's libcuda.so.1 is the image's own
+    assert copied == ["libcudart.so.12"]
