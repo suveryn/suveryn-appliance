@@ -22,6 +22,8 @@ nvcc --version | grep -q "release 12.8" || { echo "the host needs CUDA 12.8, lik
 python3 "$repo/provision/suveryn-provision" prebuild --read-only-image
 grep -q "^GGML_NATIVE:BOOL=OFF" /opt/suveryn/llama.cpp/build/CMakeCache.txt \
   || { echo "/opt/suveryn/llama.cpp was built for this host, not the image; remove its build folder and run again" >&2; exit 1; }
+grep -q "^GGML_CUDA_NCCL:BOOL=OFF" /opt/suveryn/llama.cpp/build/CMakeCache.txt \
+  || { echo "/opt/suveryn/llama.cpp was built with NCCL, which the image doesn't carry; remove its build folder and run again" >&2; exit 1; }
 
 rm -rf "$out"
 mkdir -p "$out/opt/suveryn/llama.cpp/build" "$out/opt/suveryn/lib"

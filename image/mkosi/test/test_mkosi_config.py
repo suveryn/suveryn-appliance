@@ -510,3 +510,14 @@ def test_the_gpu_driver_is_ubuntus_signed_one_with_its_licence_and_nouveau_off()
     assert "Repositories=universe,restricted" in (MKOSI / "mkosi.conf").read_text()
     blacklist = (SERVICES / "usr/lib/modprobe.d/suveryn-nvidia.conf").read_text()
     assert "blacklist nouveau" in blacklist and "options nouveau modeset=0" in blacklist
+
+
+def test_what_the_vm_build_of_the_image_needed():
+    """VM check of #47: openjdk's postinst needs /usr/share/man/man1; check-prebuilt reads the theme's pin;
+    llama-server was linked against NCCL, which the image doesn't carry."""
+    assert (MKOSI / "mkosi.skeleton" / "usr" / "share" / "man" / "man1").is_dir()
+    assert "rm -rf \"$app\"/keycloak/theme/build /usr/share/man" in POSTINST
+    assert "../../keycloak/theme:/opt/suveryn/appliance/keycloak/theme" in (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    src = (REPO / "provision" / "suveryn-provision").read_text()
+    assert '"-DGGML_CUDA_NCCL=OFF"' in src and "rpath-link" in src
+    assert "GGML_CUDA_NCCL:BOOL=OFF" in (MKOSI / "prebuild-services").read_text()

@@ -114,7 +114,7 @@ RUNTIME_PACKAGES = [
     "python3-seccomp", "nginx", "openssl", "sudo", "ca-certificates",
     # Libraries suveryn-core's Python packages load (OpenCV in Docling) that Ubuntu's minimal installation
     # lacks: found by comparing every library they link against with the minimal image's package list.
-    "libgl1", "libsm6", "libice6",
+    "libgl1", "libsm6", "libice6", "libglib2.0-0t64", "libxext6", "libxrender1", "libxcb1",
 ]
 # An ordinary Ubuntu only: its firewall and automatic updates (the read-only system has its own inbound
 # rules and gets fixes as sūveryn updates), and the tools to fetch and build the services.
@@ -344,7 +344,9 @@ def packages() -> None:
 
 # What building the services needs on the host (prebuild): Java for Keycloak's build, git for the pinned
 # sources, a compiler and cmake for llama-server. The CUDA toolkit comes from NVIDIA (the host's template).
-BUILD_HOST_PACKAGES = ["openjdk-21-jre-headless", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev"]
+# OpenCV's libraries too: the prebuild loads the models once as a check (VM check of #47: libxcb, libgthread).
+BUILD_HOST_PACKAGES = ["openjdk-21-jre-headless", "git", "curl", "ca-certificates", "cmake", "build-essential", "libssl-dev",
+                       "libgl1", "libsm6", "libice6", "libglib2.0-0t64", "libxext6", "libxrender1", "libxcb1"]
 
 
 def build_host_packages() -> None:
@@ -475,7 +477,7 @@ def suveryn_core(hf: Path = HF_HOME, compiled: bool = False) -> None:
     hf.mkdir(parents=True, exist_ok=True)
     run(CORE / ".venv" / "bin" / "suveryn-fetch-models", env={"HF_HOME": str(hf), "HF_HUB_OFFLINE": "0",
         "SUVERYN_RAG_DEVICE": "cpu", "CUDA_VISIBLE_DEVICES": ""}, cwd=CORE, capture=True)
-    run("chmod", "-R", "a+rX", *[d for d in (hf, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
+    run("chmod", "-R", "a+rX,go-w", *[d for d in (hf, OPT / "python", CORE) if d.exists()])  # gateway and reader read them
     note(f"embedding and Docling models in {hf}")
 
 
@@ -488,6 +490,10 @@ def llama_server() -> None:
         run("git", "-c", "advice.detachedHead=false", "clone", "-q", "--depth", "1", "--branch", v["tag"], v["repo"], LLAMA)
     if run("git", "-C", LLAMA, "rev-parse", "HEAD", capture=True).strip() != v["commit"]:
         fail(f"llama.cpp {v['tag']} isn't at the pinned commit")
+    cache = LLAMA / "build" / "CMakeCache.txt"
+    if binary.exists() and cache.exists() and "GGML_CUDA_NCCL:BOOL=ON" in cache.read_text():
+        # Built with NCCL, which the image doesn't carry (VM check of #47: libnccl.so.2 not found): build again.
+        shutil.rmtree(LLAMA / "build")
     if not binary.exists():
         env = {"PATH": "/usr/local/cuda/bin:" + os.environ["PATH"]}
         # native: the card in this machine. An image is built without one, so it gets the generations a
@@ -496,13 +502,31 @@ def llama_server() -> None:
         # Its CPU code likewise: native here, generic in an image (built on an emulated CPU, run on the office's).
         on_target = not for_image()
         archs = "native" if on_target else "80;86;89;90"
-        run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", f"-DCMAKE_CUDA_ARCHITECTURES={archs}",
-            f"-DGGML_NATIVE={'ON' if on_target else 'OFF'}",
-            "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release", env=env, capture=True)
+        # No NCCL: one card doesn't need it, and llama.cpp turns it on by itself when the build host has it.
+        # A host without a driver (an image build) links against the toolkit's stub of libcuda.so.1.
+        link = [f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{d}"] if (d := cuda_stub_dir()) else []
+        run("cmake", "-S", LLAMA, "-B", LLAMA / "build", "-DGGML_CUDA=ON", "-DGGML_CUDA_NCCL=OFF",
+            f"-DCMAKE_CUDA_ARCHITECTURES={archs}", f"-DGGML_NATIVE={'ON' if on_target else 'OFF'}",
+            "-DLLAMA_CURL=OFF", "-DCMAKE_BUILD_TYPE=Release", *link, env=env, capture=True)
         run("cmake", "--build", LLAMA / "build", "--target", "llama-server", "-j", str(os.cpu_count() or 8),
             env=env, capture=True)
     run("chmod", "-R", "a+rX", LLAMA)
     note(f"llama.cpp {v['tag']} ({v['commit'][:7]}): {binary}")
+
+
+def cuda_stub_dir() -> Path | None:
+    """On a host without NVIDIA's driver (an image built without a card): a folder with libcuda.so.1 pointing
+    at the CUDA toolkit's stub, for the linker only (rpath-link; it never reaches the binary). None with a driver."""
+    if any(Path(d, "libcuda.so.1").exists() for d in ("/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib")):
+        return None
+    stub = Path("/usr/local/cuda/lib64/stubs/libcuda.so")
+    if not stub.exists():
+        return None
+    d = VAR / "cuda-stub"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "libcuda.so.1").unlink(missing_ok=True)
+    (d / "libcuda.so.1").symlink_to(stub)
+    return d
 
 
 def cuda_libraries(dest: Path = CUDA_LIBS) -> list[str]:
@@ -513,6 +537,9 @@ def cuda_libraries(dest: Path = CUDA_LIBS) -> list[str]:
     out = run("ldd", binary, capture=True, env={"LD_LIBRARY_PATH": f"{LLAMA / 'build' / 'bin'}:/usr/local/cuda/lib64"})
     for lib in (LLAMA / "build" / "bin").glob("*.so*"):  # ggml's CUDA backend is a library of its own
         out += run("ldd", lib, capture=True, env={"LD_LIBRARY_PATH": "/usr/local/cuda/lib64"})
+    missing = sorted({m.group(1) for m in re.finditer(r"^\s*(\S+) => not found", out, re.M)} - {"libcuda.so.1"})
+    if missing:  # libcuda.so.1 is the driver's: the image's own (libnvidia-compute), absent on a build host without one
+        fail(f"llama-server needs libraries the image won't have: {', '.join(missing)}")
     found = sorted({m.group(1) for m in re.finditer(r"=> (/usr/local/cuda[^ ]*/lib(?:64)?/libcu\S+) ", out)})
     if not any("libcudart" in f for f in found):
         fail("llama-server doesn't link the CUDA runtime from /usr/local/cuda: was it built with CUDA?")

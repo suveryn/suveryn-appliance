@@ -32,7 +32,8 @@ it may create namespaces: a virtual or real machine, not a container like a RunP
 #47: "mkosi was forbidden to unshare namespaces"). Both together need about 60 GB free.
 
 Needs Ubuntu 24.04 as the build host (systemd 255: `systemd-repart`, `ukify`), and `bubblewrap`,
-`erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify`. The result
+`erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify` (and `systemd-repart`
+where it is a package of its own, as on Ubuntu 26.04). The result
 is in `mkosi.output/`: `suveryn_<version>.raw` (the disk image: EFI partition, slot A, its verity),
 and the boot file, kernel and initrd beside it.
 
