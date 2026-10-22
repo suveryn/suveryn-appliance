@@ -12,7 +12,8 @@ link /var/lib/suveryn/host/localtime   /etc/localtime
 link /var/lib/suveryn/host/keyboard    /etc/default/keyboard
 link /var/lib/suveryn/network          /etc/systemd/network
 link /var/lib/suveryn/nginx/suveryn    /etc/nginx/sites-enabled/suveryn
-link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+# The resolver: systemd-resolved's stub, or the appliance's own once a network mode is set (suveryn-dns, #38, #47).
+link /run/suveryn/resolv.conf          /etc/resolv.conf
 
 # The machine-id is mounted over this empty file from /var in the initrd (suveryn-boot-mode).
 rm -f /etc/machine-id && : > /etc/machine-id
@@ -48,6 +49,8 @@ if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
   ln -sf /opt/suveryn/network-mode/suveryn-network-mode /opt/suveryn/bin/suveryn-network-mode
   # Enabled now (/etc can't change later); each starts once first boot has written its settings.
   systemctl enable suveryn-llm.service keycloak.service suveryn-gateway.service
+  # The network mode's outgoing rules and resolver, once first boot has set the mode.
+  systemctl enable suveryn-egress.service suveryn-dns.service
 fi
 link /var/lib/suveryn/postgresql-etc   /etc/postgresql
 

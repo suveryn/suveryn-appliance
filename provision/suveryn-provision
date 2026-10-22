@@ -505,13 +505,34 @@ def cuda_libraries(dest: Path = CUDA_LIBS) -> list[str]:
     return [Path(f).name for f in found]
 
 
+BUNDLES = VAR / "bundles"  # the signed bundles the installer copied from the stick (/usr/lib/suveryn/bundle, #36)
+
+
+def bundled(m: dict) -> Path | None:
+    """The model file from an installed model bundle, if one has it with the manifest's size and SHA-256.
+    The read-only system's one path for the language models (#47): used where it is, never copied."""
+    for f in sorted(BUNDLES.glob(f"model/*/*/{m['file']}")):
+        if f.stat().st_size == m["size_bytes"] and sha256_of(f) == m["sha256"]:
+            return f
+    return None
+
+
 def llm_models(models_from: Path | None, mode: str, staging: bool = True) -> list[dict]:
-    """The LLM files, each checked against the manifest. Staging (install) may download them whatever the
-    mode; at first boot only a connected installation downloads, the others need them on media."""
+    """The LLM files, each checked against the manifest. From an installed bundle when there is one;
+    else staging (install) may download them whatever the mode, and at first boot only a connected
+    installation downloads, the others need them on media. Each gets its ``path``."""
     step("Model files (suveryn-core models/manifest.json)")
     llms = [m for m in json.loads((CORE / "models" / "manifest.json").read_text())["models"] if m["role"] == "llm"]
     for m in llms:
+        if (found := bundled(m)) is not None:
+            m["path"] = str(found)
+            note(f"{m['file']}: from the bundle installed from the stick ({found.parent}), checksum verified")
+            continue
+        if read_only_system() and not models_from and mode != "connected":
+            fail(f"{m['file']} is needed and no installed bundle has it: install from a stick with the model "
+                 f"bundles, or put the model files on media (SUVERYN-MODELS)")
         dest = MODELS / m["file"]
+        m["path"] = str(dest)
         present = dest.exists() and dest.stat().st_size == m["size_bytes"]
         if not models_from and not present and not staging and mode != "connected":
             fail(f"{m['file']} is needed and this installation is {mode}: put the model files on media and pass "
@@ -540,7 +561,7 @@ def presets(llms: list[dict]) -> str:
            "n-gpu-layers = 99", "flash-attn = on", "cache-type-k = q8_0", "cache-type-v = q8_0", "parallel = 4",
            "kv-unified = true", "ctx-size = 65536", "cache-ram = 32768", ""]
     for m in llms:
-        out += [f"[{m['id']}]", f"model = {MODELS / m['file']}"]
+        out += [f"[{m['id']}]", f"model = {m.get('path') or MODELS / m['file']}"]
         if "--jinja" in m.get("llama_server_args", ""):
             out.append("jinja = true")
         if (kw := re.search(r"--chat-template-kwargs '([^']*)'", m.get("llama_server_args", ""))):
@@ -889,6 +910,15 @@ def firewall() -> None:
         note("in: 80 and 443 only")
     if not UPSTREAM_RESOLV.exists():
         fail(f"{UPSTREAM_RESOLV} is missing: the appliance's resolver needs systemd-resolved for the office's DNS servers")
+    if read_only_system():
+        # The units are in the image, enabled, and start once a mode is set; suveryn-dns points
+        # /etc/resolv.conf (a link to /run/suveryn/resolv.conf) at itself while it runs.
+        run("systemctl", "restart", "suveryn-egress")
+        run("systemctl", "restart", "suveryn-dns")
+        out = subprocess.run([NETWORK_MODE_TOOL, "show"], capture_output=True, text=True).stdout.strip()
+        for line in out.splitlines():
+            note(line)
+        return
     for unit in EGRESS_UNITS:
         shutil.copyfile(REPO / "provision" / "systemd" / f"{unit}.service", Path("/etc/systemd/system") / f"{unit}.service")
     run("systemctl", "daemon-reload")

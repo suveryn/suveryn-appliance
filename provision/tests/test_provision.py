@@ -301,3 +301,32 @@ def test_keycloaks_host_name_comes_from_its_environment_not_its_configuration_fi
     first_boot_part = src[src.index("def keycloak(public_url"):src.index("def reader_sudoers")]
     assert '"KC_HOSTNAME": f"https://{host}/idp"' in first_boot_part
     assert "keycloak.conf\").write_text" not in first_boot_part and "conf\" / \"keycloak.conf\").write" not in first_boot_part
+
+
+def test_the_language_models_come_from_an_installed_bundle_where_it_is(tmp_path, monkeypatch, capsys):
+    """The read-only system's one path (#47): the installer's bundle, used where it is, never copied."""
+    data = b"weights"
+    import hashlib
+    m = {"id": "x", "file": "x.gguf", "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    monkeypatch.setattr(p, "BUNDLES", tmp_path / "bundles")
+    assert p.bundled(m) is None
+    f = tmp_path / "bundles" / "model" / "x" / "1" / "x.gguf"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"changed")
+    assert p.bundled(m) is None  # the wrong size or hash: not this model
+    f.write_bytes(data)
+    assert p.bundled(m) == f
+    assert f"model = {f}" in p.presets([{**m, "path": str(f), "default": True}])
+
+
+def test_on_the_read_only_system_an_air_gapped_first_boot_without_a_bundle_says_where_the_models_come_from(tmp_path, monkeypatch):
+    core = tmp_path / "core"
+    (core / "models").mkdir(parents=True)
+    (core / "models" / "manifest.json").write_text(json.dumps({"models": [
+        {"id": "x", "role": "llm", "file": "x.gguf", "size_bytes": 1, "sha256": "0" * 64, "source": "https://example"}]}))
+    monkeypatch.setattr(p, "CORE", core)
+    monkeypatch.setattr(p, "BUNDLES", tmp_path / "bundles")
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "download", lambda *a, **k: pytest.fail("no download when air-gapped"))
+    with pytest.raises(SystemExit):
+        p.llm_models(None, "air-gapped", staging=False)
