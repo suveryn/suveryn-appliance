@@ -201,6 +201,15 @@ may create namespaces (a virtual or real machine, not a container like a RunPod 
 in an Ubuntu 24.04 + CUDA 12.8 container or machine, with no GPU. The
 Packer build stays for developing and testing suveryn-core on a Pod.
 
+### Backups (#33)
+
+Nightly onto the office's USB disk or network share, encrypted with age for the office's recovery key
+(the public half from the web setup; the private half stays offline), kept for the chosen retention
+with the newest always kept, and checked by a restore test. What, how and how to restore:
+[`backup/README.md`](../../backup/README.md). Built into the read-only system (`suveryn-backup.timer`);
+the administrator sees the last success and failure (suveryn-core). Restoring from the web setup on a
+replacement machine is a ticket of its own.
+
 ## Updates (#40)
 
 - An update is one signed bundle: a new system, its verity and its boot file, signed and checked
