@@ -357,3 +357,24 @@ def test_llama_server_needing_a_library_the_image_lacks_stops_the_prebuild(tmp_p
     monkeypatch.setattr(p.shutil, "copy2", lambda src, dst: copied.append(Path(dst).name))
     assert p.cuda_libraries(tmp_path / "out") == ["libcudart.so.12"]  # the driver's libcuda.so.1 is the image's own
     assert copied == ["libcudart.so.12"]
+
+
+def test_on_systemd_the_site_is_reloaded_and_the_backup_timer_runs_at_once(monkeypatch, tmp_path):
+    """VM check of #33: nginx kept Ubuntu's default site, the timer waited for a reboot, and the backup
+    service couldn't read a checkout in /root (ProtectHome)."""
+    ran = []
+    monkeypatch.setattr(p, "systemd_running", lambda: True)
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    p.services("restart")
+    assert ("systemctl", "reload", "nginx") in ran
+    ran.clear()
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    monkeypatch.setattr(p, "REPO", Path("/root/suveryn-appliance"))
+    written = {}
+    monkeypatch.setattr(p.Path, "write_text", lambda self, text: written.__setitem__(str(self), text))
+    monkeypatch.setattr(p.Path, "read_text", lambda self: (HERE.parent / "backup" / "systemd" / self.name).read_bytes().decode())
+    p.backup_service()
+    unit = written["/etc/systemd/system/suveryn-backup.service"]
+    assert "/root/suveryn-appliance/backup/suveryn-backup run" in unit and "ProtectHome=read-only" in unit
+    assert ("systemctl", "enable", "--now", "suveryn-backup.timer") in ran

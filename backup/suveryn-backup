@@ -164,6 +164,15 @@ class Target:
         self.s, self.mounted, self.creds = s, False, None
 
     def __enter__(self) -> Path:
+        try:
+            return self._enter()
+        except BaseException:
+            # A failed mount mustn't leave the share's password behind in /run (VM check of #33):
+            # Python calls __exit__ only after a successful __enter__.
+            self.__exit__(None, None, None)
+            raise
+
+    def _enter(self) -> Path:
         s = self.s
         if s["target"] == "folder":
             base = Path(s["path"])
@@ -187,8 +196,9 @@ class Target:
                 with os.fdopen(fd, "w") as f:
                     password = SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
                     f.write(f"username={s.get('user') or 'guest'}\npassword={password}\n")
+                # vers=3: the highest SMB 3 dialect both sides speak (a NAS may allow 3.1.1 only)
                 run("target", ["mount", "-t", "cifs", address, MOUNT,
-                               "-o", f"{opts},credentials={creds},vers=3.0,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
+                               "-o", f"{opts},credentials={creds},vers=3,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
             else:
                 run("target", ["mount", "-t", "nfs", s["address"], MOUNT, "-o", f"{opts},soft,timeo=150"])
             self.mounted = True
@@ -372,7 +382,7 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
         zstd.stdout.close()
     if age.wait() != 0:  # the wrong key, or not an age file: say that, not what reading the rest made of it
         zstd.wait()
-        raise Failed("decrypt", f"age: {(age.stderr.read() or b'').decode().strip()[-200:] or 'decryption failed'}")
+        raise Failed("decrypt", f"age: {age_error(age.stderr.read())}")
     if problem:
         zstd.wait()
         raise Failed("read", f"the backup can't be read: {problem}")
@@ -387,14 +397,27 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     for db in manifest["databases"]:
         if not (dest / "db" / f"{db}.dump").is_file():
             raise Failed("read", f"the backup lacks the {db} database")
+    # PostgreSQL's superuser reads the dumps, whatever umask unpacked them (VM check of #33: with umask
+    # 077 the db folder was 0700, and the restore failed after the database was already dropped).
+    os.chmod(dest / "db", 0o755)
+    for dump in (dest / "db").iterdir():
+        os.chmod(dump, 0o644)
     return manifest
+
+
+def age_error(stderr: bytes | None) -> str:
+    """age's own message, without its "age: error:" prefix and its line asking for bug reports."""
+    lines = [ln for ln in (stderr or b"").decode(errors="replace").splitlines()
+             if ln.strip() and "report unexpected or unhelpful errors" not in ln and not ln.startswith("[")]
+    text = " ".join(lines).strip()
+    return re.sub(r"^(age:\s*)?(error:\s*)?", "", text)[-200:] or "decryption failed"
 
 
 def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
     """Each database dump readable by pg_restore: its number of entries."""
     out = {}
     for db in manifest["databases"]:
-        listing = run("check", ["pg_restore", "--list", dest / "db" / f"{db}.dump"])
+        listing = run("check", as_pg(["pg_restore", "--list", dest / "db" / f"{db}.dump"]))
         out[db] = sum(1 for line in listing.splitlines() if line and not line.startswith(";"))
     return out
 
@@ -453,12 +476,22 @@ def cmd_restore(a) -> int:
             check_dumps(dest, manifest)
             if systemd:
                 run("services", ["systemctl", "stop", *SERVICES])
-            for db, owner in manifest["databases"].items():
-                dump = dest / "db" / f"{db}.dump"
-                os.chmod(dump, 0o644)
+            # Each database is restored beside the live one first; only once that has worked is the live
+            # one dropped and the restored one renamed into its place. A failed restore leaves it as it was.
+            try:
+                for db, owner in manifest["databases"].items():
+                    incoming = f"{db}_restoring"
+                    run("database", as_pg(["dropdb", "--if-exists", "--force", incoming]))
+                    run("database", as_pg(["createdb", "--owner", owner, incoming]))
+                    run("database", as_pg(["pg_restore", "--exit-on-error", "--dbname", incoming, dest / "db" / f"{db}.dump"]))
+            except Failed:
+                for db in manifest["databases"]:
+                    subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_restoring"]), capture_output=True)
+                raise
+            for db in manifest["databases"]:
                 run("database", as_pg(["dropdb", "--if-exists", "--force", db]))
-                run("database", as_pg(["createdb", "--owner", owner, db]))
-                run("database", as_pg(["pg_restore", "--exit-on-error", "--dbname", db, dump]))
+                run("database", as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres",
+                                       "-c", f'ALTER DATABASE "{db}_restoring" RENAME TO "{db}"']))
             for f in manifest["files"]:
                 target = VAR / f
                 if target.exists() and not target.is_symlink():
@@ -474,6 +507,8 @@ def cmd_restore(a) -> int:
             if systemd:
                 run("services", ["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"])
         except Failed as e:
+            if systemd:  # whatever failed, the office's services run again on what is there
+                subprocess.run(["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"], check=False)
             say(f"restore failed ({e.step}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
