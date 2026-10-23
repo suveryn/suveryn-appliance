@@ -82,7 +82,9 @@ systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || tru
 # Its user is made here: /etc/passwd can't be written on the appliance.
 app=/opt/suveryn/appliance
 find "$app" -name __pycache__ -prune -exec rm -rf {} +
-rm -rf "$app"/keycloak/theme/build /usr/share/man   # the theme's local build; the skeleton's man folder (mkosi.skeleton)
+# Of the theme only its pin (check-prebuilt reads it); and the skeleton's man folder (mkosi.skeleton).
+[ -d "$app"/keycloak/theme ] && find "$app"/keycloak/theme -mindepth 1 -maxdepth 1 ! -name brand-lock.json -exec rm -rf {} +
+rm -rf /usr/share/man
 printf 'u suveryn-setup - "sūveryn web setup" /nonexistent /usr/sbin/nologin\n' > /usr/lib/sysusers.d/suveryn-setup.conf
 systemd-sysusers /usr/lib/sysusers.d/suveryn-setup.conf
 cp "$app"/setup/systemd/suveryn-setup.service "$app"/setup/systemd/suveryn-setup-provision.service \
