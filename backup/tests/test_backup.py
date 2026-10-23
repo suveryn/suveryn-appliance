@@ -187,3 +187,64 @@ def test_the_settings_are_the_web_setups(tmp_path, monkeypatch):
         assert e.value.step == step
     (tmp_path / "backups.json").write_text(json.dumps(good))
     assert b.settings()["disk"] == "usb-X_1"
+
+
+@needs
+def test_a_restore_that_fails_leaves_the_live_database_as_it_was(appliance):
+    """VM check of #33: the restore dropped the database before it knew it could restore it."""
+    env, gw_db = appliance["env"], appliance["dbs"][0]
+    assert tool(env, "run").returncode == 0
+    [backup] = (appliance["target"] / "suveryn-backups" / "test-appliance").glob("*.age")
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    # The second database can't be restored: its owner is gone (renamed), after the first was restored aside.
+    kc_role = appliance["roles"][1]
+    psql(f"ALTER ROLE {kc_role} RENAME TO {kc_role}_away")
+    try:
+        r = tool(env, "restore", backup, "--identity", appliance["key"], "--yes")
+    finally:
+        psql(f"ALTER ROLE {kc_role}_away RENAME TO {kc_role}")
+    assert r.returncode == 1 and "restore failed (database)" in r.stdout
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3"  # the live database untouched
+    assert psql("SELECT count(*) FROM pg_database WHERE datname LIKE '%\\_restoring'") == "0"  # nothing left aside
+
+
+@needs
+def test_the_dumps_are_readable_whatever_the_umask(appliance):
+    env = appliance["env"]
+    assert tool(env, "run").returncode == 0
+    [backup] = (appliance["target"] / "suveryn-backups" / "test-appliance").glob("*.age")
+    r = subprocess.run(["sh", "-c", f'umask 077 && exec "{sys.executable}" "{TOOL}" restore "{backup}" --identity "{appliance["key"]}" --yes'],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_failed_share_mount_leaves_no_password_behind(tmp_path, monkeypatch):
+    b = load()
+    secret = tmp_path / "secret"
+    secret.write_text("not-a-real-password\n")
+    monkeypatch.setattr(b, "SHARE_SECRET", secret)
+    monkeypatch.setattr(b, "MOUNT", tmp_path / "mnt")
+    made = []
+    real_mkstemp = b.tempfile.mkstemp
+
+    def mkstemp(prefix, dir):
+        fd, path = real_mkstemp(prefix=prefix, dir=tmp_path)
+        made.append(Path(path))
+        return fd, path
+    monkeypatch.setattr(b.tempfile, "mkstemp", mkstemp)
+
+    def refuse(step, cmd, **kw):
+        raise b.Failed(step, "mount failed: mount error(13): Permission denied")
+    monkeypatch.setattr(b, "run", refuse)
+    s = {"target": "share", "protocol": "smb", "address": "//10.0.0.2/backups", "user": "bk"}
+    with pytest.raises(b.Failed):
+        with b.Target(s):
+            pass
+    assert made and not any(p.exists() for p in made)
+
+
+def test_ages_message_is_its_own_without_the_prefix_or_the_bug_report_line():
+    b = load()
+    raw = (b"age: error: no identity matched any of the recipients\n"
+           b"age: report unexpected or unhelpful errors at https://filippo.io/age/report\n")
+    assert b.age_error(raw) == "no identity matched any of the recipients"
