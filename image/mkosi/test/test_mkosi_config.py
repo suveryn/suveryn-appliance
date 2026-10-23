@@ -134,10 +134,10 @@ def test_only_the_listed_etc_paths_link_into_the_data_partition():
     links = dict(re.findall(r"^link (\S+)\s+(\S+)$", POSTINST, re.M))
     into_var = {target: dest for target, dest in links.items() if target.startswith("/var/")}
     assert set(into_var.values()) == {"/etc/suveryn", "/etc/hostname", "/etc/hosts", "/etc/localtime", "/etc/default/keyboard",
-                                      "/etc/systemd/network", "/etc/nginx/sites-enabled/suveryn"}
+                                      "/etc/systemd/network", "/etc/nginx/sites-enabled/suveryn", "/etc/postgresql"}
     for path in into_var.values():
         assert f"`{path}" in DESIGN, f"{path} isn't in the design note's list"
-    assert links["/run/systemd/resolve/stub-resolv.conf"] == "/etc/resolv.conf"
+    assert links["/run/suveryn/resolv.conf"] == "/etc/resolv.conf"  # the stub, or suveryn-dns while it runs
 
 
 def test_the_images_own_var_is_restored_on_a_fresh_data_partition():
@@ -203,12 +203,13 @@ def test_every_extra_tree_exists():
         return out
     for conf, base in [(MKOSI / "mkosi.conf.d" / "10-appliance.conf", MKOSI),
                        (MKOSI / "mkosi.conf.d" / "20-web-setup.conf", MKOSI),
+                       (MKOSI / "mkosi.conf.d" / "30-services.conf", MKOSI),
                        (MKOSI / "mkosi.profiles" / "test" / "mkosi.conf", MKOSI / "mkosi.profiles" / "test"),
                        (MKOSI / "mkosi.images" / "initrd" / "mkosi.conf", MKOSI / "mkosi.images" / "initrd")]:
         found = trees(conf)
         assert found, conf
         for t in found:
-            if t in ("../../test/keys/public", "../../test/ui"):  # made by test/make-test-keys and make-test-ui, never committed
+            if t in ("../../test/keys/public", "../../test/ui", "prebuilt"):  # made by test/make-test-keys, make-test-ui and prebuild-services, never committed
                 continue
             assert (base / t).is_dir(), f"{conf.name}: {t}"
 
@@ -344,3 +345,180 @@ def test_nvidia_licence_text_ships_without_usr_share_doc():
     assert "kernel-open" in text and "dual licensed as MIT/GPL" in text
     assert "/usr/share/suveryn/licences/nvidia-graphics-drivers-580.copyright" in POSTINST
     assert "dpkg-query -W 'nvidia-utils-*'" in POSTINST and "exit 1" in POSTINST
+
+
+# ---------------------------------------------------------------------------- the services (#47)
+SERVICES = MKOSI / "services"
+
+
+def provision():
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("provision", str(REPO / "provision" / "suveryn-provision"))
+    spec = importlib.util.spec_from_loader("provision", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def packages(conf: Path) -> set[str]:
+    out, inside = set(), False
+    for line in conf.read_text().splitlines():
+        if line.startswith("Packages="):
+            inside, line = True, line.split("=", 1)[1]
+        elif not line.startswith((" ", "\t")):
+            inside = False
+        if inside and line.strip() and not line.strip().startswith("#"):
+            out.add(line.strip())
+    return out
+
+
+def test_the_services_are_the_appliances_and_never_the_test_systems():
+    conf = (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    assert re.search(r"^\[Match\]\nProfiles=!test$", conf, re.M) and "ExtraTrees=services" in conf
+
+
+def test_the_image_has_every_package_the_services_need_at_run_time():
+    """provision's RUNTIME_PACKAGES: what an ordinary Ubuntu gets from apt, the image has built in."""
+    have = set()
+    for conf in (MKOSI / "mkosi.conf", *sorted((MKOSI / "mkosi.conf.d").glob("*.conf"))):
+        have |= packages(conf)
+    missing = set(provision().RUNTIME_PACKAGES) - have
+    assert not missing, f"not in the image: {sorted(missing)}"
+    # and nothing an ordinary Ubuntu only needs: no ufw, no apt updates, no compilers
+    assert not have & {"ufw", "unattended-upgrades", "build-essential", "cmake"}
+
+
+def test_the_services_users_are_made_when_the_image_is_built():
+    users = dict(re.findall(r"^u (\S+)\s+-\s+\"[^\"]*\"\s+(\S+)", (SERVICES / "usr/lib/sysusers.d/suveryn.conf").read_text(), re.M))
+    assert set(users) == {"suveryn", "suveryn-llm", "keycloak", "suveryn-dns", "suveryn-reader"}
+    assert users["keycloak"] == "/opt/keycloak"
+    assert re.search(r"^m suveryn suveryn-reader$", (SERVICES / "usr/lib/sysusers.d/suveryn.conf").read_text(), re.M)
+    assert "systemd-sysusers /usr/lib/sysusers.d/suveryn.conf" in POSTINST
+
+
+def test_the_readers_sudo_rule_is_provisions_and_checked():
+    built_in = (SERVICES / "etc/sudoers.d/suveryn-reader").read_text()
+    assert built_in == provision().reader_sudoers()
+    assert "chmod 0440 /etc/sudoers.d/suveryn-reader" in POSTINST and "visudo -cqf /etc/sudoers.d/suveryn-reader" in POSTINST
+
+
+def test_the_services_folders_are_made_on_the_data_partition_as_provision_makes_them():
+    lines = {f[1]: f[2:5] for f in (line.split() for line in (SERVICES / "usr/lib/tmpfiles.d/suveryn-services.conf").read_text()
+                                    .splitlines() if line.strip() and not line.startswith("#"))}
+    p = provision()
+    assert lines[str(p.VAR / "work")] == ["0700", "suveryn", "suveryn"]
+    assert lines[p.READER_SETTINGS["SUVERYN_EXTRACT_INBOX"]] == ["2750", "suveryn", "suveryn-reader"]
+    assert lines[p.READER_SETTINGS["SUVERYN_EXTRACT_WORK_DIR"]] == ["0700", "suveryn-reader", "suveryn-reader"]
+    assert "/var/lib/suveryn/postgresql-etc" in lines
+
+
+def test_postgresqls_cluster_is_made_at_first_boot_not_in_the_image():
+    assert "pg_dropcluster 16 main" in POSTINST and "link /var/lib/suveryn/postgresql-etc   /etc/postgresql" in POSTINST
+    assert '"pg_createcluster", "16", "main"' in (REPO / "provision" / "suveryn-provision").read_text()
+
+
+def test_only_the_web_ports_come_in():
+    rules = (MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "inbound.nft").read_text()
+    assert "policy drop;" in rules and "tcp dport { 80, 443 } accept" in rules
+    assert re.findall(r"tcp dport", rules) == ["tcp dport"]  # no other TCP port
+    assert re.findall(r"udp dport (\d+)", rules) == ["68", "546", "5353"]  # DHCP, DHCPv6, mDNS
+    assert "systemctl enable suveryn-inbound.service" in POSTINST
+    unit = (MKOSI / "mkosi.extra" / "usr" / "lib" / "systemd" / "system" / "suveryn-inbound.service").read_text()
+    assert "Before=network-pre.target" in unit and "/usr/lib/suveryn/inbound.nft" in unit
+
+
+def test_the_inbound_rules_parse():
+    import shutil
+    import subprocess
+    if not shutil.which("nft"):
+        pytest.skip("no nft here")
+    r = subprocess.run(["nft", "-c", "-f", str(MKOSI / "mkosi.extra" / "usr" / "lib" / "suveryn" / "inbound.nft")],
+                       capture_output=True, text=True)
+    if r.returncode and "Operation not permitted" in r.stderr:
+        pytest.skip("nft -c needs privileges here")
+    assert r.returncode == 0, r.stderr
+
+
+def test_the_packer_images_hardening_is_in_the_read_only_system_too():
+    """The data lifecycle promises a 1 GB journal and no core dumps (image/scripts/harden.sh did it on the
+    Packer image only)."""
+    extra = MKOSI / "mkosi.extra"
+    harden = (REPO / "image" / "scripts" / "harden.sh").read_text()
+    sysctl = (extra / "usr/lib/sysctl.d/90-suveryn.conf").read_text()
+    for line in re.findall(r"^([a-z][\w.]+ = \S+)$", harden, re.M):
+        assert line in sysctl, line
+    assert "SystemMaxUse=1G" in (extra / "usr/lib/systemd/journald.conf.d/90-suveryn.conf").read_text()
+    assert "Storage=none" in (extra / "usr/lib/systemd/coredump.conf.d/90-suveryn.conf").read_text()
+    assert "* hard core 0" in (extra / "etc/security/limits.d/90-suveryn.conf").read_text()
+
+
+def test_suveryn_itself_comes_prebuilt_and_checked_against_the_pins():
+    conf = (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    assert re.search(r"^\s+prebuilt$", conf, re.M) and "../../provision/systemd:/usr/lib/systemd/system" in conf
+    assert "image/mkosi/prebuilt/" in (REPO / ".gitignore").read_text()
+    assert "suveryn-provision check-prebuilt" in POSTINST
+    script = (MKOSI / "prebuild-services").read_text()
+    assert "prebuild --read-only-image" in script and "check-prebuilt --root" in script
+    assert "--exclude=opt/suveryn/core/.git" in script and "--exclude=opt/keycloak/data" in script
+
+
+def test_on_the_read_only_system_the_services_write_only_the_data_partition():
+    assert "ln -s /var/lib/suveryn/keycloak /opt/keycloak/data" in POSTINST
+    tmpfiles = (SERVICES / "usr/lib/tmpfiles.d/suveryn-services.conf").read_text()
+    assert re.search(r"^d /var/lib/suveryn/keycloak\s+0700 keycloak\s+keycloak", tmpfiles, re.M)
+    assert "/opt/suveryn/lib/cuda > /etc/ld.so.conf.d/suveryn-cuda.conf && ldconfig" in POSTINST
+
+
+def test_the_services_are_enabled_in_the_image_and_wait_for_first_boots_settings():
+    assert "systemctl enable suveryn-llm.service keycloak.service suveryn-gateway.service" in POSTINST
+    for unit, settings in (("suveryn-gateway", "/etc/suveryn/gateway.env"), ("keycloak", "/etc/suveryn/keycloak.env"),
+                           ("suveryn-llm", "/etc/suveryn/llama-presets.ini")):
+        text = (REPO / "provision" / "systemd" / f"{unit}.service").read_text()
+        unit_section = text.split("[Service]")[0]
+        assert f"ConditionPathExists={settings}" in unit_section, unit
+    # the network mode's outgoing rules and resolver: enabled too, waiting for the mode first boot sets
+    assert "systemctl enable suveryn-egress.service suveryn-dns.service" in POSTINST
+    for unit in ("suveryn-egress", "suveryn-dns"):
+        text = (REPO / "provision" / "systemd" / f"{unit}.service").read_text()
+        assert "ConditionPathExists=/etc/suveryn/network-mode.env" in text.split("[Service]")[0], unit
+
+
+def test_resolv_conf_is_the_stub_until_the_appliances_own_resolver_runs():
+    var = (MKOSI / "mkosi.extra" / "usr" / "lib" / "tmpfiles.d" / "suveryn-var.conf").read_text()
+    assert "L /run/suveryn/resolv.conf - - - - /run/systemd/resolve/stub-resolv.conf" in var
+    dns = (REPO / "provision" / "systemd" / "suveryn-dns.service").read_text()
+    assert "nameserver 127.0.0.1" in dns.split("ExecStartPost=")[1].splitlines()[0]
+    assert "ln -s /run/systemd/resolve/stub-resolv.conf /run/suveryn/resolv.conf" in dns
+    assert "ReadWritePaths=-/run/suveryn" in dns  # ProtectSystem=strict leaves /run read-only otherwise
+    assert provision().RESOLV_TEXT.endswith("nameserver 127.0.0.1\noptions edns0 trust-ad\n")
+
+
+def test_the_reader_sandbox_and_the_network_mode_tool_are_where_provisioning_puts_them():
+    p = provision()
+    assert f"/opt/suveryn/bin/suveryn-reader-sandbox" in POSTINST and p.READER_WRAPPER.endswith("/opt/suveryn/bin/suveryn-reader-sandbox")
+    assert "/opt/suveryn/bin/suveryn-sandbox-probe.py" in POSTINST
+    assert f"ln -sf /opt/suveryn/network-mode/suveryn-network-mode {p.NETWORK_MODE_TOOL}" in POSTINST
+
+
+def test_the_gpu_driver_is_ubuntus_signed_one_with_its_licence_and_nouveau_off():
+    have = packages(MKOSI / "mkosi.conf.d" / "30-services.conf")
+    assert {"linux-modules-nvidia-580-open-generic", "libnvidia-compute-580", "nvidia-utils-580"} <= have
+    assert not any("dkms" in p or "-server" in p for p in have)  # nothing built on the appliance; the licence file is 580's
+    sources = (MKOSI / "mkosi.sandbox" / "etc" / "apt" / "sources.list.d" / "mkosi.sources").read_text()
+    assert re.findall(r"^Components: (.+)$", sources, re.M) == ["main universe restricted"] * 2
+    assert "Repositories=universe,restricted" in (MKOSI / "mkosi.conf").read_text()
+    blacklist = (SERVICES / "usr/lib/modprobe.d/suveryn-nvidia.conf").read_text()
+    assert "blacklist nouveau" in blacklist and "options nouveau modeset=0" in blacklist
+
+
+def test_what_the_vm_build_of_the_image_needed():
+    """VM check of #47: openjdk's postinst needs /usr/share/man/man1; check-prebuilt reads the theme's pin;
+    llama-server was linked against NCCL, which the image doesn't carry."""
+    assert (MKOSI / "mkosi.skeleton" / "usr" / "share" / "man" / "man1").is_dir()
+    assert "! -name brand-lock.json -exec rm -rf {} +" in POSTINST and "rm -rf /usr/share/man" in POSTINST
+    assert "command -v python3 >/dev/null || " in (MKOSI / "prebuild-services").read_text()
+    assert "../../keycloak/theme:/opt/suveryn/appliance/keycloak/theme" in (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    src = (REPO / "provision" / "suveryn-provision").read_text()
+    assert '"-DGGML_CUDA_NCCL=OFF"' in src and "rpath-link" in src
+    assert "GGML_CUDA_NCCL:BOOL=OFF" in (MKOSI / "prebuild-services").read_text()

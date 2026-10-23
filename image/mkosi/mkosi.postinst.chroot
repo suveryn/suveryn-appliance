@@ -12,11 +12,47 @@ link /var/lib/suveryn/host/localtime   /etc/localtime
 link /var/lib/suveryn/host/keyboard    /etc/default/keyboard
 link /var/lib/suveryn/network          /etc/systemd/network
 link /var/lib/suveryn/nginx/suveryn    /etc/nginx/sites-enabled/suveryn
-link /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+# The resolver: systemd-resolved's stub, or the appliance's own once a network mode is set (suveryn-dns, #38, #47).
+link /run/suveryn/resolv.conf          /etc/resolv.conf
 
 # The machine-id is mounted over this empty file from /var in the initrd (suveryn-boot-mode).
 rm -f /etc/machine-id && : > /etc/machine-id
 mkdir -p /usr/lib/suveryn && : > /usr/lib/suveryn/empty-machine-id
+
+app=/opt/suveryn/appliance
+# The sūveryn services (tracker #47; mkosi.conf.d/30-services.conf, the appliance only). Their users
+# and the reader's sudo rule are made here; their folders on the data partition by tmpfiles.
+if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
+  systemd-sysusers /usr/lib/sysusers.d/suveryn.conf
+  chmod 0440 /etc/sudoers.d/suveryn-reader
+  visudo -cqf /etc/sudoers.d/suveryn-reader
+  # PostgreSQL's cluster is made at first boot on the data partition (suveryn-provision first-boot),
+  # with its configuration there too: drop the one the package made in the image.
+  if pg_lsclusters -h 2>/dev/null | grep -q '^16 main '; then pg_dropcluster 16 main; fi
+  rm -rf /var/lib/postgresql/16
+  # sūveryn itself, from prebuilt/ (prebuild-services on a Pod): the build stops unless each part is the
+  # pinned one. Read-only for every service: owned by root.
+  python3 -I /opt/suveryn/appliance/provision/suveryn-provision check-prebuilt
+  chown -R root:root /opt/suveryn/core /opt/suveryn/python /opt/suveryn/hf /opt/suveryn/llama.cpp /opt/suveryn/lib \
+    /opt/suveryn/ui /opt/keycloak
+  chmod -R a+rX /opt/suveryn /opt/keycloak
+  # Keycloak writes only its data folder: on the data partition.
+  rm -rf /opt/keycloak/data && ln -s /var/lib/suveryn/keycloak /opt/keycloak/data
+  # llama-server finds the CUDA libraries it was built with (the driver itself is Ubuntu's).
+  echo /opt/suveryn/lib/cuda > /etc/ld.so.conf.d/suveryn-cuda.conf && ldconfig
+  # The reader sandbox and the network mode's tool, where provisioning puts them on an ordinary Ubuntu.
+  install -d /opt/suveryn/bin /opt/suveryn/network-mode
+  install -m 0755 "$app"/reader-sandbox/suveryn-reader-sandbox /opt/suveryn/bin/suveryn-reader-sandbox
+  install -m 0644 "$app"/reader-sandbox/tests/probe.py /opt/suveryn/bin/suveryn-sandbox-probe.py
+  install -m 0755 "$app"/network-mode/suveryn-network-mode /opt/suveryn/network-mode/suveryn-network-mode
+  install -m 0644 "$app"/network-mode/builtin-destinations /opt/suveryn/network-mode/builtin-destinations
+  ln -sf /opt/suveryn/network-mode/suveryn-network-mode /opt/suveryn/bin/suveryn-network-mode
+  # Enabled now (/etc can't change later); each starts once first boot has written its settings.
+  systemctl enable suveryn-llm.service keycloak.service suveryn-gateway.service
+  # The network mode's outgoing rules and resolver, once first boot has set the mode.
+  systemctl enable suveryn-egress.service suveryn-dns.service
+fi
+link /var/lib/suveryn/postgresql-etc   /etc/postgresql
 
 # 2. The image's own /var is hidden by the data partition. Keep a copy and restore what is missing
 #    on a fresh data partition (systemd-tmpfiles "C": copy only if absent).
@@ -33,6 +69,8 @@ rm -rf /usr/share/factory/var/{cache,log,tmp}/* /usr/share/factory/var/lib/apt/l
 
 # 3. Services: the network by DHCP, the resolver and time. Nothing is ever installed later (no apt).
 systemctl enable systemd-networkd.service systemd-resolved.service systemd-timesyncd.service
+# Inbound: the web ports only, before the network is up (/usr/lib/suveryn/inbound.nft).
+systemctl enable suveryn-inbound.service
 systemctl mask apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 # The appliance's identity, made at first boot on the data partition (#35).
 systemctl enable suveryn-identity.service
@@ -44,6 +82,9 @@ systemctl enable console-setup.service keyboard-setup.service 2>/dev/null || tru
 # Its user is made here: /etc/passwd can't be written on the appliance.
 app=/opt/suveryn/appliance
 find "$app" -name __pycache__ -prune -exec rm -rf {} +
+# Of the theme only its pin (check-prebuilt reads it); and the skeleton's man folder (mkosi.skeleton).
+[ -d "$app"/keycloak/theme ] && find "$app"/keycloak/theme -mindepth 1 -maxdepth 1 ! -name brand-lock.json -exec rm -rf {} +
+rm -rf /usr/share/man
 printf 'u suveryn-setup - "sūveryn web setup" /nonexistent /usr/sbin/nologin\n' > /usr/lib/sysusers.d/suveryn-setup.conf
 systemd-sysusers /usr/lib/sysusers.d/suveryn-setup.conf
 cp "$app"/setup/systemd/suveryn-setup.service "$app"/setup/systemd/suveryn-setup-provision.service \
