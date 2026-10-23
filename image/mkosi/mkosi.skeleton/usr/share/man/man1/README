@@ -1,0 +1,2 @@
+# A skeleton tree (mkosi.skeleton/), copied in before the packages: openjdk's postinst needs this folder for
+# its man-page link, which mkosi's excluded /usr/share/man would otherwise lack (VM check of #47).

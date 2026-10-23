@@ -1,0 +1,55 @@
+#!/bin/bash
+# The sūveryn services for the read-only system (tracker #47), built on a host into image/mkosi/prebuilt/,
+# which the appliance's image build copies in (mkosi.conf.d/30-services.conf) and checks against the pins
+# (suveryn-provision check-prebuilt). Not committed.
+#   suveryn-core      the pinned commit, its Python and packages compiled, without git history
+#   the models        its embedding and Docling models (/opt/suveryn/hf; the language models are bundles)
+#   llama-server      the pinned llama.cpp with CUDA, and the CUDA libraries it links against
+#   Keycloak          the pinned release built with the sūveryn theme (its data folder left out)
+#   the chat UI       built with the pinned Node
+# The host must be what the image is: Ubuntu 24.04 with CUDA 12.8 (e.g. a RunPod pod). A GPU isn't
+# needed; it installs Python, Java and the build tools itself. It writes /opt/suveryn and /opt/keycloak
+# on the host, as image/prebuild.sh does.
+#   sudo image/mkosi/prebuild-services
+#   cd image/mkosi && sudo mkosi -f build
+set -euo pipefail
+mkosi_dir=$(cd "$(dirname "$0")" && pwd)
+repo=$(cd "$mkosi_dir/../.." && pwd)
+out=$mkosi_dir/prebuilt
+. /etc/os-release
+[ "$VERSION_ID" = "24.04" ] || { echo "the host must be Ubuntu 24.04, like the image (not $VERSION_ID)" >&2; exit 1; }
+# Python starts suveryn-provision, which installs the rest of the build tools itself (a bare CUDA image has none).
+command -v python3 >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3; }
+PATH=/usr/local/cuda/bin:$PATH
+nvcc --version | grep -q "release 12.8" || { echo "the host needs CUDA 12.8, like the image" >&2; exit 1; }
+python3 "$repo/provision/suveryn-provision" prebuild --read-only-image
+grep -q "^GGML_NATIVE:BOOL=OFF" /opt/suveryn/llama.cpp/build/CMakeCache.txt \
+  || { echo "/opt/suveryn/llama.cpp was built for this host, not the image; remove its build folder and run again" >&2; exit 1; }
+grep -q "^GGML_CUDA_NCCL:BOOL=OFF" /opt/suveryn/llama.cpp/build/CMakeCache.txt \
+  || { echo "/opt/suveryn/llama.cpp was built with NCCL, which the image doesn't carry; remove its build folder and run again" >&2; exit 1; }
+
+rm -rf "$out"
+mkdir -p "$out/opt/suveryn/llama.cpp/build" "$out/opt/suveryn/lib"
+copy() { tar -C / "${@:2}" -cf - "$1" | tar -C "$out" -xf -; }
+copy opt/suveryn/core --exclude=opt/suveryn/core/.git --exclude=opt/suveryn/core/packages/chat-ui/node_modules \
+     --exclude=opt/suveryn/core/packages/chat-ui/dist
+copy opt/suveryn/python
+copy opt/suveryn/hf
+copy opt/suveryn/llama.cpp/build/bin
+copy opt/suveryn/lib/cuda
+copy opt/suveryn/ui
+copy opt/keycloak --exclude=opt/keycloak/data
+# What each part was built from, as check-prebuilt expects it.
+python3 -I - "$repo" "$out" <<'PY'
+import importlib.machinery, importlib.util, sys
+from pathlib import Path
+repo, out = Path(sys.argv[1]), Path(sys.argv[2])
+loader = importlib.machinery.SourceFileLoader("provision", str(repo / "provision" / "suveryn-provision"))
+spec = importlib.util.spec_from_loader("provision", loader)
+p = importlib.util.module_from_spec(spec)
+loader.exec_module(p)
+(out / "opt/suveryn/core/.suveryn-built").write_text(p.core_built_as())
+(out / "opt/suveryn/llama.cpp/.suveryn-built").write_text(p.llama_built_as())
+PY
+python3 "$repo/provision/suveryn-provision" check-prebuilt --root "$out"
+du -sh "$out"/opt/* "$out"/opt/suveryn/* | sort -h

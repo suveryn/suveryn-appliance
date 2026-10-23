@@ -180,3 +180,15 @@ def test_the_directory_client_must_carry_view_users_in_its_scope_and_nothing_mor
                 {"realm-management": [*SCOPE["realm-management"], {"client": "suveryn-chat", "roles": ["view-users"]}]}):
         with pytest.raises(SystemExit, match="scope"):
             build_realm.production_realm({**with_dir, "clientScopeMappings": bad}, URL, "c", "d")
+
+
+def test_the_realm_comes_from_a_checkout_without_git_when_its_hash_is_the_locks(tmp_path, dev):
+    """The read-only system's /opt/suveryn/core has no git and no .git (#47): the lock's sha256 pins it."""
+    (tmp_path / LOCK["path"]).parent.mkdir(parents=True)
+    (tmp_path / LOCK["path"]).write_text(json.dumps(dev))
+    import hashlib
+    sha = hashlib.sha256((tmp_path / LOCK["path"]).read_bytes()).hexdigest()
+    data, commit = build_realm.fetch_realm(str(tmp_path), LOCK["commit"], LOCK["path"], sha)
+    assert json.loads(data) == dev and commit == LOCK["commit"]
+    with pytest.raises(SystemExit, match="sha256 differs"):
+        build_realm.fetch_realm(str(tmp_path), LOCK["commit"], LOCK["path"], "0" * 64)

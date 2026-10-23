@@ -1,0 +1,26 @@
+#!/usr/sbin/nft -f
+# What may reach the appliance from the network (docs/design/appliance-architecture.md: "a fixed
+# inbound nftables table in the image" instead of ufw). The web ports only, and what the machine's own
+# network needs: DHCP's answers, IPv6 neighbour discovery and mDNS for <name>.local. Outgoing traffic
+# is the network mode's own table (suveryn-egress), never this one.
+table inet suveryn_inbound
+delete table inet suveryn_inbound
+table inet suveryn_inbound {
+	chain input {
+		type filter hook input priority filter; policy drop;
+		iif "lo" accept
+		ct state established,related accept
+		ct state invalid drop
+		meta l4proto icmp accept
+		meta l4proto ipv6-icmp accept
+		tcp dport { 80, 443 } accept
+		# DHCP and DHCPv6 answers to the appliance's own requests
+		udp sport 67 udp dport 68 accept
+		udp sport 547 udp dport 546 accept
+		# mDNS: <name>.local (systemd-resolved, resolved.conf.d/50-suveryn-mdns.conf)
+		udp dport 5353 accept
+	}
+	chain forward {
+		type filter hook forward priority filter; policy drop;
+	}
+}
