@@ -1,0 +1,12 @@
+# Nightly, in the small hours of the office's time zone, and on the next start when the appliance was
+# off at that time (Persistent).
+[Unit]
+Description=sūveryn nightly backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

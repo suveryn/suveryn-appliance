@@ -522,3 +522,17 @@ def test_what_the_vm_build_of_the_image_needed():
     src = (REPO / "provision" / "suveryn-provision").read_text()
     assert '"-DGGML_CUDA_NCCL=OFF"' in src and "rpath-link" in src
     assert "GGML_CUDA_NCCL:BOOL=OFF" in (MKOSI / "prebuild-services").read_text()
+
+
+def test_backups_are_in_the_image_nightly_and_without_rpcbind():
+    conf = (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
+    assert {"age", "zstd", "cifs-utils", "nfs-common"} <= packages(MKOSI / "mkosi.conf.d" / "30-services.conf")
+    assert "../../backup:/opt/suveryn/appliance/backup" in conf and "../../backup/systemd:/usr/lib/systemd/system" in conf
+    assert "systemctl enable suveryn-backup.timer" in POSTINST and "systemctl mask rpcbind.service rpcbind.socket" in POSTINST
+    unit = (REPO / "backup" / "systemd" / "suveryn-backup.service").read_text()
+    assert "ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup run" in unit
+    assert "ConditionPathExists=/etc/suveryn/backups.json" in unit
+    timer = (REPO / "backup" / "systemd" / "suveryn-backup.timer").read_text()
+    assert "Persistent=true" in timer and "OnCalendar=*-*-* 02:30:00" in timer
+    tmpfiles = (SERVICES / "usr/lib/tmpfiles.d/suveryn-services.conf").read_text()
+    assert re.search(r"^d /var/lib/suveryn/backup\s+0755 root\s+root", tmpfiles, re.M)
