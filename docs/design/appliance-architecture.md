@@ -195,7 +195,10 @@ into `image/mkosi/prebuilt/`, which the image build copies in and checks against
 `/opt/suveryn/core` carries no git history; the realm builder reads the realm file there and checks
 it against `realm-lock.json`'s sha256.
 
-The full image is built on a Pod (it needs about 60 GB); the configuration is tested anywhere. The
+Built and inspected on a virtual machine (22 and 23 October 2026): slot A holds 14.5 GiB of its 32,
+13 GB of it the services; the prebuild takes about 7 minutes on 32 cores. mkosi needs a host where it
+may create namespaces (a virtual or real machine, not a container like a RunPod pod); the prebuild runs
+in an Ubuntu 24.04 + CUDA 12.8 container or machine, with no GPU. The
 Packer build stays for developing and testing suveryn-core on a Pod.
 
 ## Updates (#40)
