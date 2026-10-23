@@ -112,6 +112,8 @@ RUNTIME_PACKAGES = [
     "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
     "python3-seccomp", "nginx", "openssl", "sudo", "ca-certificates",
+    # backups (backup/suveryn-backup, #33)
+    "age", "zstd", "cifs-utils", "nfs-common",
     # Libraries suveryn-core's Python packages load (OpenCV in Docling) that Ubuntu's minimal installation
     # lacks: found by comparing every library they link against with the minimal image's package list.
     "libgl1", "libsm6", "libice6", "libglib2.0-0t64", "libxext6", "libxrender1", "libxcb1",
@@ -1520,8 +1522,27 @@ def image(with_web_setup: bool = True) -> None:
     reader_sandbox()
     chat_ui()
     snippets()
+    backup_service()
     if with_web_setup:
         web_setup()
+
+
+BACKUP_UNITS = ["suveryn-backup.service", "suveryn-backup.timer"]
+
+
+def backup_service() -> None:
+    """The nightly backup (backup/, tracker #33): its units, the timer enabled. It backs up nothing until
+    the web setup (or the administrator) has said where to. The read-only system has it built in."""
+    step("Backups")
+    if read_only_system():
+        return note("built into the system (suveryn-backup.timer)")
+    for unit in BACKUP_UNITS:  # the tool from this checkout (the read-only system's is in /opt/suveryn/appliance)
+        text = (REPO / "backup" / "systemd" / unit).read_text().replace("/opt/suveryn/appliance", str(REPO))
+        Path(f"/etc/systemd/system/{unit}").write_text(text)
+    if systemd_running():
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "suveryn-backup.timer")
+    note("suveryn-backup.timer: nightly, once a backup target is set")
 
 
 SETUP_UNITS = ["suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"]

@@ -1,0 +1,507 @@
+#!/usr/bin/python3
+"""The appliance's backups (tracker #33): encrypted for the office's recovery key, kept for a period, restorable.
+
+    suveryn-backup run                       make a backup now (the nightly timer runs this)
+    suveryn-backup status [--json]           the last attempt, the last success, the backups on the target
+    suveryn-backup list [--json]             the backups on the target, newest first
+    suveryn-backup check FILE --identity KEY decrypt a backup and check every part, restoring nothing
+    suveryn-backup restore FILE --identity KEY [--yes]
+                                             put a backup back on this appliance (a replacement machine)
+
+**What a backup holds.** Both PostgreSQL databases, ``suveryn`` (documents and their passages,
+conversations, cases, usage, settings) and ``keycloak`` (accounts, roles, sign-in settings), and the
+office's own part of the data partition: ``/var/lib/suveryn/etc`` (``/etc/suveryn``: settings,
+secrets, certificates), ``host``, ``network`` and ``nginx``. Not the software or the models: they come
+with the image and the signed bundles. Not the appliance's identity: it is sealed to this machine's
+TPM, and a replacement makes its own (the support contract moves with the office, #35).
+
+**How.** Each part is written into one tar stream, compressed (zstd) and encrypted with age to the
+office's recovery key, the ``recipient`` the web setup saved in ``/etc/suveryn/backups.json``. The
+appliance holds only that public half: it can write backups, never read them. The office keeps the
+private half offline; ``check`` and ``restore`` need it. The file is written under a temporary name,
+checked (its size, and that age wrote it whole), then renamed:
+``suveryn-backup_<name>_<UTC time>.tar.zst.age`` in ``suveryn-backups/<name>/`` on the target.
+
+**Where.** A USB disk (its first partition, or the disk itself; ext4, exFAT, FAT or NTFS) or a share
+on the office's network (SMB or NFS), mounted for the run only, ``nosuid,nodev,noexec``. A share's
+password is in ``/etc/suveryn/backups-share.secret`` (0600) and goes to mount.cifs in a credentials file
+in ``/run``, never on a command line.
+
+**How long.** ``retention_days`` (14, 30, 90 or 365): after a successful backup, those older than that
+are deleted, but the newest one is always kept, and a failed run deletes nothing. Backups are the
+outer bound of "deleted" in the data lifecycle (suveryn-docs ``administration/data-lifecycle.md``).
+
+**What the administrator sees.** ``/var/lib/suveryn/backup/status.json`` (0644, no secrets), which the
+gateway shows: the last success, the last failure and its step, and the backups on the target.
+
+Python 3 standard library; needs ``age``, ``zstd``, PostgreSQL's client tools, and for a share
+``mount.cifs`` or ``mount.nfs``. Run as root.
+"""
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+from pathlib import Path
+
+ENV = os.environ.get
+CONFIG = Path(ENV("SUVERYN_BACKUP_CONFIG", "/etc/suveryn/backups.json"))
+SHARE_SECRET = Path(ENV("SUVERYN_BACKUP_SHARE_SECRET", "/etc/suveryn/backups-share.secret"))
+VAR = Path(ENV("SUVERYN_BACKUP_VAR", "/var/lib/suveryn"))
+STATE = Path(ENV("SUVERYN_BACKUP_STATE", str(VAR / "backup")))
+MOUNT = Path(ENV("SUVERYN_BACKUP_MOUNT", "/run/suveryn/backup-target"))
+# The office's part of the data partition (docs/design/appliance-architecture.md, "Where the office's
+# settings live"), relative to VAR.
+FILES = ["etc", "host", "network", "nginx"]
+# database: its owner (the role the services use; restore keeps it the owner)
+DATABASES = dict(d.split(":") for d in ENV("SUVERYN_BACKUP_DATABASES", "suveryn:suveryn,keycloak:keycloak").split(","))
+# The PostgreSQL superuser the dumps and restores run as (peer authentication on the appliance).
+PG_USER = ENV("SUVERYN_BACKUP_PG_USER", "postgres")
+KEYCLOAK_ROLE = ENV("SUVERYN_BACKUP_KEYCLOAK_ROLE", "keycloak")
+FORMAT = 1
+NAME = re.compile(r"suveryn-backup_(?P<name>[a-z0-9-]+)_(?P<when>\d{8}T\d{6}Z)\.tar\.zst\.age")
+AGE_RECIPIENT = re.compile(r"age1[02-9ac-hj-np-z]{58}")
+
+
+class Failed(Exception):
+    """A step that failed: ``step`` names it for the status file and the administrator."""
+
+    def __init__(self, step: str, message: str):
+        super().__init__(message)
+        self.step = step
+
+
+def now() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def say(text: str) -> None:
+    print(text, flush=True)
+
+
+def as_pg(cmd: list[str]) -> list[str]:
+    """PostgreSQL's tools as its superuser: through runuser when running as root, else as is (tests)."""
+    if os.geteuid() == 0 and PG_USER != "root":
+        return ["runuser", "-u", PG_USER, "--", *cmd]
+    return cmd
+
+
+def run(step: str, cmd: list, **kw) -> str:
+    r = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, **kw)
+    if r.returncode != 0:
+        lines = (r.stderr or r.stdout).strip().splitlines()
+        raise Failed(step, f"{Path(str(cmd[0])).name} failed: {' / '.join(lines[-3:]) or r.returncode}")
+    return r.stdout
+
+
+# ---------------------------------------------------------------------------- settings and status
+def settings() -> dict | None:
+    """The web setup's answer (setup/suveryn-setup check_backups), or None when backups aren't set up."""
+    try:
+        c = json.loads(CONFIG.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(c, dict) or c.get("target") in (None, "later"):
+        return None
+    if c.get("target") == "folder" and ENV("SUVERYN_BACKUP_ALLOW_FOLDER") != "1":
+        raise Failed("settings", "a folder target is for tests only")
+    if c.get("target") not in ("usb", "share", "folder"):
+        raise Failed("settings", f"unknown target {c.get('target')!r}")
+    if not AGE_RECIPIENT.fullmatch(str(c.get("recipient", ""))):
+        raise Failed("settings", "no valid recovery key (recipient) in the backup settings")
+    if c.get("retention_days") not in (14, 30, 90, 365):
+        raise Failed("settings", "the retention period isn't one of 14, 30, 90 or 365 days")
+    return c
+
+
+def read_status() -> dict:
+    try:
+        s = json.loads((STATE / "status.json").read_text())
+        return s if isinstance(s, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_status(status: dict) -> None:
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    tmp = STATE / ".status.json.tmp"
+    tmp.write_text(json.dumps(status, indent=1) + "\n")
+    os.chmod(tmp, 0o644)  # the gateway shows it; it holds no secrets and no document text
+    os.replace(tmp, STATE / "status.json")
+
+
+def appliance_name() -> str:
+    try:
+        name = (VAR / "host" / "hostname").read_text().strip()
+    except OSError:
+        name = os.uname().nodename
+    name = re.sub(r"[^a-z0-9-]", "-", name.lower()).strip("-")
+    return name or "appliance"
+
+
+# ---------------------------------------------------------------------------- the target
+def usb_partition(disk_id: str) -> Path:
+    """The USB disk the office chose (by its /dev/disk/by-id name): its first partition, or the disk."""
+    by_id = Path("/dev/disk/by-id")
+    disk = by_id / disk_id
+    if not disk.exists():
+        raise Failed("target", "the backup disk isn't connected")
+    parts = sorted(by_id.glob(f"{disk_id}-part*"), key=lambda p: int(re.sub(r"\D", "", p.name.rsplit("-part", 1)[1]) or 0))
+    return parts[0] if parts else disk
+
+
+class Target:
+    """The folder backups go to, mounted for the run (``with Target(settings) as folder``)."""
+
+    def __init__(self, s: dict):
+        self.s, self.mounted, self.creds = s, False, None
+
+    def __enter__(self) -> Path:
+        s = self.s
+        if s["target"] == "folder":
+            base = Path(s["path"])
+        else:
+            MOUNT.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.path.ismount(MOUNT):
+                run("target", ["umount", MOUNT])
+            opts = "nosuid,nodev,noexec"
+            if s["target"] == "usb":
+                dev = usb_partition(s["disk"])
+                kind = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", str(dev)], capture_output=True,
+                                      text=True).stdout.strip()
+                if kind not in ("ext4", "exfat", "vfat", "ntfs"):
+                    raise Failed("target", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
+                # NTFS through the kernel's own driver (ntfs3): there is no ntfs-3g on the appliance
+                run("target", ["mount", "-t", "ntfs3" if kind == "ntfs" else kind, "-o", opts, dev, MOUNT])
+            elif s["protocol"] == "smb":
+                address = s["address"].replace("\\", "/")
+                fd, creds = tempfile.mkstemp(prefix="suveryn-backup-", dir="/run")
+                self.creds = Path(creds)
+                with os.fdopen(fd, "w") as f:
+                    password = SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
+                    f.write(f"username={s.get('user') or 'guest'}\npassword={password}\n")
+                run("target", ["mount", "-t", "cifs", address, MOUNT,
+                               "-o", f"{opts},credentials={creds},vers=3.0,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
+            else:
+                run("target", ["mount", "-t", "nfs", s["address"], MOUNT, "-o", f"{opts},soft,timeo=150"])
+            self.mounted = True
+            base = MOUNT
+        folder = base / "suveryn-backups" / appliance_name()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise Failed("target", f"can't write to the backup target: {e.strerror}") from None
+        return folder
+
+    def __exit__(self, *exc) -> None:
+        if self.creds:
+            self.creds.unlink(missing_ok=True)
+        if self.mounted:
+            subprocess.run(["sync"], check=False)
+            subprocess.run(["umount", str(MOUNT)], check=False, capture_output=True)
+
+
+def backups_in(folder: Path) -> list[dict]:
+    """The backups in a folder, newest first: file, time, size."""
+    out = []
+    for f in folder.glob("suveryn-backup_*.tar.zst.age"):
+        m = NAME.fullmatch(f.name)
+        if m:
+            when = dt.datetime.strptime(m["when"], "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
+            out.append({"file": f.name, "at": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "when": when, "size": f.stat().st_size})
+    return sorted(out, key=lambda b: b["when"], reverse=True)
+
+
+def expire(folder: Path, days: int, at: dt.datetime) -> list[str]:
+    """Delete the backups older than ``days``, always keeping the newest one."""
+    gone = []
+    for b in backups_in(folder)[1:]:
+        if at - b["when"] > dt.timedelta(days=days):
+            (folder / b["file"]).unlink(missing_ok=True)
+            gone.append(b["file"])
+    return gone
+
+
+# ---------------------------------------------------------------------------- making a backup
+def versions() -> dict:
+    out = {}
+    for name, path in (("core", Path("/opt/suveryn/core/.suveryn-built")), ("system", Path("/usr/lib/os-release"))):
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        out[name] = text.strip() if name == "core" else dict(
+            line.split("=", 1) for line in text.splitlines() if "=" in line).get("IMAGE_VERSION", "").strip('"')
+    return out
+
+
+def make(s: dict) -> dict:
+    """One backup onto the target; returns what the status records."""
+    name, started = appliance_name(), dt.datetime.now(dt.timezone.utc)
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="dump-", dir=STATE) as work:  # on the encrypted data partition
+        work = Path(work)
+        os.chmod(work, 0o700)
+        if os.geteuid() == 0:
+            shutil.chown(work, PG_USER)
+        dumps = []
+        for db in DATABASES:
+            out = work / f"{db}.dump"
+            run("database", as_pg(["pg_dump", "--format=custom", "--file", out, db]))
+            dumps.append(out)
+        manifest = {"format": FORMAT, "created": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "appliance": name,
+                    "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions()}
+        (work / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+        with Target(s) as folder:
+            final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
+            partial = folder / f".{final.name}.partial"
+            with open(partial, "wb") as out:
+                age = subprocess.Popen(["age", "--encrypt", "--recipient", s["recipient"]], stdin=subprocess.PIPE,
+                                       stdout=out, stderr=subprocess.PIPE)
+                zstd = subprocess.Popen(["zstd", "-q", "-T0", "-6", "-c"], stdin=subprocess.PIPE, stdout=age.stdin,
+                                        stderr=subprocess.PIPE)
+                age.stdin.close()  # zstd holds it now
+                try:
+                    with tarfile.open(fileobj=zstd.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+                        tar.add(work / "manifest.json", arcname="manifest.json")
+                        for d in dumps:
+                            tar.add(d, arcname=f"db/{d.name}")
+                        for f in manifest["files"]:
+                            tar.add(VAR / f, arcname=f"files/{f}")
+                    zstd.stdin.close()
+                except (OSError, tarfile.TarError) as e:
+                    zstd.kill()
+                    age.kill()
+                    partial.unlink(missing_ok=True)
+                    raise Failed("write", f"writing the backup failed: {e}") from None
+                zstd_err, age_err = zstd.wait(), age.wait()
+            if zstd_err or age_err:
+                partial.unlink(missing_ok=True)
+                raise Failed("encrypt", f"compressing or encrypting failed: {(age.stderr.read() or b'').decode().strip()[-200:]}")
+            size = partial.stat().st_size
+            os.replace(partial, final)
+            gone = expire(folder, s["retention_days"], started)
+            kept = backups_in(folder)
+    return {"at": manifest["created"], "file": final.name, "size": size, "expired": len(gone),
+            "on_target": len(kept), "oldest": kept[-1]["at"] if kept else None,
+            "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds())}
+
+
+def cmd_run(_a) -> int:
+    status = read_status()
+    try:
+        s = settings()
+    except Failed as e:
+        s, status["configured"] = None, True
+        status.update(last_attempt=now(), last_error={"at": now(), "step": e.step, "message": str(e)})
+        write_status(status)
+        say(f"backup failed ({e.step}): {e}")
+        return 1
+    if s is None:
+        status.update(configured=False, last_attempt=now())
+        write_status(status)
+        say("backups aren't set up (the web setup's Backups step, or the administrator's dashboard)")
+        return 0
+    status.update(configured=True, target=s["target"], retention_days=s["retention_days"], last_attempt=now())
+    try:
+        done = make(s)
+    except Failed as e:
+        status["last_error"] = {"at": now(), "step": e.step, "message": str(e)}
+        write_status(status)
+        say(f"backup failed ({e.step}): {e}")
+        return 1
+    status["last_success"] = done
+    status.pop("last_error", None)
+    write_status(status)
+    say(f"backup written: {done['file']}, {done['size']} bytes, {done['seconds']} s; {done['on_target']} on the target"
+        + (f", {done['expired']} expired and deleted" if done["expired"] else ""))
+    return 0
+
+
+def cmd_status(a) -> int:
+    s = read_status()
+    if a.json:
+        print(json.dumps(s, indent=1))
+    elif not s:
+        say("no backup has run yet")
+    else:
+        ok = s.get("last_success")
+        err = s.get("last_error")
+        say(f"set up: {'yes' if s.get('configured') else 'no'}")
+        say(f"last success: {ok['at']} ({ok['file']}, {ok['size']} bytes)" if ok else "last success: none")
+        if err:
+            say(f"last failure: {err['at']} at {err['step']}: {err['message']}")
+    return 0
+
+
+def cmd_list(a) -> int:
+    s = settings()
+    if s is None:
+        say("backups aren't set up")
+        return 1
+    with Target(s) as folder:
+        found = [{k: v for k, v in b.items() if k != "when"} for b in backups_in(folder)]
+    print(json.dumps(found, indent=1) if a.json else "\n".join(f"{b['at']}  {b['size']:>14,}  {b['file']}" for b in found))
+    return 0
+
+
+# ---------------------------------------------------------------------------- reading a backup back
+def unpack(file: Path, identity: Path, dest: Path) -> dict:
+    """Decrypt and unpack into ``dest`` (on the data partition, 0700); the manifest, checked."""
+    age = subprocess.Popen(["age", "--decrypt", "--identity", str(identity), str(file)], stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE)
+    zstd = subprocess.Popen(["zstd", "-q", "-d", "-c"], stdin=age.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    age.stdout.close()
+    problem = None
+    try:
+        with tarfile.open(fileobj=zstd.stdout, mode="r|") as tar:
+            for member in tar:
+                if not (member.name == "manifest.json" or member.name.startswith(("db/", "files/"))):
+                    raise Failed("read", f"unexpected entry in the backup: {member.name}")
+                tar.extract(member, dest, filter="data")
+    except (tarfile.TarError, OSError) as e:
+        problem = str(e)
+    finally:
+        zstd.stdout.close()
+    if age.wait() != 0:  # the wrong key, or not an age file: say that, not what reading the rest made of it
+        zstd.wait()
+        raise Failed("decrypt", f"age: {(age.stderr.read() or b'').decode().strip()[-200:] or 'decryption failed'}")
+    if problem:
+        zstd.wait()
+        raise Failed("read", f"the backup can't be read: {problem}")
+    if zstd.wait() != 0:
+        raise Failed("read", "the backup is damaged (zstd)")
+    try:
+        manifest = json.loads((dest / "manifest.json").read_text())
+    except (OSError, ValueError):
+        raise Failed("read", "the backup has no manifest") from None
+    if manifest.get("format") != FORMAT:
+        raise Failed("read", f"backup format {manifest.get('format')} isn't one this appliance reads")
+    for db in manifest["databases"]:
+        if not (dest / "db" / f"{db}.dump").is_file():
+            raise Failed("read", f"the backup lacks the {db} database")
+    return manifest
+
+
+def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
+    """Each database dump readable by pg_restore: its number of entries."""
+    out = {}
+    for db in manifest["databases"]:
+        listing = run("check", ["pg_restore", "--list", dest / "db" / f"{db}.dump"])
+        out[db] = sum(1 for line in listing.splitlines() if line and not line.startswith(";"))
+    return out
+
+
+def cmd_check(a) -> int:
+    with tempfile.TemporaryDirectory(prefix="check-", dir=STATE if STATE.exists() else None) as d:
+        try:
+            manifest = unpack(a.file, a.identity, Path(d))
+            counts = check_dumps(Path(d), manifest)
+        except Failed as e:
+            say(f"not usable ({e.step}): {e}")
+            return 1
+    say(f"usable: made {manifest['created']} on {manifest['appliance']}; "
+        + ", ".join(f"{db} {n} entries" for db, n in counts.items()) + f"; files: {', '.join(manifest['files'])}")
+    return 0
+
+
+SERVICES = ["suveryn-gateway", "keycloak"]
+
+
+def env_values(path: Path) -> dict[str, str]:
+    out = {}
+    try:
+        for line in path.read_text().splitlines():
+            if "=" in line and not line.lstrip().startswith("#"):
+                k, v = line.split("=", 1)
+                out[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return out
+
+
+def role_passwords(etc: Path) -> dict[str, str]:
+    """The roles' passwords the restored settings use, so the databases accept them again."""
+    out = {}
+    url = env_values(etc / "gateway.env").get("SUVERYN_DATABASE_URL", "")
+    if m := re.match(r"postgresql://([^:]+):([^@]+)@", url):
+        out[m[1]] = m[2]
+    if pw := env_values(etc / "keycloak.env").get("KC_DB_PASSWORD"):
+        out[KEYCLOAK_ROLE] = pw  # keycloak.conf's db-username
+    return out
+
+
+def cmd_restore(a) -> int:
+    if not a.yes:
+        say("restoring replaces this appliance's databases and the office's settings with the backup's; "
+            "run again with --yes to go ahead")
+        return 2
+    systemd = Path("/run/systemd/system").is_dir() and ENV("SUVERYN_BACKUP_NO_SERVICES") != "1"
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="restore-", dir=STATE) as d:
+        dest = Path(d)
+        os.chmod(dest, 0o711)  # PostgreSQL's superuser reads the dumps from here
+        try:
+            manifest = unpack(a.file, a.identity, dest)
+            check_dumps(dest, manifest)
+            if systemd:
+                run("services", ["systemctl", "stop", *SERVICES])
+            for db, owner in manifest["databases"].items():
+                dump = dest / "db" / f"{db}.dump"
+                os.chmod(dump, 0o644)
+                run("database", as_pg(["dropdb", "--if-exists", "--force", db]))
+                run("database", as_pg(["createdb", "--owner", owner, db]))
+                run("database", as_pg(["pg_restore", "--exit-on-error", "--dbname", db, dump]))
+            for f in manifest["files"]:
+                target = VAR / f
+                if target.exists() and not target.is_symlink():
+                    shutil.rmtree(target)
+                shutil.copytree(dest / "files" / f, target, symlinks=True)
+            sql = "".join(f"ALTER ROLE \"{role}\" PASSWORD '{pw.replace(chr(39), chr(39) * 2)}';\n"
+                          for role, pw in role_passwords(VAR / "etc").items() if role in manifest["databases"].values())
+            if sql:
+                r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input=sql,
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise Failed("database", "setting the roles' passwords failed")
+            if systemd:
+                run("services", ["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"])
+        except Failed as e:
+            say(f"restore failed ({e.step}): {e}")
+            return 1
+    say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
+        f"{', '.join(manifest['databases'])} and {', '.join(manifest['files'])}")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="suveryn-backup", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    sub.add_parser("run", help="make a backup now")
+    for name in ("status", "list"):
+        sub.add_parser(name).add_argument("--json", action="store_true")
+    for name in ("check", "restore"):
+        p = sub.add_parser(name)
+        p.add_argument("file", type=Path)
+        p.add_argument("--identity", type=Path, required=True, help="a file with the office's recovery key (AGE-SECRET-KEY-…)")
+        if name == "restore":
+            p.add_argument("--yes", action="store_true", help="replace this appliance's data with the backup's")
+    a = ap.parse_args()
+    if a.command in ("run", "list", "restore") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
+        ap.error("run as root")
+    try:
+        return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore}[a.command](a)
+    except Failed as e:
+        say(f"{a.command} failed ({e.step}): {e}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

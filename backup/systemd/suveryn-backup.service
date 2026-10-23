@@ -1,0 +1,20 @@
+# One backup of the office's data onto its backup target (backup/suveryn-backup, tracker #33). Started
+# nightly by suveryn-backup.timer; the administrator's "Back up now" can start it too.
+[Unit]
+Description=sūveryn backup
+After=postgresql.service local-fs.target network-online.target
+Wants=network-online.target
+# Only once the web setup has saved the backup settings (it may say "later": the tool says so and stops).
+ConditionPathExists=/etc/suveryn/backups.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup run
+# A backup never gets in the way of the people using the appliance.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+TimeoutStartSec=6h
