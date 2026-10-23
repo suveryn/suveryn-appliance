@@ -8,7 +8,8 @@
 #   Keycloak          the pinned release built with the sūveryn theme (its data folder left out)
 #   the chat UI       built with the pinned Node
 # The host must be what the image is: Ubuntu 24.04 with CUDA 12.8 (e.g. a RunPod pod). A GPU isn't
-# needed. It writes /opt/suveryn and /opt/keycloak on the host, as image/prebuild.sh does.
+# needed; it installs Python, Java and the build tools itself. It writes /opt/suveryn and /opt/keycloak
+# on the host, as image/prebuild.sh does.
 #   sudo image/mkosi/prebuild-services
 #   cd image/mkosi && sudo mkosi -f build
 set -euo pipefail
@@ -17,6 +18,8 @@ repo=$(cd "$mkosi_dir/../.." && pwd)
 out=$mkosi_dir/prebuilt
 . /etc/os-release
 [ "$VERSION_ID" = "24.04" ] || { echo "the host must be Ubuntu 24.04, like the image (not $VERSION_ID)" >&2; exit 1; }
+# Python starts suveryn-provision, which installs the rest of the build tools itself (a bare CUDA image has none).
+command -v python3 >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3; }
 PATH=/usr/local/cuda/bin:$PATH
 nvcc --version | grep -q "release 12.8" || { echo "the host needs CUDA 12.8, like the image" >&2; exit 1; }
 python3 "$repo/provision/suveryn-provision" prebuild --read-only-image

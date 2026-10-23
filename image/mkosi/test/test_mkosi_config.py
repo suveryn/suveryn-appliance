@@ -516,7 +516,8 @@ def test_what_the_vm_build_of_the_image_needed():
     """VM check of #47: openjdk's postinst needs /usr/share/man/man1; check-prebuilt reads the theme's pin;
     llama-server was linked against NCCL, which the image doesn't carry."""
     assert (MKOSI / "mkosi.skeleton" / "usr" / "share" / "man" / "man1").is_dir()
-    assert "rm -rf \"$app\"/keycloak/theme/build /usr/share/man" in POSTINST
+    assert "! -name brand-lock.json -exec rm -rf {} +" in POSTINST and "rm -rf /usr/share/man" in POSTINST
+    assert "command -v python3 >/dev/null || " in (MKOSI / "prebuild-services").read_text()
     assert "../../keycloak/theme:/opt/suveryn/appliance/keycloak/theme" in (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
     src = (REPO / "provision" / "suveryn-provision").read_text()
     assert '"-DGGML_CUDA_NCCL=OFF"' in src and "rpath-link" in src
