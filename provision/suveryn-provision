@@ -1060,11 +1060,14 @@ def services(action: str) -> None:
     the new, and when the two spoke different versions every upload failed."""
     if systemd_running():
         if action == "start":
-            run("systemctl", "start", "postgresql", *UNITS, "nginx")
+            run("systemctl", "start", "postgresql", *UNITS)
+            start_nginx()
         elif action == "restart":  # starts a stopped unit too: the same on a first boot
             run("systemctl", "start", "postgresql")
             run("systemctl", "restart", *UNITS)
-            run("systemctl", "start", "nginx")
+            # nginx may be running already with Ubuntu's default site (its package starts it): reload it,
+            # or the office's site isn't served (VM check of #33)
+            start_nginx()
         elif action == "stop":
             run("systemctl", "stop", *reversed(UNITS))
         else:
@@ -1538,10 +1541,12 @@ def backup_service() -> None:
         return note("built into the system (suveryn-backup.timer)")
     for unit in BACKUP_UNITS:  # the tool from this checkout (the read-only system's is in /opt/suveryn/appliance)
         text = (REPO / "backup" / "systemd" / unit).read_text().replace("/opt/suveryn/appliance", str(REPO))
+        if str(REPO).startswith(("/root/", "/home/")):  # the tool is read from there (VM check of #33)
+            text = text.replace("ProtectHome=yes", "ProtectHome=read-only")
         Path(f"/etc/systemd/system/{unit}").write_text(text)
     if systemd_running():
         run("systemctl", "daemon-reload")
-        run("systemctl", "enable", "suveryn-backup.timer")
+        run("systemctl", "enable", "--now", "suveryn-backup.timer")  # started, not only at the next boot
     note("suveryn-backup.timer: nightly, once a backup target is set")
 
 

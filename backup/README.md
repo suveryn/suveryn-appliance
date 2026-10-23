@@ -29,7 +29,9 @@ sudo suveryn-backup restore FILE --identity recovery.key --yes   # onto this app
 2. Put the recovery key in a file on the appliance (from the office's offline copy) and the backup on
    a USB disk or the share.
 3. `suveryn-backup check` it, then `suveryn-backup restore … --yes`. The services stop; both databases
-   are replaced (dropped and restored as their owners); the office's settings, secrets and certificates
+   are replaced: each is restored beside the live one first, and only once that has worked is the live
+   one dropped and the restored one put in its place, so a failed restore leaves the appliance as it
+   was; the office's settings, secrets and certificates
    come back; the database roles get the passwords those settings use; the services start again.
 4. Delete the key file. The new machine has its own identity: register it with the support portal.
 
