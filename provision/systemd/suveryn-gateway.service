@@ -5,6 +5,10 @@ Description=sūveryn gateway (suveryn-core)
 After=network.target postgresql.service suveryn-llm.service keycloak.service
 Wants=postgresql.service suveryn-llm.service keycloak.service
 
+# On the read-only system the unit is enabled in the image and starts once first boot has written
+# its settings (#47).
+ConditionPathExists=/etc/suveryn/gateway.env
+
 [Service]
 User=suveryn
 Group=suveryn

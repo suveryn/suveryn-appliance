@@ -217,3 +217,143 @@ def test_first_boot_restarts_the_services():
     import inspect
     source = inspect.getsource(p.first_boot)
     assert 'services("restart")' in source and 'services("start")' not in source
+
+
+# ---------------------------------------------------------------------------- the read-only system (#47)
+def test_on_the_read_only_system_the_trust_bundle_holds_the_systems_cas_and_the_local_one(tmp_path, monkeypatch):
+    system = tmp_path / "ca-certificates.crt"
+    system.write_bytes(b"SYSTEM CAS\n")
+    tls = tmp_path / "tls"
+    tls.mkdir()
+    (tls / "ca.crt").write_bytes(b"LOCAL CA\n")
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "SYSTEM_CA_BUNDLE", system)
+    monkeypatch.setattr(p, "TLS", tls)
+    monkeypatch.setattr(p, "TRUST_BUNDLE", tls / "ca-bundle.crt")
+    monkeypatch.setattr(p, "run", lambda *a, **k: pytest.fail(f"nothing is run on the read-only system: {a}"))
+    p.trust_local_ca()
+    assert (tls / "ca-bundle.crt").read_bytes() == b"SYSTEM CAS\n\nLOCAL CA\n"
+    assert p.ca_bundle() == tls / "ca-bundle.crt"
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    assert p.ca_bundle() == system  # an ordinary Ubuntu: its own bundle, which update-ca-certificates fills
+
+
+def test_on_the_read_only_system_the_firewall_and_updates_are_the_images(monkeypatch, capsys):
+    ran = []
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    p.updates("connected")
+    assert ran == [] and "sūveryn updates" in capsys.readouterr().out
+    monkeypatch.setattr(p, "UPSTREAM_RESOLV", Path("/nonexistent"))
+    with pytest.raises(SystemExit):
+        p.firewall()  # stops at the resolver check, after the inbound step
+    assert not any(a and a[0] == "ufw" for a in ran)
+
+
+def test_postgresqls_cluster_is_made_only_when_there_is_none(monkeypatch):
+    ran = []
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(p, "systemd_running", lambda: False)
+
+    class Listed:
+        def __init__(self, out):
+            self.stdout = out
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed("16 main 5432 online postgres /var/lib/postgresql/16/main\n"))
+    p.ensure_cluster()
+    assert ran == []
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed(""))
+    p.ensure_cluster()
+    assert ran == [("pg_createcluster", "16", "main")]
+
+
+def prebuilt_tree(root: Path) -> None:
+    o = root / "opt"
+    for f, text in (("suveryn/core/.suveryn-built", p.core_built_as()), ("suveryn/llama.cpp/.suveryn-built", p.llama_built_as()),
+                    ("keycloak/.suveryn-built", p.keycloak_built_as()), ("suveryn/ui/.suveryn-built", p.ui_built_as()),
+                    ("suveryn/core/.venv/bin/suveryn-gateway", ""), ("suveryn/core/.venv/bin/python", ""),
+                    ("suveryn/llama.cpp/build/bin/llama-server", ""), ("keycloak/bin/kc.sh", ""), ("suveryn/ui/index.html", ""),
+                    ("suveryn/lib/cuda/libcudart.so.12", ""), ("suveryn/hf/hub/models--x/config.json", "")):
+        (o / f).parent.mkdir(parents=True, exist_ok=True)
+        (o / f).write_text(text)
+
+
+def test_the_prebuilt_services_must_be_the_pinned_ones_and_complete(tmp_path):
+    prebuilt_tree(tmp_path)
+    assert p.prebuilt_problems(tmp_path) == []
+    (tmp_path / "opt/suveryn/core/.suveryn-built").write_text("suveryn-core@0000000\n")
+    (tmp_path / "opt/suveryn/lib/cuda/libcudart.so.12").unlink()
+    (tmp_path / "opt/suveryn/core/.git").mkdir()
+    problems = p.prebuilt_problems(tmp_path)
+    assert len(problems) == 3
+    assert "suveryn-core@0000000, not suveryn-core@" in problems[0]
+    assert "no CUDA runtime" in problems[1] and "no git history" in problems[2]
+
+
+def test_on_the_read_only_system_the_models_and_units_are_the_images(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    assert p.hf_home() == Path("/opt/suveryn/hf")
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    assert p.hf_home() == Path("/var/lib/suveryn/hf")
+
+
+def test_keycloaks_host_name_comes_from_its_environment_not_its_configuration_file():
+    src = (HERE / "suveryn-provision").read_text()
+    first_boot_part = src[src.index("def keycloak(public_url"):src.index("def reader_sudoers")]
+    assert '"KC_HOSTNAME": f"https://{host}/idp"' in first_boot_part
+    assert "keycloak.conf\").write_text" not in first_boot_part and "conf\" / \"keycloak.conf\").write" not in first_boot_part
+
+
+def test_the_language_models_come_from_an_installed_bundle_where_it_is(tmp_path, monkeypatch, capsys):
+    """The read-only system's one path (#47): the installer's bundle, used where it is, never copied."""
+    data = b"weights"
+    import hashlib
+    m = {"id": "x", "file": "x.gguf", "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+    monkeypatch.setattr(p, "BUNDLES", tmp_path / "bundles")
+    assert p.bundled(m) is None
+    f = tmp_path / "bundles" / "model" / "x" / "1" / "x.gguf"
+    f.parent.mkdir(parents=True)
+    f.write_bytes(b"changed")
+    assert p.bundled(m) is None  # the wrong size or hash: not this model
+    f.write_bytes(data)
+    assert p.bundled(m) == f
+    assert f"model = {f}" in p.presets([{**m, "path": str(f), "default": True}])
+
+
+def test_on_the_read_only_system_an_air_gapped_first_boot_without_a_bundle_says_where_the_models_come_from(tmp_path, monkeypatch):
+    core = tmp_path / "core"
+    (core / "models").mkdir(parents=True)
+    (core / "models" / "manifest.json").write_text(json.dumps({"models": [
+        {"id": "x", "role": "llm", "file": "x.gguf", "size_bytes": 1, "sha256": "0" * 64, "source": "https://example"}]}))
+    monkeypatch.setattr(p, "CORE", core)
+    monkeypatch.setattr(p, "BUNDLES", tmp_path / "bundles")
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    monkeypatch.setattr(p, "download", lambda *a, **k: pytest.fail("no download when air-gapped"))
+    with pytest.raises(SystemExit):
+        p.llm_models(None, "air-gapped", staging=False)
+
+
+def test_the_read_only_images_python_is_uvs_own_and_the_build_host_has_java():
+    """Pod check of #47: uv took the build host's Python (the venv pointed at /usr/local/bin), and
+    Keycloak's build found no java."""
+    src = (HERE / "suveryn-provision").read_text()
+    core = src[src.index("def suveryn_core("):src.index("def cuda_libraries(")]
+    assert '"UV_PYTHON_PREFERENCE": "only-managed"' in core
+    assert "openjdk-21-jre-headless" in p.BUILD_HOST_PACKAGES
+    main = src[src.index('if a.command == "prebuild":'):]
+    assert main.index("build_host_packages()") < main.index("keycloak_software()")
+
+
+def test_llama_server_needing_a_library_the_image_lacks_stops_the_prebuild(tmp_path, monkeypatch):
+    """VM check of #47: built with NCCL, llama-server couldn't start in the image (libnccl.so.2 not found)."""
+    (tmp_path / "build" / "bin").mkdir(parents=True)
+    monkeypatch.setattr(p, "LLAMA", tmp_path)
+    ldd = ("\tlibcudart.so.12 => /usr/local/cuda/lib64/libcudart.so.12 (0x1)\n"
+           "\tlibcuda.so.1 => not found\n\tlibnccl.so.2 => not found\n")
+    monkeypatch.setattr(p, "run", lambda *a, **k: ldd)
+    with pytest.raises(SystemExit):
+        p.cuda_libraries(tmp_path / "out")
+    copied = []
+    monkeypatch.setattr(p, "run", lambda *a, **k: ldd.replace("\tlibnccl.so.2 => not found\n", "") if a[0] == "ldd" else "")
+    monkeypatch.setattr(p.shutil, "copy2", lambda src, dst: copied.append(Path(dst).name))
+    assert p.cuda_libraries(tmp_path / "out") == ["libcudart.so.12"]  # the driver's libcuda.so.1 is the image's own
+    assert copied == ["libcudart.so.12"]

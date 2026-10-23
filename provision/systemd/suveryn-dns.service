@@ -9,11 +9,19 @@ Requires=suveryn-egress.service
 Before=nss-lookup.target
 Wants=nss-lookup.target
 
+# Once a network mode is set (first boot); on the read-only system enabled in the image (#47).
+ConditionPathExists=/etc/suveryn/network-mode.env
+
 [Service]
 ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/suveryn/dnsmasq.conf
+# Every program on the read-only system resolves through it while it runs: /etc/resolv.conf links to
+# /run/suveryn/resolv.conf, which points here, and back to systemd-resolved's stub when it stops.
+ExecStartPost=/bin/sh -c 'rm -f /run/suveryn/resolv.conf && printf "nameserver 127.0.0.1\\noptions edns0 trust-ad\\n" > /run/suveryn/resolv.conf'
+ExecStopPost=/bin/sh -c 'rm -f /run/suveryn/resolv.conf && ln -s /run/systemd/resolve/stub-resolv.conf /run/suveryn/resolv.conf'
 Restart=on-failure
 ProtectHome=yes
 ProtectSystem=strict
+ReadWritePaths=-/run/suveryn
 PrivateTmp=yes
 
 [Install]

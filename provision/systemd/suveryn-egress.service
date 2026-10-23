@@ -9,6 +9,9 @@ Before=network-pre.target shutdown.target
 Wants=network-pre.target
 Conflicts=shutdown.target
 
+# Once a network mode is set (first boot); on the read-only system enabled in the image (#47).
+ConditionPathExists=/etc/suveryn/network-mode.env
+
 [Service]
 Type=oneshot
 RemainAfterExit=yes

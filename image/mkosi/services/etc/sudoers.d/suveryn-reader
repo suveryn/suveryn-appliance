@@ -1,0 +1,4 @@
+# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).
+Defaults:suveryn !requiretty
+Defaults>suveryn-reader env_keep += "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
+suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *

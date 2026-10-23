@@ -73,9 +73,19 @@ def fail(message: str):
     raise SystemExit(f"build_realm: {message}")
 
 
-def fetch_realm(repo: str, commit: str, path: str) -> tuple[bytes, str]:
+def fetch_realm(repo: str, commit: str, path: str, sha256: str | None = None) -> tuple[bytes, str]:
+    """The realm file at ``commit`` of suveryn-core. From a local checkout without git history (the
+    read-only system's /opt/suveryn/core, which has neither git nor .git, #47) when its file has the
+    lock's sha256: the hash pins the content as the commit would."""
     if not re.fullmatch(r"[\w][\w./-]*", commit) or repo.startswith("-"):
         fail(f"not a repository and commit: {repo} {commit}")
+    plain = os.path.join(repo, path)
+    if sha256 and os.path.isdir(repo) and not os.path.exists(os.path.join(repo, ".git")) and os.path.isfile(plain):
+        with open(plain, "rb") as f:
+            data = f.read()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            fail(f"{plain} isn't the realm in realm-lock.json (sha256 differs)")
+        return data, commit
     if os.path.isdir(repo):
         repo = os.path.abspath(repo)  # git runs in a temporary folder: a relative path would point there
     with tempfile.TemporaryDirectory(prefix="suveryn-core-") as tmp:
@@ -236,7 +246,7 @@ def main() -> None:
         ap.error("--public-url and --out are required")
     public_url = check_public_url(a.public_url)
     issuer_base = check_issuer_base(a.issuer_base or f"{public_url}/idp")
-    data, commit = fetch_realm(repo, lock["commit"], lock["path"])
+    data, commit = fetch_realm(repo, lock["commit"], lock["path"], lock["sha256"])
     if commit != lock["commit"] or hashlib.sha256(data).hexdigest() != lock["sha256"]:
         fail("suveryn-core's realm differs from realm-lock.json")
     secret = secrets.token_urlsafe(32)

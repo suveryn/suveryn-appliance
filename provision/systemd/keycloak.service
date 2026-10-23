@@ -4,6 +4,10 @@ Description=Keycloak (sūveryn sign-in)
 After=network.target postgresql.service
 Requires=postgresql.service
 
+# On the read-only system the unit is enabled in the image and starts once first boot has written
+# its settings (#47).
+ConditionPathExists=/etc/suveryn/keycloak.env
+
 [Service]
 User=keycloak
 Group=keycloak

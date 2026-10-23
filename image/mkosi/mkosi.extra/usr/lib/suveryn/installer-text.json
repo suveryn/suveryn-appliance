@@ -791,7 +791,7 @@
   },
   "c7_remove_medium": {
     "en": "Remove the installation medium before restarting.",
-    "nl": "Verwijder het installatiemedium voor u herstart.",
+    "nl": "Verwijder het installatiemedium voordat u herstart.",
     "fr": "Retirez le support d'installation avant de redémarrer."
   },
   "c7_encrypted": {

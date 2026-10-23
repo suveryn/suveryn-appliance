@@ -1,0 +1,17 @@
+# The inbound rules (/usr/lib/suveryn/inbound.nft), loaded before the network comes up: nothing
+# reaches the appliance but the web ports, also on the installer stick and before the web setup.
+[Unit]
+Description=sūveryn inbound traffic rules
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target shutdown.target
+Wants=network-pre.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /usr/lib/suveryn/inbound.nft
+
+[Install]
+WantedBy=sysinit.target
