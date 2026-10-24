@@ -43,6 +43,10 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 | 6 | Review | `web-06-review.html` |
 | 7 | Provisioning | `web-07-provisioning.html` |
 | 8 | Complete (outgoing-traffic check passed / failed) | `web-08-complete*.html` |
+| R1 | Restore from a backup, instead of steps 1 to 8 (from Welcome): where the backups are and the recovery key file; a check that failed | `web-09-restore.html`, `web-09-restore--check-failed.html` |
+| R2 | The backup found, before anything is replaced | `web-09-restore-confirm.html` |
+| R3 | Restoring | `web-09-restore-progress.html` |
+| R4 | Backup restored: where the appliance answers now | `web-09-restore-done.html` |
 
 ## Decisions to implement
 
@@ -63,6 +67,7 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - Support agreement (tracker #35): shows appliance ID and key fingerprint, a QR code with a portal link (no app needed), and a manifest upload. Optional: Continue works without one. Without a valid manifest: admin-only reminder for 14 days, then a banner for everyone who signs in. Every deviation from the manifest (users over contract, uncertified connectors or third-party playbooks, missed quarterly check-in, expiry) is shown to everyone. Nothing is ever blocked.
 - Backups (tracker #33): USB disk (pick the detected disk) or network share (SMB or NFS, address, user, password, Test connection), or Set up later with a warning. Retention 14 days, 30 days (default, proposed), 90 days, 1 year. Backups are encrypted to a recovery key generated in the browser; only the public half goes to the appliance; the admin must confirm storing it offline.
 - Conversation retention and the "what deleting means" explanation (tracker #31) are in the admin dashboard, not in setup.
+- Restore from a backup (tracker #56, added 24 October 2026 after the screens were built, so R1 to R4 follow the built screens rather than the design canvas): a secondary button on Welcome under *Get started*. The appliance finds the newest backup on the USB disk or share and checks it with the recovery key file before asking; then it takes the old appliance's name, accounts and settings, and setup closes. The key is kept on the encrypted data partition for that one check and restore only. No step counter: it isn't one of the six steps.
 
 **Copy and brand rules**
 - UK English. Dutch formal (u/uw). The product name is lower case "sūveryn" except at the start of a sentence; the company is "Sūveryn Labs". Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
