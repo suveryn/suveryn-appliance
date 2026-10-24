@@ -1645,6 +1645,56 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     sys.exit(0 if ok else 1)
 
 
+BACKUP_TOOL = REPO / "backup" / "suveryn-backup"
+
+
+def restore(a: argparse.Namespace) -> None:
+    """A replacement machine becomes the office's appliance again from a backup (#56): instead of a first
+    boot's answers, the backup's databases and settings (backup/suveryn-backup restore), then what this
+    machine adds itself: its models from the installed bundles, the network mode applied, the name, the
+    trust bundle, the services started, verified. Its identity stays its own (#35)."""
+    step("PostgreSQL 16 + pgvector")
+    postgres()  # the cluster and the roles, with passwords of their own until the backup's settings set theirs
+    step("Restoring the backup")
+    cmd = [sys.executable, "-I", str(BACKUP_TOOL), "--settings", str(a.settings),
+           *(["--share-secret", str(a.share_secret)] if a.share_secret else []),
+           "restore", a.backup, "--on-target", "--yes", "--identity", str(a.identity)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    for line in (r.stdout + r.stderr).strip().splitlines()[-3:]:
+        note(line)
+    if r.returncode != 0:
+        fail("the backup couldn't be restored")
+    gw = read_env(ETC / "gateway.env")
+    issuer = gw.get("SUVERYN_OIDC_ISSUER", "")
+    public_url = issuer.split("/idp", 1)[0] if issuer.startswith("https://") else None
+    # The models: this machine's own bundles, wherever its installer put them (the backup's presets named
+    # the old machine's paths).
+    mode = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
+    llms = llm_models(None, mode, staging=False)
+    (ETC / "llama-presets.ini").write_text(presets(llms))
+    step("Network mode")
+    run(NETWORK_MODE_TOOL, "apply", capture=True)
+    note(f"{mode} (from the backup)")
+    if read_only_system():
+        firewall()
+    step("The appliance's name")
+    name_file = VAR / "host" / "hostname"
+    if name_file.exists() and systemd_running():
+        name = name_file.read_text().strip()
+        run("hostname", name)
+        run("systemctl", "restart", "systemd-resolved")  # <name>.local follows the name
+        note(f"{name} (from the backup): reached as {name}.local")
+    trust_local_ca()
+    step("Starting the services")
+    services("restart")
+    directory_scope()
+    ok = verify(public_url)
+    if ok:
+        FIRST_BOOT_DONE.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()))
+        note(f"restored: {public_url or 'the office'} is this appliance now")
+    sys.exit(0 if ok else 1)
+
+
 def first_boot_config(path: Path) -> dict[str, str]:
     """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
     values = read_env(path)
@@ -1696,6 +1746,11 @@ def main() -> None:
                    help="JSON {name, email, password}: the office's administrator (the web setup passes it)")
     f.add_argument("--config", type=Path,
                    help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
+    rs = sub.add_parser("restore", help="a replacement machine: the office's appliance again from a backup (the web setup's restore)")
+    rs.add_argument("--settings", type=Path, required=True, help="where the backups are (JSON, as the web setup's Backups answer)")
+    rs.add_argument("--share-secret", type=Path, help="the share's password file")
+    rs.add_argument("--identity", type=Path, required=True, help="the office's recovery key file")
+    rs.add_argument("--backup", default="newest", help="the backup's file name on the target, or newest")
     pb = sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
     pb.add_argument("--read-only-image", action="store_true",
                     help="also suveryn-core compiled, its models in /opt/suveryn/hf and the CUDA libraries, for the "
@@ -1710,6 +1765,9 @@ def main() -> None:
         fail("run as root")
     if a.command == "services":
         services(a.action)
+        return
+    if a.command == "restore":
+        restore(a)
         return
     if a.command == "check-prebuilt":
         problems = prebuilt_problems(a.root)
