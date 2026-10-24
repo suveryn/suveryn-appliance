@@ -102,8 +102,9 @@ def run(step: str, cmd: list, **kw) -> str:
 
 
 # ---------------------------------------------------------------------------- settings and status
-def settings() -> dict | None:
-    """The web setup's answer (setup/suveryn-setup check_backups), or None when backups aren't set up."""
+def settings(for_writing: bool = True) -> dict | None:
+    """The web setup's answer (setup/suveryn-setup check_backups), or None when backups aren't set up.
+    Reading backups back (check, restore on a replacement machine) needs only where they are."""
     try:
         c = json.loads(CONFIG.read_text())
     except (OSError, ValueError):
@@ -114,6 +115,8 @@ def settings() -> dict | None:
         raise Failed("settings", "a folder target is for tests only")
     if c.get("target") not in ("usb", "share", "folder"):
         raise Failed("settings", f"unknown target {c.get('target')!r}")
+    if not for_writing:
+        return c
     if not AGE_RECIPIENT.fullmatch(str(c.get("recipient", ""))):
         raise Failed("settings", "no valid recovery key (recipient) in the backup settings")
     if c.get("retention_days") not in (14, 30, 90, 365):
@@ -422,17 +425,50 @@ def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
     return out
 
 
+def on_target(a, act) -> int:
+    """``act(file)`` on a backup: the file given, or with ``--on-target`` one on the target the settings name
+    (by its file name, or ``newest``), mounted for as long as ``act`` takes."""
+    if not a.on_target:
+        return act(a.file)
+    s = settings(for_writing=False)
+    if s is None:
+        raise Failed("settings", "no backup target in the settings")
+    with Target(s) as folder:
+        found = backups_in(folder)
+        if not found:
+            raise Failed("target", "there is no backup on the target")
+        name = found[0]["file"] if str(a.file) == "newest" else str(a.file)
+        if not NAME.fullmatch(name) or not (folder / name).is_file():
+            raise Failed("target", f"no backup {name} on the target")
+        return act(folder / name)
+
+
 def cmd_check(a) -> int:
-    with tempfile.TemporaryDirectory(prefix="check-", dir=STATE if STATE.exists() else None) as d:
-        try:
-            manifest = unpack(a.file, a.identity, Path(d))
-            counts = check_dumps(Path(d), manifest)
-        except Failed as e:
-            say(f"not usable ({e.step}): {e}")
+    def act(file: Path) -> int:
+        with tempfile.TemporaryDirectory(prefix="check-", dir=STATE if STATE.exists() else None) as d:
+            try:
+                manifest = unpack(file, a.identity, Path(d))
+                counts = check_dumps(Path(d), manifest)
+            except Failed as e:
+                if a.json:
+                    print(json.dumps({"usable": False, "step": e.step, "message": str(e)}))
+                else:
+                    say(f"not usable ({e.step}): {e}")
+                return 1
+        if a.json:
+            print(json.dumps({"usable": True, "file": file.name, "created": manifest["created"],
+                              "appliance": manifest["appliance"], "entries": counts, "files": manifest["files"]}))
+        else:
+            say(f"usable: made {manifest['created']} on {manifest['appliance']}; "
+                + ", ".join(f"{db} {n} entries" for db, n in counts.items()) + f"; files: {', '.join(manifest['files'])}")
+        return 0
+    try:
+        return on_target(a, act)
+    except Failed as e:
+        if a.json:
+            print(json.dumps({"usable": False, "step": e.step, "message": str(e)}))
             return 1
-    say(f"usable: made {manifest['created']} on {manifest['appliance']}; "
-        + ", ".join(f"{db} {n} entries" for db, n in counts.items()) + f"; files: {', '.join(manifest['files'])}")
-    return 0
+        raise
 
 
 SERVICES = ["suveryn-gateway", "keycloak"]
@@ -462,6 +498,10 @@ def role_passwords(etc: Path) -> dict[str, str]:
 
 
 def cmd_restore(a) -> int:
+    return on_target(a, lambda file: restore_file(a, file))
+
+
+def restore_file(a, file: Path) -> int:
     if not a.yes:
         say("restoring replaces this appliance's databases and the office's settings with the backup's; "
             "run again with --yes to go ahead")
@@ -472,7 +512,7 @@ def cmd_restore(a) -> int:
         dest = Path(d)
         os.chmod(dest, 0o711)  # PostgreSQL's superuser reads the dumps from here
         try:
-            manifest = unpack(a.file, a.identity, dest)
+            manifest = unpack(file, a.identity, dest)
             check_dumps(dest, manifest)
             if systemd:
                 run("services", ["systemctl", "stop", *SERVICES])
@@ -517,7 +557,11 @@ def cmd_restore(a) -> int:
 
 
 def main() -> int:
+    global CONFIG, SHARE_SECRET
     ap = argparse.ArgumentParser(prog="suveryn-backup", description=__doc__.splitlines()[0])
+    ap.add_argument("--settings", type=Path, help=f"the backup settings to use (default {CONFIG}): the web setup's "
+                    "restore gives the target the office's backups are on")
+    ap.add_argument("--share-secret", type=Path, help=f"the share's password file (default {SHARE_SECRET})")
     sub = ap.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="make a backup now")
     for name in ("status", "list"):
@@ -526,9 +570,15 @@ def main() -> int:
         p = sub.add_parser(name)
         p.add_argument("file", type=Path)
         p.add_argument("--identity", type=Path, required=True, help="a file with the office's recovery key (AGE-SECRET-KEY-…)")
+        p.add_argument("--on-target", action="store_true",
+                       help="FILE is a backup's name on the settings' target, or newest; the target is mounted for it")
+        if name == "check":
+            p.add_argument("--json", action="store_true")
         if name == "restore":
             p.add_argument("--yes", action="store_true", help="replace this appliance's data with the backup's")
     a = ap.parse_args()
+    CONFIG = a.settings or CONFIG
+    SHARE_SECRET = a.share_secret or SHARE_SECRET
     if a.command in ("run", "list", "restore") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
         ap.error("run as root")
     try:
