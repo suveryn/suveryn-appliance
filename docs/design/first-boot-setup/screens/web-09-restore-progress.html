@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sūveryn setup · Restoring the backup</title>
+<!-- Added 24 October 2026 to match the built restore screens (suveryn-tracker#56), in the style of the static export of the design canvas "Sūveryn, First-Boot Setup Screen", artboard 07-provisioning.dc.html. Reference only: not production code. -->
+<style>
+  @font-face{font-family:'Inter';src:url('../assets/fonts/Inter-Variable.woff2') format('woff2');font-weight:100 900;font-display:swap}
+  @font-face{font-family:'Space Grotesk';src:url('../assets/fonts/SpaceGrotesk-Variable.woff2') format('woff2');font-weight:300 700;font-display:swap}
+  @font-face{font-family:'IBM Plex Mono';src:url('../assets/fonts/IBMPlexMono-Medium.woff2') format('woff2');font-weight:500;font-display:swap}
+</style>
+<style>
+  body{margin:0}
+  *{box-sizing:border-box}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .spin{animation:spin 1s linear infinite;transform-origin:50% 50%}
+  .page{width:100%;min-height:100vh;background:#F1F1F3;display:flex;flex-direction:column;align-items:center;padding:48px 24px 64px;font-family:'Inter',sans-serif;color:#020205}
+  .topbar{width:100%;max-width:560px;display:flex;justify-content:space-between;align-items:center;margin-bottom:32px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .wordmark{font-family:'IBM Plex Mono',monospace;font-size:22px;line-height:1;font-weight:500;color:#020205}
+  .card{width:100%;max-width:560px;background:#FFFFFF;border:1px solid rgba(2,2,5,0.12);border-radius:14px;padding:44px 40px 40px}
+  .mark{width:56px;height:56px;border-radius:14px;background:#FAFAFA;border:1px solid rgba(2,2,5,0.12);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;color:#FA5B35}
+  h2{font-family:'Space Grotesk',sans-serif;font-size:28px;line-height:1.2;font-weight:600;margin:0 0 8px;text-align:center}
+  .lead{font-size:15px;line-height:1.6;color:rgba(2,2,5,0.62);margin:0 0 28px;text-align:center}
+  .track{height:6px;border-radius:9999px;background:#F1F1F3;overflow:hidden;margin-bottom:10px}
+  .fill{height:100%;background:#FA5B35;border-radius:9999px}
+  .plabel{font-size:13px;color:rgba(2,2,5,0.62);margin:0 0 24px}
+  .list{border:1px solid rgba(2,2,5,0.12);border-radius:10px;overflow:hidden;margin-bottom:20px}
+  .row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid rgba(2,2,5,0.12);font-size:14px}
+  .row:last-child{border-bottom:none}
+  .ico{flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center}
+  .ico.done{color:#007F78}
+  .ico.now{color:#FA5B35}
+  .ico.todo{color:rgba(2,2,5,0.62)}
+  .row .lbl{flex:1}
+  .row.now .lbl{font-weight:600}
+  .row.todo .lbl{color:rgba(2,2,5,0.62)}
+  .row .sub{color:rgba(2,2,5,0.62);font-size:13px}
+  .note{display:flex;gap:12px;align-items:flex-start;background:#FAFAFA;border:1px solid rgba(2,2,5,0.12);border-radius:10px;padding:14px 16px;font-size:13px;line-height:1.55;color:rgba(2,2,5,0.62)}
+  .note svg{flex:none;margin-top:1px;color:#020205}
+  .note b{color:#020205;font-weight:600}
+  .preview{display:block;margin-top:20px;font-size:12px;text-align:center;color:rgba(2,2,5,0.62)}
+  .lang-dd{position:relative}
+  .lang-dd-btn{display:flex;align-items:center;gap:6px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;color:#020205;background:#FFFFFF;border:1px solid rgba(2,2,5,0.12);border-radius:6px;padding:8px 10px 8px 12px;cursor:pointer}
+  .lang-dd-menu{position:absolute;top:calc(100% + 6px);right:0;background:#FFFFFF;border:1px solid rgba(2,2,5,0.12);border-radius:10px;min-width:170px;padding:6px;z-index:10}
+  .lang-dd-item{display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;padding:8px 10px;border-radius:6px;font-size:13px;font-family:'Inter',sans-serif;color:#020205;background:transparent;border:none;cursor:pointer}
+  .lang-dd-item:hover{background:#F1F1F3}
+  .lang-dd-item.active{font-weight:600}
+</style>
+<style>
+  .page{background:#FFFFFF;padding:40px 16px 56px}
+  .brand-block{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center;margin-bottom:24px}
+  .lockup{display:flex;align-items:center;gap:18px}
+  .lockup img{width:44px;height:44px}
+  .lockup .wordmark{font-family:'IBM Plex Mono',monospace;font-size:32px;line-height:1;font-weight:500;color:#020205}
+  .tagline{margin:0;color:rgba(2,2,5,0.62);font-size:15px;line-height:1.5;max-width:34ch}
+  .topbar{position:relative;width:100%;max-width:560px;height:0;margin:0;display:block}
+  .topbar .lang-dd{position:absolute;top:24px;right:28px;z-index:5;display:flex;align-items:center;gap:6px;color:rgba(2,2,5,0.62)}
+  .lang-dd-btn{width:9.5rem;justify-content:space-between;background:transparent;color:rgba(2,2,5,0.62);font-weight:400;padding:7px 10px}
+  .lang-dd-btn:focus-visible{outline:none;border-color:#0F8A82;box-shadow:0 0 0 3px rgba(58,212,202,0.15)}
+  .card{background:#FAFAFA;padding:28px}
+  .card h1,.card h2{font-size:24px;line-height:1.2}
+  .note{background:#F1F1F3}
+  .mark,.list,.track{background:#FFFFFF}
+  .track{border:1px solid rgba(2,2,5,0.12)}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="brand-block">
+    <div class="lockup" role="img" aria-label="sūveryn"><img src="../assets/suveryn-icon.svg" alt=""><span class="wordmark" aria-hidden="true">sūveryn</span></div>
+    <p class="tagline">AI for work that can't leave the premises.</p>
+  </div>
+  <div class="topbar">
+    <div class="lang-dd">
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"></path><path d="m4 14 6-6 2-3"></path><path d="M2 5h12"></path><path d="M7 2h1"></path><path d="m22 22-5-10-5 10"></path><path d="M14 18h6"></path></svg>
+      <button type="button" class="lang-dd-btn" aria-haspopup="listbox" aria-label="Language"><span>English</span><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+      
+    </div>
+  </div>
+
+    <div class="card">
+    <div class="mark"><svg class="spin" xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></div>
+    <h2>Restoring the backup</h2>
+    <p class="lead">This takes a few minutes, longer for a large backup. Keep this page open.</p>
+
+    <div class="track"><div class="fill" style="width:20%"></div></div>
+    <p class="plabel">Decrypting and restoring the backup</p>
+
+    <div class="list">
+      <div class="row"><span class="ico done"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><span class="lbl">Database</span></div>
+      <div class="row now"><span class="ico now"><svg class="spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"></path></svg></span><span class="lbl">Documents, accounts and settings</span></div>
+      <div class="row todo"><span class="ico todo"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle></svg></span><span class="lbl">Language models</span></div>
+      <div class="row todo"><span class="ico todo"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle></svg></span><span class="lbl">Network and name</span></div>
+      <div class="row todo"><span class="ico todo"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle></svg></span><span class="lbl">Services</span></div>
+    </div>
+
+    <div class="note">
+      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg>
+      <div><b>Do not turn off the appliance.</b> Stopping partway can leave services half configured.</div>
+    </div>
+    <a href="web-09-restore-done.html" class="preview">Preview only: skip to the end</a>
+  </div>
+</div>
+</body>
+</html>
