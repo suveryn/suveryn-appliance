@@ -291,8 +291,8 @@ the chat UI) are copied in as they are now. Packer can then go (decision D1).
 - **In a virtual machine with a virtual TPM** (QEMU, OVMF, swtpm): a small test system without the
   GPU parts boots, installs from a virtual USB stick, unlocks with the TPM, refuses a changed system
   block, asks for the recovery key when the TPM state changes, updates into slot B and falls back to
-  A when B is broken. This runs in Claude's workspace (slowly, without hardware acceleration) and
-  faster on any machine with KVM (decision D4).
+  A when B is broken. This runs on any machine, slowly without hardware acceleration, and
+  faster on one with KVM (decision D4).
 - **On real hardware with the GPU**, once: the full image from a real USB stick to a working chat
   over HTTPS, as `image/README.md` already plans.
 
@@ -315,7 +315,7 @@ the chat UI) are copied in as they are now. Packer can then go (decision D1).
 | D1 | Build the image with mkosi instead of Packer | **Yes**: mkosi builds the read-only system directly; Packer goes |
 | D2 | Bind the data partition to sūveryn's signed boot measurement (PCR 11) | **Postponed**: PCR 7 as decided in #34; revisit before the first customer |
 | D3 | Ubuntu security fixes only through sūveryn updates (no apt on the appliance) | **Yes**, with a commitment: a monthly update, and urgent fixes within days |
-| D4 | A machine with KVM for the image tests | **Not available yet.** Until it is, the tests run in Claude's workspace with a small test system (slow, without hardware acceleration); the full image waits for KVM or real hardware |
+| D4 | A machine with KVM for the image tests | **Not available yet.** Until it is, the tests run with a small test system on a machine without KVM (slow, without hardware acceleration); the full image waits for KVM or real hardware |
 | D5 | No swap on disk | **Yes** (zram if memory runs short) |
 | D6 | Remote support for connected appliances only, as above (#43) | **Yes**, details in #43 |
 
