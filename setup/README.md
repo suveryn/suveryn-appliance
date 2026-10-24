@@ -54,10 +54,27 @@ language.
 | `PUT answers/backups` | A USB disk plugged in now, or a share's address; 14, 30, 90 or 365 days; an age recipient (`age1…`, bech32 checksum checked). The recovery key's private half never reaches the appliance |
 | `POST provision` | Every step answered. Starts provisioning, or starts it again after a failure; while it runs or once done, answers can't change |
 | `GET provision` | (Progress: `running`, `done` or `failed`, per step) |
+| `PUT answers/restore` | A replacement appliance (#56): a USB disk plugged in now, or a share's address (with a user name and password for SMB); a recovery key file holding an `AGE-SECRET-KEY-1…` line. Saves them (the key and password 0600, on the data partition) and asks the root worker to find and check the newest backup there: `checking` |
+| `POST restore/start` | The check found a backup (`checked`). Starts the restore; once it runs or is done, answers can't change |
+| `GET restore` | (`checking`, `checked` with the backup's date and appliance, `restoring` and `done` per step, or `failed` with a code) |
 
 A request that says where it comes from must come from the appliance's own page (`Origin`,
 `Sec-Fetch-Site`), and a body must be JSON (or the manifest's bytes), which a page elsewhere can't
 send without the browser asking first. The service logs method, path and status only.
+
+## Restoring a backup instead (#56)
+
+`suveryn-setup provision`, started by the same path unit, sees `answers/restore-check` or
+`answers/restore-start` instead of `answers/start`:
+
+- **check**: `suveryn-backup --settings <target> check newest --on-target --json --identity <key>`;
+  the result says `checked` with the backup, or `failed` with `wrong_key`, `no_backup`, `unreachable`,
+  `damaged` or `invalid`.
+- **restore**: `suveryn-provision restore --settings … --identity … --backup <the file checked>`, its
+  `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old
+  appliance's network mode and name) and **services**. The key and the share's password are deleted
+  afterwards whether it worked or not. On success setup closes as below; the appliance now answers at
+  the old name, so the screen points there.
 
 ## Provisioning and closing
 

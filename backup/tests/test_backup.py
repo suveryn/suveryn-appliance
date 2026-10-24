@@ -248,3 +248,25 @@ def test_ages_message_is_its_own_without_the_prefix_or_the_bug_report_line():
     raw = (b"age: error: no identity matched any of the recipients\n"
            b"age: report unexpected or unhelpful errors at https://filippo.io/age/report\n")
     assert b.age_error(raw) == "no identity matched any of the recipients"
+
+
+@needs
+def test_the_newest_backup_on_a_target_is_checked_and_restored_by_settings_given(appliance, tmp_path):
+    """#56: a replacement machine has only where the backups are and the key, not the office's settings."""
+    env = appliance["env"]
+    assert tool(env, "run").returncode == 0
+    given = tmp_path / "restore-settings.json"
+    given.write_text(json.dumps({"target": "folder", "path": str(appliance["target"])}))  # no recipient, no retention
+    env = {**env, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "none.json")}
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["key"])
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["usable"] and out["appliance"] == "test-appliance" and out["file"].startswith("suveryn-backup_")
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["tmp"] / "recovery.key.missing")
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "decrypt"
+    psql("DELETE FROM chunks", appliance["dbs"][0])
+    r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert psql("SELECT count(*) FROM chunks", appliance["dbs"][0]) == "2"
+    r = tool(env, "--settings", given, "check", "suveryn-backup_x_20990101T000000Z.tar.zst.age", "--on-target", "--json",
+             "--identity", appliance["key"])
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "target"

@@ -7,6 +7,9 @@ ConditionPathExists=!/run/suveryn/installer-mode
 
 [Path]
 PathExists=/var/lib/suveryn/setup/answers/start
+# Restoring a backup on a replacement machine (#56): first the check, then the restore.
+PathExists=/var/lib/suveryn/setup/answers/restore-check
+PathExists=/var/lib/suveryn/setup/answers/restore-start
 Unit=suveryn-setup-provision.service
 
 [Install]
