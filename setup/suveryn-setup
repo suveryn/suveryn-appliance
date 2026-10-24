@@ -77,6 +77,17 @@ MAX_PEM = 64 * 1024
 MIN_PASSWORD = 15
 RETENTION = (14, 30, 90, 365)
 STEPS = ("database", "signin", "models", "web", "outgoing")
+# Restoring a backup on a replacement machine (#56): its steps, and which of suveryn-provision restore's
+# "== Title" lines belong to each.
+RESTORE_STEPS = ("database", "restore", "models", "network", "services")
+RESTORE_PROVISION_STEPS = {
+    "PostgreSQL": "database", "Restoring the backup": "restore", "Model files": "models",
+    "Network mode": "network", "Firewall": "network", "The appliance's name": "network",
+    "Starting the services": "services", "Verify": "services",
+}
+RESTORE = STATE / "restore.json"                    # root writes it: what the restore found and how far it is
+BACKUP_TOOL = Path(ENV("SUVERYN_BACKUP_TOOL", str(REPO / "backup" / "suveryn-backup")))
+AGE_SECRET = re.compile(r"AGE-SECRET-KEY-1[02-9AC-HJ-NP-Z]{58}")
 # Which UI step each of suveryn-provision's steps belongs to (its "== Title" lines, by prefix).
 PROVISION_STEPS = {
     "GPU licence check": "database", "Network mode": "database", "Firewall": "database",
@@ -450,6 +461,29 @@ def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]
     return {"target": "share", "protocol": a["protocol"], "address": a["address"].strip(), "user": user, **common}, password
 
 
+def check_restore(a, disks: list[dict] | None = None) -> tuple[dict, str, str | None]:
+    """Where the office's backups are and its recovery key (#56): the answer to save (no secrets), the key,
+    and a share's password. The same targets as the Backups step, without a retention or a public key."""
+    if not isinstance(a, dict) or a.get("target") not in ("usb", "share"):
+        raise Refused({"_": "invalid"})
+    key = a.get("key")
+    key = key.strip() if isinstance(key, str) else ""
+    m = AGE_SECRET.search(key)  # the file setup made holds comments around it
+    if not m:
+        raise Refused({"key": "key_invalid"})
+    if a["target"] == "usb":
+        if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
+            raise Refused({"disk": "disk_gone"})
+        return {"target": "usb", "disk": a["disk"]}, m.group(0), None
+    if share_host(a.get("protocol"), a.get("address")) is None:
+        raise Refused({"address": "address"})
+    user, password = a.get("user") or None, a.get("password") or None
+    if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
+            (password is not None and (not isinstance(password, str) or len(password) > 512)):
+        raise Refused({"_": "invalid"})
+    return {"target": "share", "protocol": a["protocol"], "address": a["address"].strip(), "user": user}, m.group(0), password
+
+
 def manifest_for_screen(m: dict) -> dict:
     return {k: m[k] for k in ("edition", "appliance_id", "users", "valid_until", "next_check_in", "connectors", "playbooks")}
 
@@ -477,9 +511,20 @@ def progress() -> dict | None:
     return p if isinstance(p, dict) and p.get("state") in ("running", "done", "failed") else None
 
 
+def restore_progress() -> dict | None:
+    """How far a restore is (#56); a request not yet picked up shows as checking or restoring."""
+    if (ANSWERS / "restore-check").exists():
+        return {"state": "checking"}
+    r = read_json(RESTORE)
+    if (ANSWERS / "restore-start").exists() and isinstance(r, dict):
+        return {**r, "state": "restoring", "steps": [{"id": s, "state": "waiting"} for s in RESTORE_STEPS]}
+    return r if isinstance(r, dict) and r.get("state") in ("checking", "checked", "restoring", "done", "failed") else None
+
+
 # ---------------------------------------------------------------------------- serve
 WRITES = ("PUT answers/network", "PUT answers/administrator", "PUT answers/certificate", "POST manifest",
-          "PUT answers/support", "PUT answers/backups", "POST backups/test", "POST provision")
+          "PUT answers/support", "PUT answers/backups", "POST backups/test", "POST provision",
+          "PUT answers/restore", "POST restore/start")
 
 
 class App:
@@ -504,21 +549,37 @@ class App:
             write_file(ANSWERS / "answers.json", json.dumps(a, indent=1, ensure_ascii=False))
 
     def locked(self) -> None:
-        """Answers can't change once provisioning has started, unless it failed."""
+        """Answers can't change once provisioning or a restore has started, unless it failed."""
         p = progress()
         if p and p["state"] in ("running", "done"):
             raise Refused({"_": "provisioning_started"})
+        r = restore_progress()
+        if r and r["state"] in ("checking", "restoring", "done"):
+            raise Refused({"_": "restore_started"})
+
+    def start_restore(self) -> dict:
+        """The restore of the backup the check found starts; once started, nothing changes (#56)."""
+        with self.lock:
+            r = restore_progress()
+            if r and r["state"] in ("restoring", "done"):
+                return r
+            if not r or r["state"] != "checked":
+                raise Refused({"_": "not_checked"})
+            write_file(ANSWERS / "restore-start", "requested by the web setup\n", 0o644)
+            return restore_progress()
 
     def state(self) -> dict:
         f = self.facts()
         return {"name": f.get("name", ""), **network(), "language": f.get("language"),
                 "appliance": f.get("appliance"), "models": f.get("models", []), "usb_disks": usb_disks(),
-                "answers": self.answers(), "provisioning": progress()}
+                "answers": self.answers(), "provisioning": progress(), "restore": restore_progress()}
 
     def handle(self, method: str, path: str, body: bytes, content_type: str) -> tuple[int, object]:
         route = f"{method} {path}"
         if route == "GET state":
             return 200, self.state()
+        if route == "GET restore":
+            return 200, restore_progress()
         if route == "GET provision":
             p = progress()
             if p and p["state"] == "done":
@@ -527,10 +588,10 @@ class App:
         if route not in WRITES:
             return 404, {"error": "not_found"}
         # A body must say what it is (a cross-site form can't send these types without the browser
-        # asking first); POST provision has none.
+        # asking first); POST provision and POST restore/start have none.
         if route == "POST manifest" and content_type != "application/octet-stream":
             return 415, {"error": "octet_stream_only"}
-        if route != "POST manifest" and (body or route != "POST provision") and content_type != "application/json":
+        if route != "POST manifest" and (body or route not in ("POST provision", "POST restore/start")) and content_type != "application/json":
             return 415, {"error": "json_only"}
         try:
             data = json.loads(body) if route != "POST manifest" and body else None
@@ -540,7 +601,19 @@ class App:
             return 200, test_share(data)
         if route == "POST provision":
             return 200, self.start()
+        if route == "POST restore/start":
+            return 200, self.start_restore()
         self.locked()
+        if route == "PUT answers/restore":
+            answer, key, password = check_restore(data)
+            write_file(ANSWERS / "recovery-key", key + "\n")
+            if password:
+                write_file(ANSWERS / "restore-share-password", password)
+            else:
+                remove(ANSWERS / "restore-share-password")
+            self.save("restore", answer)
+            write_file(ANSWERS / "restore-check", "requested by the web setup\n", 0o644)
+            return 202, {"state": "checking"}
         if route == "PUT answers/network":
             self.save("network", check_network(data))
         elif route == "PUT answers/administrator":
@@ -781,6 +854,10 @@ def read_answers() -> tuple[dict, dict]:
 
 
 def provision() -> int:
+    if (ANSWERS / "restore-check").exists():
+        return restore_check()
+    if (ANSWERS / "restore-start").exists():
+        return restore_run()
     if SETUP_COMPLETE.exists():
         remove(ANSWERS / "start")
         return 0
@@ -865,6 +942,142 @@ def provision() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------- restore (#56)
+def restore_inputs(work: Path) -> list[str]:
+    """suveryn-backup's options for the office's target and share password, from the saved answer (read
+    back as untrusted input: checked again)."""
+    a = (read_json(ANSWERS / "answers.json", {}) or {}).get("restore")
+    key = read_file(ANSWERS / "recovery-key")
+    if not isinstance(a, dict) or key is None:
+        raise Refused({"_": "not_answered"})
+    password = read_file(ANSWERS / "restore-share-password")
+    answer, _, _ = check_restore({**a, "key": key.decode(errors="replace"), "password": password.decode() if password else None},
+                                 disks=[{"id": a.get("disk")}])
+    write_file(work / "restore-settings.json", json.dumps(answer))
+    opts = ["--settings", str(work / "restore-settings.json")]
+    if password:
+        write_file(work / "restore-share-password", password)
+        opts += ["--share-secret", str(work / "restore-share-password")]
+    return opts
+
+
+def restore_work() -> Path:
+    work = Path(ENV("SUVERYN_SETUP_WORK", "/run/suveryn/setup"))
+    work.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(work, 0o700)
+    return work
+
+
+CHECK_ERRORS = {"decrypt": "wrong_key", "read": "damaged", "check": "damaged", "settings": "invalid", "database": "damaged"}
+
+
+def forget_restore_secrets(work: Path | None = None) -> None:
+    """The recovery key and a share's password are kept for one check or restore only."""
+    for f in ("recovery-key", "restore-share-password"):
+        remove(ANSWERS / f)
+    if work is not None:
+        for f in ("restore-settings.json", "restore-share-password"):
+            remove(work / f)
+
+
+def restore_check() -> int:
+    """Find the newest backup on the target and check it with the key: what the screen asks to confirm."""
+    write_file(RESTORE, json.dumps({"state": "checking"}), 0o644)
+    remove(ANSWERS / "restore-check")
+    work = restore_work()
+    try:
+        opts = restore_inputs(work)
+    except Refused:
+        write_file(RESTORE, json.dumps({"state": "failed", "error": "invalid"}), 0o644)
+        forget_restore_secrets(work)
+        return 1
+    code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", "newest", "--on-target", "--json",
+                    "--identity", ANSWERS / "recovery-key", timeout=1800)
+    try:
+        r = json.loads(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        r = {"usable": False, "step": "check"}
+    if r.get("usable"):
+        result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]}}
+    else:
+        error = ("no_backup" if "no backup" in str(r.get("message", "")) else "unreachable") if r.get("step") == "target" \
+            else CHECK_ERRORS.get(r.get("step"), "damaged")
+        result = {"state": "failed", "error": error}
+        forget_restore_secrets()  # the screen asks for them again
+    write_file(RESTORE, json.dumps(result, indent=1), 0o644)
+    return 0 if r.get("usable") else 1
+
+
+def restore_run() -> int:
+    """Restore the backup the check found (suveryn-provision restore), reporting its steps; then close setup."""
+    found = read_json(RESTORE, {}) or {}
+    remove(ANSWERS / "restore-start")
+    backup = found.get("backup") or {}
+    r = {"state": "restoring", "backup": backup, "address": f"https://{backup.get('appliance', '')}.local",
+         "steps": [{"id": s, "state": "waiting"} for s in RESTORE_STEPS]}
+
+    def step(ident: str, state: str) -> None:
+        for st in r["steps"]:
+            if st["id"] == ident:
+                st["state"] = state
+            elif state == "running" and RESTORE_STEPS.index(st["id"]) < RESTORE_STEPS.index(ident) and st["state"] != "done":
+                st["state"] = "done"
+        write_file(RESTORE, json.dumps(r, indent=1), 0o644)
+
+    step("database", "running")
+    LOGS.mkdir(parents=True, exist_ok=True)
+    log = open(LOGS / "setup-restore.log", "a")
+    log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} restoring from the web setup: {backup.get('file')}\n")
+    work = restore_work()
+    try:
+        opts = restore_inputs(work)
+    except Refused:
+        forget_restore_secrets(work)
+        r["state"], r["error"] = "failed", "invalid"
+        step("database", "failed")
+        return 1
+    cmd = [sys.executable, str(PROVISION), "restore", *opts, "--identity", str(ANSWERS / "recovery-key"),
+           "--backup", backup.get("file") or "newest"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, stdin=subprocess.DEVNULL)
+    current = "database"
+    for line in proc.stdout:
+        log.write(line)
+        log.flush()
+        if line.startswith("== "):
+            ident = next((v for k, v in RESTORE_PROVISION_STEPS.items() if line[3:].strip().startswith(k)), None)
+            if ident and RESTORE_STEPS.index(ident) > RESTORE_STEPS.index(current):
+                current = ident
+                step(ident, "running")
+    code = proc.wait()
+    forget_restore_secrets(work)
+    if code != 0:
+        log.write(f"suveryn-provision restore failed ({code})\n")
+        r["state"], r["error"] = "failed", "restore"
+        step(current, "failed")
+        return 1
+    step("services", "done")
+    r["state"] = "done"
+    write_file(RESTORE, json.dumps(r, indent=1), 0o644)
+    log.write("restored; closing setup\n")
+    log.close()
+    close_after_restore()
+    return 0
+
+
+def close_after_restore() -> None:
+    """The restored office's settings are in place (its setup-complete among them): close the web setup."""
+    if not SETUP_COMPLETE.exists():
+        write_file(SETUP_COMPLETE, time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()), 0o644)
+    remove(NGINX_SETUP)
+    remove(SETUP_CERT)
+    if not ENV("SUVERYN_SETUP_TEST"):
+        provision_module().start_nginx()
+    shutil.rmtree(ANSWERS, ignore_errors=True)
+    if Path("/run/systemd/system").is_dir() and not ENV("SUVERYN_SETUP_TEST"):
+        run("systemctl", "disable", "suveryn-setup.service", "suveryn-setup-provision.path")
+        run("systemctl", "stop", "--no-block", "suveryn-setup.service", "suveryn-setup-provision.path")
+
+
 def models_media(work: Path) -> Path | None:
     """Model files on a USB disk labelled SUVERYN-MODELS (air-gapped), mounted read-only."""
     dev = Path("/dev/disk/by-label/SUVERYN-MODELS")
@@ -939,7 +1152,7 @@ def trust_office_ca(pem: bytes) -> None:
 def watch() -> None:
     """Without systemd: provision whenever serve asks for it."""
     while not SETUP_COMPLETE.exists():
-        if (ANSWERS / "start").exists():
+        if any((ANSWERS / f).exists() for f in ("start", "restore-check", "restore-start")):
             provision()
         time.sleep(1)
 

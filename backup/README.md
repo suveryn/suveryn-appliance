@@ -24,16 +24,32 @@ sudo suveryn-backup restore FILE --identity recovery.key --yes   # onto this app
 
 ## Restoring onto a replacement machine
 
-1. Install the appliance from the stick and go through the web setup (any answers: the restore
-   replaces them).
-2. Put the recovery key in a file on the appliance (from the office's offline copy) and the backup on
+From the web setup (suveryn-tracker#56): install the appliance from the stick, open its setup page and
+choose **Restore from a backup** on the first screen.
+
+1. Choose where the backups are (the USB disk, or the share with its user name and password) and the
+   recovery key file the office stored offline. The appliance keeps the key on its encrypted data
+   partition, readable by root only, until the restore has run.
+2. The appliance finds the newest backup there and checks it with the key
+   (`suveryn-backup --settings … check newest --on-target --json`). The screen shows when it was made
+   and by which appliance, and asks before anything is replaced.
+3. `suveryn-provision restore` restores it: the databases and the office's settings, secrets and
+   certificates (as below), the language models' settings for this machine, the old appliance's network
+   mode and name, then starts the services and closes setup. The key and the share's password are
+   deleted, whether the restore worked or not.
+4. The appliance now answers at the old name (`https://<old name>.local`): sign in with the office's
+   usual accounts. The new machine has its own identity: register it with the support portal.
+
+By hand, as root:
+
+1. Put the recovery key in a file on the appliance (from the office's offline copy) and the backup on
    a USB disk or the share.
-3. `suveryn-backup check` it, then `suveryn-backup restore … --yes`. The services stop; both databases
+2. `suveryn-backup check` it, then `suveryn-backup restore … --yes`. The services stop; both databases
    are replaced: each is restored beside the live one first, and only once that has worked is the live
    one dropped and the restored one put in its place, so a failed restore leaves the appliance as it
    was; the office's settings, secrets and certificates
    come back; the database roles get the passwords those settings use; the services start again.
-4. Delete the key file. The new machine has its own identity: register it with the support portal.
+3. Delete the key file. Register the new machine with the support portal.
 
-A web setup option for this is a ticket of its own. The restore is tested in `tests/test_backup.py`:
+The restore is tested in `tests/test_backup.py`:
 a backup made, checked, and restored onto changed databases against a real PostgreSQL with pgvector.
