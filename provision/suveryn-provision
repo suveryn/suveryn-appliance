@@ -1262,13 +1262,12 @@ def verify(public_url: str | None) -> bool:
     wait_for(lambda: 200 in (http("http://127.0.0.1:9000/idp/health/ready")[0], http("http://127.0.0.1:9000/health/ready")[0]),
              "Keycloak", 180)
     kc = read_env(ETC / "keycloak.env")
-    status, body = http("http://127.0.0.1:8180/idp/realms/master/protocol/openid-connect/token", data=(
-        "grant_type=password&client_id=admin-cli&username=suveryn-setup&password="
-        + urllib.parse.quote(kc.get("KC_BOOTSTRAP_ADMIN_PASSWORD", ""))).encode())
-    token = json.loads(body or b"{}").get("access_token") if status == 200 else None
+    # As the temporary administrator while there is one, else as the directory client, which may read the
+    # realm's settings (view-realm) but change nothing (#55).
+    auth = keycloak_admin() or directory_auth(gw)
     realm = {}
-    if token:
-        s, b = http("http://127.0.0.1:8180/idp/admin/realms/suveryn", {"Authorization": f"Bearer {token}"})
+    if auth:
+        s, b = http("http://127.0.0.1:8180/idp/admin/realms/suveryn", auth)
         realm = json.loads(b) if s == 200 else {}
     host = (public_url or gw.get("SUVERYN_PUBLIC_URL", "")).split("://", 1)[-1].rstrip("/")
     s, b = http("http://127.0.0.1:8180/idp/realms/suveryn/.well-known/openid-configuration",
@@ -1320,6 +1319,49 @@ def verify(public_url: str | None) -> bool:
     else:
         note("Outgoing traffic: not checked (no appliance firewall here: a test machine)")
     return ok
+
+
+def directory_auth(gw: dict[str, str]) -> dict[str, str] | None:
+    """Headers for Keycloak's admin API as the directory client (view-users, view-realm: read-only)."""
+    client, secret = gw.get("SUVERYN_DIRECTORY_CLIENT_ID", "suveryn-directory"), gw.get("SUVERYN_DIRECTORY_CLIENT_SECRET", "")
+    if not secret:
+        return None
+    status, body = http("http://127.0.0.1:8180/idp/realms/suveryn/protocol/openid-connect/token",
+                        {"Authorization": "Basic " + base64.b64encode(f"{client}:{secret}".encode()).decode()},
+                        b"grant_type=client_credentials")
+    return {"Authorization": f"Bearer {json.loads(body)['access_token']}"} if status == 200 else None
+
+
+BOOTSTRAP_KEYS = ("KC_BOOTSTRAP_ADMIN_USERNAME", "KC_BOOTSTRAP_ADMIN_PASSWORD")
+
+
+def retire_bootstrap_admin(gw: dict[str, str]) -> None:
+    """Delete Keycloak's temporary administrator (suveryn-setup in the master realm) once the office's own
+    exists, and its password from keycloak.env so that a restart doesn't make it again (#55). Recovery
+    afterwards: ``kc.sh bootstrap-admin user`` on the appliance. Only on an office's appliance: a test
+    machine keeps it, as verify's sign-in check uses it."""
+    step("Keycloak: the temporary administrator")
+    d = directory_auth(gw)
+    status, body = http("http://127.0.0.1:8180/idp/admin/realms/suveryn/roles/suveryn-admin/users?max=1&briefRepresentation=true",
+                        d or {})
+    if status != 200 or not json.loads(body or b"[]"):
+        return note("kept: the office has no administrator of its own yet")
+    auth = keycloak_admin()
+    if auth is not None:
+        master = "http://127.0.0.1:8180/idp/admin/realms/master/users"
+        status, body = http(f"{master}?username=suveryn-setup&exact=true", auth)
+        for u in json.loads(body or b"[]") if status == 200 else []:
+            req = urllib.request.Request(f"{master}/{u['id']}", headers=auth, method="DELETE")
+            try:
+                urllib.request.urlopen(req, timeout=10)
+            except urllib.error.HTTPError as e:
+                fail(f"Keycloak didn't delete the temporary administrator ({e.code})")
+    kc = read_env(ETC / "keycloak.env")
+    if any(k in kc for k in BOOTSTRAP_KEYS):
+        write_env(ETC / "keycloak.env", {k: v for k, v in kc.items() if k not in BOOTSTRAP_KEYS}, "keycloak", header=(
+            "# Keycloak's secrets (0600, owner keycloak). The temporary administrator was removed after setup (#55);\n"
+            "# to make one again: kc.sh bootstrap-admin user (Keycloak's documentation).\n"))
+    note("removed; the office's own administrator manages the accounts")
 
 
 def verify_directory(gw: dict[str, str]) -> tuple[bool, str]:
@@ -1452,7 +1494,11 @@ def verify_proxy(host: str, admin_password: str) -> list[tuple[str, bool, str]]:
                 "no server version" if not problems else "; ".join(problems)))
     docs = [get(path)[0] for path in ("/docs", "/redoc", "/openapi.json")]
     out.append(("API docs off", docs == [404, 404, 404], f"/docs, /redoc, /openapi.json: {docs}"))
-    out += [verify_sign_in(base, ctx, admin_password)]
+    if admin_password:
+        out += [verify_sign_in(base, ctx, admin_password)]
+    else:  # after setup the temporary administrator is gone (#55): no account to make a test user with
+        out.append(("Sign-in and upload over HTTPS", True, "not checked: the temporary administrator was removed "
+                    "after setup; the office's own administrator manages the accounts"))
     return out
 
 
@@ -1594,6 +1640,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     directory_scope()
     ok = verify(a.public_url)
     if ok and not staging:
+        retire_bootstrap_admin(read_env(ETC / "gateway.env"))
         FIRST_BOOT_DONE.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()))
     sys.exit(0 if ok else 1)
 
