@@ -378,3 +378,39 @@ def test_on_systemd_the_site_is_reloaded_and_the_backup_timer_runs_at_once(monke
     unit = written["/etc/systemd/system/suveryn-backup.service"]
     assert "/root/suveryn-appliance/backup/suveryn-backup run" in unit and "ProtectHome=read-only" in unit
     assert ("systemctl", "enable", "--now", "suveryn-backup.timer") in ran
+
+
+def test_the_temporary_keycloak_administrator_goes_once_the_office_has_its_own(monkeypatch, tmp_path):
+    """#55: suveryn-setup (master realm) deleted after setup, and its password out of keycloak.env."""
+    deleted, written = [], {}
+    monkeypatch.setattr(p, "ETC", tmp_path)
+    (tmp_path / "keycloak.env").write_text("KC_HOSTNAME=https://x/idp\nKC_DB_PASSWORD=db\n"
+                                            "KC_BOOTSTRAP_ADMIN_USERNAME=suveryn-setup\nKC_BOOTSTRAP_ADMIN_PASSWORD=pw\n")
+    monkeypatch.setattr(p, "directory_auth", lambda gw: {"Authorization": "Bearer d"})
+    monkeypatch.setattr(p, "keycloak_admin", lambda: {"Authorization": "Bearer a"})
+    office_admins = []
+
+    def http(url, headers=None, data=None, timeout=10):
+        if "roles/suveryn-admin/users" in url:
+            return 200, json.dumps(office_admins).encode()
+        if "realms/master/users?username=suveryn-setup" in url:
+            return 200, json.dumps([{"id": "u1"}]).encode()
+        return 404, b""
+    monkeypatch.setattr(p, "http", http)
+    monkeypatch.setattr(p.urllib.request, "urlopen", lambda req, timeout=10: deleted.append((req.get_method(), req.full_url)))
+    monkeypatch.setattr(p, "write_env", lambda path, values, owner, mode=0o600, header="": written.update(values))
+    p.retire_bootstrap_admin({})
+    assert deleted == [] and written == {}  # no administrator of the office's own yet: kept
+    office_admins.append({"id": "alice"})
+    p.retire_bootstrap_admin({})
+    assert deleted == [("DELETE", "http://127.0.0.1:8180/idp/admin/realms/master/users/u1")]
+    assert written == {"KC_HOSTNAME": "https://x/idp", "KC_DB_PASSWORD": "db"}
+
+
+def test_without_the_temporary_administrator_verify_says_the_sign_in_check_was_not_run():
+    src = (HERE / "suveryn-provision").read_text()
+    part = src[src.index("def verify_proxy("):src.index("def verify_sign_in(")]
+    assert "if admin_password:" in part and "not checked: the temporary administrator was removed" in part
+    first_boot = src[src.index("def first_boot("):src.index("def first_boot_config(")]
+    assert first_boot.index("verify(a.public_url)") < first_boot.index("retire_bootstrap_admin(") < first_boot.index("FIRST_BOOT_DONE.write_text")
+    assert "if ok and not staging:" in first_boot  # a test machine keeps it
