@@ -280,9 +280,9 @@ def test_the_screens_contract_is_answered(s, api):
     if not ts.exists():
         pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE)")
     routes = re.findall(r"^ \*   (GET|PUT|POST)\s+setup/v1/(\S+)", ts.read_text(), re.M)
-    assert len(routes) == 10
+    assert len(routes) == 13
     for method, path in routes:
-        assert f"{method} {path}" in s.WRITES or (method, path) in (("GET", "state"), ("GET", "provision")), path
+        assert f"{method} {path}" in s.WRITES or (method, path) in (("GET", "state"), ("GET", "provision"), ("GET", "restore")), path
 
 
 def test_state_and_answers_survive_a_reload_and_secrets_never_come_back(s, api):
@@ -506,3 +506,78 @@ def test_serve_refuses_to_run_as_root(tmp_path):
     r = subprocess.run([sys.executable, HERE / "suveryn-setup", "serve"], capture_output=True, text=True,
                        env={"PATH": os.environ["PATH"], "SUVERYN_SETUP_DIR": str(tmp_path)})
     assert r.returncode != 0 and "not as root" in r.stderr
+
+
+# ---------------------------------------------------------------------------- restoring a backup (#56)
+# A throwaway age identity (age-keygen), in the file setup's browser makes. Not used anywhere.
+KEY = "AGE-SECRET-KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSUHVQ6Q"
+KEY_FILE = f"# created: 2026-10-24T09:00:00Z\n# public key: {RECIPIENT}\n{KEY}\n"
+
+
+def test_where_the_backups_are_and_the_key_are_checked(s):
+    disks = [{"id": "usb-SanDisk_Extreme_4C53"}]
+    answer, key, password = s.check_restore({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE}, disks)
+    assert answer == {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53"} and key == KEY and password is None
+    answer, key, password = s.check_restore({"target": "share", "protocol": "smb", "address": "\\\\nas\\backups",
+                                             "user": "bk", "password": "pw", "key": KEY}, disks)
+    assert answer["protocol"] == "smb" and "key" not in answer and password == "pw"
+    for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "key_invalid"}),
+                      ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "disk_gone"}),
+                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "address"}),
+                      ({"target": "later", "key": KEY}, {"_": "invalid"})):
+        with pytest.raises(s.Refused) as e:
+            s.check_restore(bad, disks)
+        assert e.value.codes == code
+
+
+def stand_in(path: Path, text: str) -> Path:
+    path.write_text("#!/usr/bin/env python3\n" + text)
+    path.chmod(0o755)
+    return path
+
+
+def test_a_backup_is_found_checked_restored_and_setup_closes(s, api, tmp_path):
+    seen = tmp_path / "seen.json"
+    s.BACKUP_TOOL = stand_in(tmp_path / "backup-tool", f"""import json, sys
+args = sys.argv[1:]
+settings = json.load(open(args[args.index("--settings") + 1]))
+key = open(args[args.index("--identity") + 1]).read().strip()
+json.dump({{"settings": settings, "key_ok": key == {KEY!r}}}, open({str(seen)!r}, "w"))
+print(json.dumps({{"usable": True, "file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
+                  "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent", "entries": {{}}, "files": ["etc"]}}))
+""")
+    s.PROVISION = stand_in(tmp_path / "provision", """import sys
+assert sys.argv[1] == "restore" and "--backup" in sys.argv
+for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)", "Network mode", "Starting the services", "Verify"):
+    print("== " + t, flush=True)
+""")
+    status, body = api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE})
+    assert status == 202 and body == {"state": "checking"}
+    assert stat.S_IMODE((s.ANSWERS / "recovery-key").stat().st_mode) == 0o600
+    _, state = api("GET", "state")
+    assert state["restore"] == {"state": "checking"} and KEY not in json.dumps(state)
+    assert s.restore_check() == 0
+    assert json.loads(seen.read_text()) == {"settings": {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53"}, "key_ok": True}
+    _, r = api("GET", "restore")
+    assert r == {"state": "checked", "backup": {"file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
+                                                "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent"}}
+    assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == (204, None)  # still open until it starts
+    status, r = api("POST", "restore/start")
+    assert status == 200 and r["state"] == "restoring"
+    assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == (422, {"error": "restore_started"})
+    assert s.restore_run() == 0
+    done = json.loads(s.RESTORE.read_text())
+    assert done["state"] == "done" and done["address"] == "https://notary-ghent.local"
+    assert [st["state"] for st in done["steps"]] == ["done"] * 5
+    assert s.SETUP_COMPLETE.exists() and not s.ANSWERS.exists()  # the key and the answers gone with setup
+
+
+def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
+    for step, message, code in (("decrypt", "age: no identity matched", "wrong_key"), ("target", "there is no backup on the target", "no_backup"),
+                                ("target", "the backup disk isn't connected", "unreachable"), ("read", "damaged", "damaged")):
+        s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'step': {step!r}, 'message': {message!r}}})); raise SystemExit(1)\n")
+        assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
+        assert s.restore_check() == 1
+        assert api("GET", "restore")[1] == {"state": "failed", "error": code}
+        assert not (s.ANSWERS / "recovery-key").exists()  # asked for again, not kept
+    assert api("POST", "restore/start") == (422, {"error": "not_checked"})
