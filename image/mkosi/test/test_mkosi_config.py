@@ -378,12 +378,19 @@ def test_the_services_are_the_appliances_and_never_the_test_systems():
     assert re.search(r"^\[Match\]\nProfiles=!test$", conf, re.M) and "ExtraTrees=services" in conf
 
 
+def image_release() -> str:
+    """The Ubuntu release the image is built on, as provision names it (VERSION_ID)."""
+    codename = re.search(r"^Release=(\S+)$", (MKOSI / "mkosi.conf").read_text(), re.M)[1]
+    return {"noble": "24.04", "resolute": "26.04"}[codename]
+
+
 def test_the_image_has_every_package_the_services_need_at_run_time():
     """provision's RUNTIME_PACKAGES: what an ordinary Ubuntu gets from apt, the image has built in."""
     have = set()
     for conf in (MKOSI / "mkosi.conf", *sorted((MKOSI / "mkosi.conf.d").glob("*.conf"))):
         have |= packages(conf)
-    missing = set(provision().RUNTIME_PACKAGES) - have
+    p = provision()
+    missing = set(p.for_postgres(p.RUNTIME_PACKAGES, p.POSTGRES_FOR_UBUNTU[image_release()])) - have
     assert not missing, f"not in the image: {sorted(missing)}"
     # and nothing an ordinary Ubuntu only needs: no ufw, no apt updates, no compilers
     assert not have & {"ufw", "unattended-upgrades", "build-essential", "cmake"}
@@ -414,8 +421,9 @@ def test_the_services_folders_are_made_on_the_data_partition_as_provision_makes_
 
 
 def test_postgresqls_cluster_is_made_at_first_boot_not_in_the_image():
-    assert "pg_dropcluster 16 main" in POSTINST and "link /var/lib/suveryn/postgresql-etc   /etc/postgresql" in POSTINST
-    assert '"pg_createcluster", "16", "main"' in (REPO / "provision" / "suveryn-provision").read_text()
+    pg = provision().POSTGRES_FOR_UBUNTU[image_release()]
+    assert f"pg_dropcluster {pg} main" in POSTINST and "link /var/lib/suveryn/postgresql-etc   /etc/postgresql" in POSTINST
+    assert '"pg_createcluster", pg, "main"' in (REPO / "provision" / "suveryn-provision").read_text()
 
 
 def test_only_the_web_ports_come_in():

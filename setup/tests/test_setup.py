@@ -574,7 +574,8 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     for step, message, code in (("decrypt", "age: no identity matched", "wrong_key"), ("target", "there is no backup on the target", "no_backup"),
-                                ("target", "the backup disk isn't connected", "unreachable"), ("read", "damaged", "damaged")):
+                                ("target", "the backup disk isn't connected", "unreachable"), ("read", "damaged", "damaged"),
+                                ("version", "the backup was made with PostgreSQL 18, newer than this appliance's 16", "newer")):
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'step': {step!r}, 'message': {message!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
         assert s.restore_check() == 1

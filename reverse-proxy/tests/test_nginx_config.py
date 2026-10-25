@@ -84,7 +84,8 @@ def test_the_admin_console_is_for_the_office_network_only():
 
 
 def test_directives_work_on_ubuntu_24_04_nginx_1_24():
-    """Ubuntu 24.04 ships nginx 1.24: `http2 on;` (1.25.1+) fails `nginx -t` there (found on the test pod)."""
+    """Ubuntu 24.04 ships nginx 1.24: `http2 on;` (1.25.1+) fails `nginx -t` there (found on the test pod).
+    26.04's nginx 1.28 still takes HTTP/2 on the listen line, with a warning (#57)."""
     assert not re.search(r"^\s*http2\s+on;", SITE, re.M)
     assert "listen 443 ssl http2;" in SITE
 

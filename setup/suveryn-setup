@@ -968,7 +968,9 @@ def restore_work() -> Path:
     return work
 
 
-CHECK_ERRORS = {"decrypt": "wrong_key", "read": "damaged", "check": "damaged", "settings": "invalid", "database": "damaged"}
+# "version": a backup from a newer PostgreSQL than this appliance's, e.g. a 26.04 appliance's onto 24.04 (#57).
+CHECK_ERRORS = {"decrypt": "wrong_key", "read": "damaged", "check": "damaged", "settings": "invalid", "database": "damaged",
+                "version": "newer"}
 
 
 def forget_restore_secrets(work: Path | None = None) -> None:

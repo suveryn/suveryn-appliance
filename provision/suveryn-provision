@@ -16,8 +16,9 @@ nothing):
    destinations only, or all outgoing traffic) or air-gapped. On the appliance the mode is enforced:
    ufw lets in only the web ports, and ``suveryn-egress`` (nftables) with the appliance's own
    resolver ``suveryn-dns`` (dnsmasq) decides what goes out.
-3. **Packages** from Ubuntu 24.04: PostgreSQL 16 with pgvector, Java 21 (Keycloak), Tesseract and
-   Ghostscript (OCR), python3-seccomp (reader sandbox), and the tools to build llama.cpp.
+3. **Packages** from Ubuntu 26.04 (PostgreSQL 18) or 24.04 (PostgreSQL 16): PostgreSQL with pgvector,
+   Java 21 (Keycloak), Tesseract and Ghostscript (OCR), python3-seccomp (reader sandbox), and the tools
+   to build llama.cpp.
 4. **Users**: ``suveryn`` (gateway), ``suveryn-llm`` (model server), ``keycloak``; the reader's
    ``suveryn-reader`` comes from ``reader-sandbox/provision-reader.sh``.
 5. **PostgreSQL**: databases ``suveryn`` and ``keycloak``, each with its own role and a random
@@ -105,11 +106,36 @@ UI = OPT / "ui"
 NODE = OPT / "node"
 LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
+# The Ubuntu releases this script installs on, and the PostgreSQL major version each one's archive has
+# with pgvector. 26.04 replaces 24.04 once the read-only system's image is built on it (#57).
+POSTGRES_FOR_UBUNTU = {"24.04": "16", "26.04": "18"}
+# Keycloak runs on Java 21 on both, by this path: 26.04 also has newer Java, which Keycloak's release
+# hasn't been checked on (#57). The appliance is x86-64 only (its GPU's CUDA).
+JAVA_HOME = Path("/usr/lib/jvm/java-21-openjdk-amd64")
+
+
+def ubuntu_release(root: Path = Path("/")) -> str:
+    """The Ubuntu release under ``root``: "26.04", say. Empty if it says none."""
+    f = root / "etc" / "os-release"
+    lines = f.read_text().splitlines() if f.exists() else []
+    return dict(line.split("=", 1) for line in lines if "=" in line).get("VERSION_ID", "").strip('"')
+
+
+def postgres_major(root: Path = Path("/")) -> str:
+    """The PostgreSQL major version for this system's Ubuntu release; stops on a release not supported."""
+    release = ubuntu_release(root)
+    if release not in POSTGRES_FOR_UBUNTU:
+        fail(f"this script supports Ubuntu {' and '.join(POSTGRES_FOR_UBUNTU)} only, not {release or 'this system'} "
+             "(PostgreSQL and pgvector come from its archive)")
+    return POSTGRES_FOR_UBUNTU[release]
+
+
 # What the services need at run time: the read-only system's image has exactly these (image/mkosi,
-# checked by its tests); an ordinary Ubuntu gets them, and the rest below, from apt.
+# checked by its tests); an ordinary Ubuntu gets them, and the rest below, from apt. {pg}: the
+# PostgreSQL major version for the release (postgres_major).
 RUNTIME_PACKAGES = [
     "nftables", "dnsmasq-base",
-    "postgresql-16", "postgresql-16-pgvector", "openjdk-21-jre-headless",
+    "postgresql-{pg}", "postgresql-{pg}-pgvector", "openjdk-21-jre-headless",
     "tesseract-ocr", "tesseract-ocr-nld", "tesseract-ocr-fra", "tesseract-ocr-eng", "ghostscript", "poppler-utils",
     "python3-seccomp", "nginx", "openssl", "sudo", "ca-certificates",
     # backups (backup/suveryn-backup, #33)
@@ -121,6 +147,11 @@ RUNTIME_PACKAGES = [
 # An ordinary Ubuntu only: its firewall and automatic updates (the read-only system has its own inbound
 # rules and gets fixes as sūveryn updates), and the tools to fetch and build the services.
 PACKAGES = ["ufw", "unattended-upgrades", *RUNTIME_PACKAGES, "git", "curl", "cmake", "build-essential", "libssl-dev"]
+
+
+def for_postgres(names: list[str], pg: str) -> list[str]:
+    """A package list with the PostgreSQL major version filled in."""
+    return [n.format(pg=pg) for n in names]
 READER_WRAPPER = "sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"
 # What the reader needs from the gateway's environment, kept by sudo for that one target user (env_keep).
 # Not SETENV or --preserve-env: SETENV would let the gateway pass the reader any variable.
@@ -321,11 +352,9 @@ def network_mode(mode: str | None, outbound: str | None = None) -> None:
 
 # ---------------------------------------------------------------------------- 3-4. packages and users
 def packages() -> None:
-    step("Packages (Ubuntu 24.04)")
-    release = dict(line.split("=", 1) for line in Path("/etc/os-release").read_text().splitlines() if "=" in line)
-    if release.get("VERSION_ID", "").strip('"') != "24.04":
-        fail("this script supports Ubuntu 24.04 only (PostgreSQL 16 and pgvector come from its archive)")
-    missing = [p for p in PACKAGES if subprocess.run(["dpkg", "-s", p], capture_output=True).returncode != 0]
+    step(f"Packages (Ubuntu {ubuntu_release() or '?'})")
+    wanted = for_postgres(PACKAGES, postgres_major())
+    missing = [p for p in wanted if subprocess.run(["dpkg", "-s", p], capture_output=True).returncode != 0]
     if missing:
         env = {"DEBIAN_FRONTEND": "noninteractive"}
         run("apt-get", "update", "-qq", env=env, capture=True)  # apt's output only when it fails
@@ -397,24 +426,26 @@ def ensure_cluster() -> None:
     has none, so its first boot makes it on the data partition (/etc/postgresql links there, #47)."""
     if subprocess.run(["pg_lsclusters", "-h"], capture_output=True, text=True).stdout.strip():
         return
-    run("pg_createcluster", "16", "main", capture=True)
+    pg = postgres_major()
+    run("pg_createcluster", pg, "main", capture=True)
     if systemd_running():
-        run("systemctl", "daemon-reload")  # its generator adds postgresql@16-main for the new cluster
-    note("cluster 16/main made")
+        run("systemctl", "daemon-reload")  # its generator adds postgresql@<major>-main for the new cluster
+    note(f"cluster {pg}/main made")
 
 
 def start_postgres() -> None:
     ensure_cluster()
+    pg = postgres_major()
     if systemd_running() and read_only_system():
-        run("systemctl", "start", "postgresql@16-main")  # enabled in the image: /etc can't be written here
+        run("systemctl", "start", f"postgresql@{pg}-main")  # enabled in the image: /etc can't be written here
     elif systemd_running():
         run("systemctl", "enable", "--now", "postgresql")
-    elif subprocess.run(["pg_ctlcluster", "16", "main", "status"], capture_output=True).returncode != 0:
-        start_daemon(["pg_ctlcluster", "16", "main", "start"], "PostgreSQL")
+    elif subprocess.run(["pg_ctlcluster", pg, "main", "status"], capture_output=True).returncode != 0:
+        start_daemon(["pg_ctlcluster", pg, "main", "start"], "PostgreSQL")
 
 
 def postgres() -> tuple[str, str]:
-    step("PostgreSQL 16 + pgvector")
+    step(f"PostgreSQL {postgres_major()} + pgvector")
     start_postgres()
     gw, kc = read_env(ETC / "gateway.env"), read_env(ETC / "keycloak.env")
     db_url = gw.get("SUVERYN_DATABASE_URL")
@@ -686,7 +717,7 @@ def keycloak_software() -> None:
     run(UV, "run", "-q", REPO / "keycloak" / "theme" / "build_theme.py", cwd=REPO, env={"UV_CACHE_DIR": str(VAR / "uv-cache")})
     shutil.copy2(REPO / "keycloak" / "theme" / "build" / "suveryn-keycloak-theme.jar", KEYCLOAK / "providers")
     run("chown", "-R", "keycloak:keycloak", KEYCLOAK)
-    run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", capture=True)
+    run(KEYCLOAK / "bin" / "kc.sh", "build", user="keycloak", env={"JAVA_HOME": str(JAVA_HOME)}, capture=True)
     built.write_text(keycloak_built_as())
     note("Keycloak built with the sūveryn theme")
 
@@ -716,8 +747,8 @@ def keycloak(public_url: str, keycloak_pw: str, administrator: Path | None = Non
         os.chown(realm_file, pwd.getpwnam("keycloak").pw_uid, 0)
         os.chmod(out, 0o711)
         try:
-            run(KEYCLOAK / "bin" / "kc.sh", "import", "--file", realm_file, "--optimized", user="keycloak", env=kc_env,
-                capture=True)
+            run(KEYCLOAK / "bin" / "kc.sh", "import", "--file", realm_file, "--optimized", user="keycloak",
+                env={**kc_env, "JAVA_HOME": str(JAVA_HOME)}, capture=True)
         finally:
             realm_file.unlink(missing_ok=True)  # it holds the client secret
         shutil.move(out / "gateway-oidc.env", oidc)
@@ -734,7 +765,6 @@ def reader_sudoers() -> str:
     """The gateway's sudo rule for the reader. The read-only system has the same file built in
     (image/mkosi/services/etc/sudoers.d/suveryn-reader; image/mkosi/test checks they agree)."""
     return ("# suveryn-core's gateway starts its PDF reader as suveryn-reader (reader-sandbox/README.md).\n"
-            "Defaults:suveryn !requiretty\n"
             f'Defaults>suveryn-reader env_keep += "{READER_ENV}"\n'
             "suveryn ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *\n")
 
@@ -1653,7 +1683,7 @@ def restore(a: argparse.Namespace) -> None:
     boot's answers, the backup's databases and settings (backup/suveryn-backup restore), then what this
     machine adds itself: its models from the installed bundles, the network mode applied, the name, the
     trust bundle, the services started, verified. Its identity stays its own (#35)."""
-    step("PostgreSQL 16 + pgvector")
+    step(f"PostgreSQL {postgres_major()} + pgvector")
     postgres()  # the cluster and the roles, with passwords of their own until the backup's settings set theirs
     step("Restoring the backup")
     cmd = [sys.executable, "-I", str(BACKUP_TOOL), "--settings", str(a.settings),
