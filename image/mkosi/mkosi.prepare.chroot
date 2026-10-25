@@ -1,0 +1,12 @@
+#!/bin/bash
+# Inside the image, after the packages and before mkosi's first depmod.
+#
+# Ubuntu 26.04's linux-modules-nvidia-580-open-<kernel> ships an empty folder
+# /lib/modules/kernel/nvidia-580-open/. mkosi 26 takes /usr/lib/modules/kernel for a kernel version,
+# because it isn't empty, and the build stops in "depmod --all kernel" ("Bad version passed kernel";
+# VM check of #57). It goes while it holds folders only.
+set -euo pipefail
+d=${SUVERYN_STRAY_MODULES:-/usr/lib/modules/kernel}  # the tests point it elsewhere
+if [ -d "$d" ] && [ ! -L "$d" ] && [ -z "$(find "$d" ! -type d -print -quit)" ]; then
+  rm -rf "$d"
+fi
