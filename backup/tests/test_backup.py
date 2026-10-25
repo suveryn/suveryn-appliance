@@ -272,6 +272,43 @@ def test_the_newest_backup_on_a_target_is_checked_and_restored_by_settings_given
     assert r.returncode == 1 and json.loads(r.stdout)["step"] == "target"
 
 
+@needs
+def test_a_replacement_with_a_name_of_its_own_finds_the_offices_backups(appliance, tmp_path):
+    """VM check of #57: the replacement looked only under its own name and said "there is no backup on the
+    target". It looks under every appliance's name, takes the newest, and never follows a link."""
+    env, var = appliance["env"], appliance["var"]
+    assert tool(env, "run").returncode == 0
+    (var / "host" / "hostname").write_text("suveryn-4f2a\n")  # the replacement, before the restore names it
+    given = tmp_path / "restore-settings.json"
+    given.write_text(json.dumps({"target": "folder", "path": str(appliance["target"])}))
+    env = {**env, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "none.json")}
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["key"])
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["usable"] and out["appliance"] == "test-appliance", r.stdout
+    # an older appliance's backup, and a link to somewhere else, are passed over
+    older = appliance["target"] / "suveryn-backups" / "old-appliance"
+    older.mkdir()
+    newest = out["file"]
+    shutil.copy(appliance["target"] / "suveryn-backups" / "test-appliance" / newest,
+                older / "suveryn-backup_old-appliance_20200101T000000Z.tar.zst.age")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    shutil.copy(older / "suveryn-backup_old-appliance_20200101T000000Z.tar.zst.age",
+                elsewhere / "suveryn-backup_linked_20990101T000000Z.tar.zst.age")
+    (appliance["target"] / "suveryn-backups" / "linked").symlink_to(elsewhere)
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["key"])
+    assert json.loads(r.stdout)["file"] == newest
+    r = tool(env, "--settings", given, "check", "suveryn-backup_old-appliance_20200101T000000Z.tar.zst.age", "--on-target",
+             "--json", "--identity", appliance["key"])
+    assert r.returncode == 0 and json.loads(r.stdout)["usable"], r.stdout  # an older one, by name, under its own folder
+    r = tool(env, "--settings", given, "check", "suveryn-backup_linked_20990101T000000Z.tar.zst.age", "--on-target", "--json",
+             "--identity", appliance["key"])
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "target"
+    psql("DELETE FROM chunks", appliance["dbs"][0])
+    r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
+    assert r.returncode == 0 and psql("SELECT count(*) FROM chunks", appliance["dbs"][0]) == "2", r.stdout
+
+
 # ---------------------------------------------------------------------------- a backup someone else made
 # Anyone with the office's public key can make a file the recovery key opens (the audit of 25 October
 # 2026, findings 2 and 8). Restoring must act only on what this appliance expects, and change the live

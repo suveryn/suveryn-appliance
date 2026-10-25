@@ -557,3 +557,20 @@ def test_backups_are_in_the_image_nightly_and_without_rpcbind():
     assert "Persistent=true" in timer and "OnCalendar=*-*-* 02:30:00" in timer
     tmpfiles = (SERVICES / "usr/lib/tmpfiles.d/suveryn-services.conf").read_text()
     assert re.search(r"^d /var/lib/suveryn/backup\s+0755 root\s+root", tmpfiles, re.M)
+
+
+def test_the_nvidia_packages_empty_modules_folder_doesnt_stop_the_build(tmp_path):
+    """VM check of #57: Ubuntu's NVIDIA modules package ships an empty /lib/modules/kernel/, which mkosi 26
+    took for a kernel version. The prepare script removes it while it holds folders only."""
+    import os
+    import subprocess
+    script = MKOSI / "mkosi.prepare.chroot"
+    assert os.access(script, os.X_OK)
+    stray = tmp_path / "kernel"
+    (stray / "nvidia-580-open").mkdir(parents=True)
+    subprocess.run([script, "final"], env={"SUVERYN_STRAY_MODULES": str(stray), "PATH": "/usr/bin:/bin"}, check=True)
+    assert not stray.exists()
+    (stray / "nvidia-580-open").mkdir(parents=True)
+    (stray / "nvidia-580-open" / "nvidia.ko").write_text("a module")
+    subprocess.run([script, "final"], env={"SUVERYN_STRAY_MODULES": str(stray), "PATH": "/usr/bin:/bin"}, check=True)
+    assert (stray / "nvidia-580-open" / "nvidia.ko").exists()  # a folder with files is never removed

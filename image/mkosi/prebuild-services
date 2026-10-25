@@ -7,7 +7,8 @@
 #   llama-server      the pinned llama.cpp with CUDA, and the CUDA libraries it links against
 #   Keycloak          the pinned release built with the sūveryn theme (its data folder left out)
 #   the chat UI       built with the pinned Node
-# The host must be what the image is: Ubuntu 26.04 with CUDA 13.2 (#57). A GPU isn't
+# The host must be what the image is: Ubuntu 26.04 with CUDA 13.4 (#57; NVIDIA's 26.04 repository has
+# 13.1, 13.3 and 13.4, not the 13.2 first planned). A GPU isn't
 # needed; it installs Python, Java and the build tools itself. It writes /opt/suveryn and /opt/keycloak
 # on the host, as image/prebuild.sh does.
 #   sudo image/mkosi/prebuild-services
@@ -21,7 +22,7 @@ out=$mkosi_dir/prebuilt
 # Python starts suveryn-provision, which installs the rest of the build tools itself (a bare CUDA image has none).
 command -v python3 >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3; }
 PATH=/usr/local/cuda/bin:$PATH
-nvcc --version | grep -q "release 13.2" || { echo "the host needs CUDA 13.2, the release the image's llama-server is built with" >&2; exit 1; }
+nvcc --version | grep -q "release 13.4" || { echo "the host needs CUDA 13.4, the release the image's llama-server is built with" >&2; exit 1; }
 python3 "$repo/provision/suveryn-provision" prebuild --read-only-image
 grep -q "^GGML_NATIVE:BOOL=OFF" /opt/suveryn/llama.cpp/build/CMakeCache.txt \
   || { echo "/opt/suveryn/llama.cpp was built for this host, not the image; remove its build folder and run again" >&2; exit 1; }

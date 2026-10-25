@@ -3,6 +3,7 @@
 # (tracker #37): run-vm-tests drives those screens against the appliance's setup service. Never
 # committed; the appliance image gets the UI with the sūveryn services (#39).
 #   image/mkosi/test/make-test-ui [path/to/suveryn-core]     (before: mkosi -f --profile test build)
+# Needs npm: a build host has the pinned Node in /opt/suveryn/node/bin (PATH=/opt/suveryn/node/bin:$PATH).
 set -eu
 cd "$(dirname "$0")"
 core=$(cd "${1:-../../../../suveryn-core}" && pwd)
