@@ -69,7 +69,7 @@ send without the browser asking first. The service logs method, path and status 
 
 - **check**: `suveryn-backup --settings <target> check newest --on-target --json --identity <key>`;
   the result says `checked` with the backup, or `failed` with `wrong_key`, `no_backup`, `unreachable`,
-  `damaged` or `invalid`.
+  `damaged`, `newer` (made with a newer PostgreSQL than this appliance's, #57) or `invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file checked>`, its
   `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old
   appliance's network mode and name) and **services**. The key and the share's password are deleted

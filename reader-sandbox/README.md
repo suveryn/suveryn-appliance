@@ -46,12 +46,12 @@ below, set `SUVERYN_EXTRACT_WRAPPER="sudo -n -u suveryn-reader /opt/suveryn/bin/
 ([`provision/suveryn-provision`](../provision/README.md) does both):
 
 ```
-Defaults:<gateway-user> !requiretty
 Defaults>suveryn-reader env_keep += "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
 <gateway-user> ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *
 ```
 
-`env_keep` keeps exactly the variables the reader needs, for that one target user. sudo refuses
+`env_keep` keeps exactly the variables the reader needs, for that one target user. There is no
+`!requiretty` line: Ubuntu's sudo never asks for a terminal, and 26.04's sudo-rs refuses the setting (#57). sudo refuses
 `--preserve-env=…` without the `SETENV` tag, and `SETENV` would let the gateway pass the reader any
 variable, so neither is used.
 

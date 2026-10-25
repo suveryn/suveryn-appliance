@@ -318,6 +318,8 @@ def first_backup(appliance) -> Path:
     (lambda d, m: {**m, "appliance": "evil; rm -rf /"}, "name or date"),
     (lambda d, m: {**m, "created": "yesterday"}, "name or date"),
     (lambda d, m: [m], "manifest isn't readable"),
+    (lambda d, m: {**m, "postgresql": "18; DROP"}, "PostgreSQL version isn't one"),
+    (lambda d, m: {**m, "postgresql": True}, "PostgreSQL version isn't one"),
 ])
 def test_a_manifest_that_isnt_this_appliances_is_refused_before_anything_changes(appliance, change, says):
     env, var, gw_db = appliance["env"], appliance["var"], appliance["dbs"][0]
@@ -332,6 +334,29 @@ def test_a_manifest_that_isnt_this_appliances_is_refused_before_anything_changes
     assert r.returncode == 1 and "restore failed (read)" in r.stdout and says in r.stdout, r.stdout
     assert (outside / "keep").exists() and (var / "etc" / "gateway.env").exists()
     assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
+
+
+@needs
+def test_a_backup_records_its_postgresql_and_one_from_a_newer_postgresql_is_refused(appliance):
+    """#57: 24.04's PostgreSQL 16, 26.04's 18. A dump restores into the same or a newer version only."""
+    env, gw_db = appliance["env"], appliance["dbs"][0]
+    backup = first_backup(appliance)
+    here = int(psql("SHOW server_version_num")) // 10000
+    plain = subprocess.run(f'age -d -i "{appliance["key"]}" "{backup}" | zstd -q -d -c | tar -xOf - manifest.json',
+                           shell=True, capture_output=True, check=True).stdout
+    assert json.loads(plain)["postgresql"] == here
+    newer = remade(appliance, backup, lambda d, m: {**m, "postgresql": here + 2})
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    r = tool(env, "check", newer, "--identity", appliance["key"])
+    assert r.returncode == 1 and f"made with PostgreSQL {here + 2}, newer than this appliance's {here}" in r.stdout, r.stdout
+    r = tool(env, "restore", newer, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and "restore failed (version)" in r.stdout, r.stdout
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
+    # Made before #57 (no version: PostgreSQL 16), or with an older version: restored.
+    older = remade(appliance, backup, lambda d, m: {k: v for k, v in m.items() if k != "postgresql"})
+    r = tool(env, "restore", older, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "2"
 
 
 @needs
