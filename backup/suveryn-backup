@@ -38,6 +38,11 @@ dumps and the four folders above; the manifest's databases must be this applianc
 among the four, its name a host name and its date a date. Owners and paths come from this appliance,
 never from the manifest. Anything else and the backup is refused before anything is changed.
 
+**PostgreSQL versions.** The manifest records the PostgreSQL major version the backup was made with
+(16 on Ubuntu 24.04, 18 on 26.04; a backup without it was made with 16). A backup restores onto the
+same or a newer version, so an office moves from a 24.04 appliance to a 26.04 one by a restore; a
+backup from a newer version is refused before anything is changed (#57).
+
 **A restore changes the live system at one moment, all or nothing.** The databases are restored
 beside the live ones (``<db>_restoring``) and the folders copied beside theirs (``<folder>.restoring``);
 only when every one has worked are the databases swapped in one transaction (the live ones renamed
@@ -269,6 +274,11 @@ def versions() -> dict:
     return out
 
 
+def postgres_major() -> int:
+    """This appliance's PostgreSQL major version: 16 on Ubuntu 24.04, 18 on 26.04 (#57)."""
+    return int(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SHOW server_version_num"])).strip()) // 10000
+
+
 def make(s: dict) -> dict:
     """One backup onto the target; returns what the status records."""
     name, started = appliance_name(), dt.datetime.now(dt.timezone.utc)
@@ -284,7 +294,8 @@ def make(s: dict) -> dict:
             run("database", as_pg(["pg_dump", "--format=custom", "--file", out, db]))
             dumps.append(out)
         manifest = {"format": FORMAT, "created": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "appliance": name,
-                    "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions()}
+                    "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions(),
+                    "postgresql": postgres_major()}
         (work / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
         with Target(s) as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
@@ -457,8 +468,12 @@ def checked_manifest(m) -> dict:
     name, created = m.get("appliance"), m.get("created")
     if not isinstance(name, str) or not HOST_NAME.match(name) or not isinstance(created, str) or not UTC_TIME.match(created):
         raise Failed("read", "the backup's name or date isn't one")
+    pg = m.get("postgresql")  # absent in backups made before #57: those were all PostgreSQL 16
+    if pg is not None and (type(pg) is not int or not 9 <= pg <= 99):
+        raise Failed("read", "the backup's PostgreSQL version isn't one")
     return {"format": FORMAT, "created": created, "appliance": name, "databases": dict(DATABASES),
-            "files": [f for f in FILES if f in files], "versions": m.get("versions") if isinstance(m.get("versions"), dict) else {}}
+            "files": [f for f in FILES if f in files], "versions": m.get("versions") if isinstance(m.get("versions"), dict) else {},
+            "postgresql": pg or 16}
 
 
 def age_error(stderr: bytes | None) -> str:
@@ -470,7 +485,12 @@ def age_error(stderr: bytes | None) -> str:
 
 
 def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
-    """Each database dump readable by pg_restore: its number of entries."""
+    """Each database dump readable by pg_restore: its number of entries. A dump from an older PostgreSQL
+    restores into a newer one (a 24.04 appliance's backup onto 26.04, #57), never the other way."""
+    here = postgres_major()
+    if manifest["postgresql"] > here:
+        raise Failed("version", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
+                                f"appliance's {here}; restore it on an appliance with PostgreSQL {manifest['postgresql']} or later")
     out = {}
     for db in manifest["databases"]:
         listing = run("check", as_pg(["pg_restore", "--list", dest / "db" / f"{db}.dump"]))

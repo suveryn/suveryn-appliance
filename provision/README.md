@@ -1,7 +1,7 @@
 # Provisioning
 
 `suveryn-provision` installs and wires up every runtime service [suveryn-core](https://github.com/suveryn/suveryn-core)
-needs on a fresh Ubuntu 24.04 machine with an NVIDIA GPU, then checks them end to end. It is the
+needs on a fresh Ubuntu 26.04 or 24.04 machine with an NVIDIA GPU, then checks them end to end. It is the
 step before an OS image: run it directly on a test box; the image will run it at build or first boot.
 
 ```bash
@@ -20,10 +20,10 @@ Secrets are generated on the machine and never printed.
 
 | Service | How | Where |
 |---|---|---|
-| PostgreSQL 16 + pgvector | Ubuntu's packages; databases `suveryn` and `keycloak`, each with its own role and a random password; extension `vector`. suveryn-core creates its own tables when the gateway starts (`CREATE TABLE IF NOT EXISTS`), so there are no migrations | `127.0.0.1:5432` |
+| PostgreSQL + pgvector | Ubuntu's packages: PostgreSQL 18 on 26.04, 16 on 24.04 (24.04 goes once the image is built on 26.04, #57); databases `suveryn` and `keycloak`, each with its own role and a random password; extension `vector`. suveryn-core creates its own tables when the gateway starts (`CREATE TABLE IF NOT EXISTS`), so there are no migrations | `127.0.0.1:5432` |
 | suveryn-core | At the commit in [`versions.json`](versions.json), `uv sync --locked --all-packages --no-dev`; its embedding and Docling models with `suveryn-fetch-models` | `/opt/suveryn/core`, models in `/var/lib/suveryn/hf` |
 | llama-server | Built from llama.cpp at the pinned commit with CUDA; the LLM files from suveryn-core's `models/manifest.json`, each checked against its size and sha256; router presets written from the manifest | `127.0.0.1:8080`, files in `/var/lib/suveryn/models`, `/etc/suveryn/llama-presets.ini` |
-| Keycloak 26.8 | The pinned release (sha256 checked); the sūveryn theme ([`keycloak/theme`](../keycloak/theme/README.md)); the production realm ([`keycloak/realm`](../keycloak/realm/README.md): sslRequired all, 180-day events, exact redirect URLs, a new client secret, passwords of 15 characters, and with `first-boot --administrator FILE` the office's administrator from the web setup), imported once and the realm file deleted | `127.0.0.1:8180/idp`, management `127.0.0.1:9000` |
+| Keycloak 26.8 | The pinned release (sha256 checked), on Java 21 (`JAVA_HOME` in its unit, also where Ubuntu has newer Java); the sūveryn theme ([`keycloak/theme`](../keycloak/theme/README.md)); the production realm ([`keycloak/realm`](../keycloak/realm/README.md): sslRequired all, 180-day events, exact redirect URLs, a new client secret, passwords of 15 characters, and with `first-boot --administrator FILE` the office's administrator from the web setup), imported once and the realm file deleted | `127.0.0.1:8180/idp`, management `127.0.0.1:9000` |
 | The reader sandbox | [`reader-sandbox`](../reader-sandbox/README.md): user `suveryn-reader`, its inbox and work folder, the wrapper, and sudo for the gateway to start it as the reader. The gateway's `SUVERYN_EXTRACT_WRAPPER` points at it; `SUVERYN_EXTRACT_UNSANDBOXED` is never set | `/opt/suveryn/bin/suveryn-reader-sandbox`, `/var/lib/suveryn/{inbox,reader}` |
 | suveryn-core's gateway | systemd unit, user `suveryn` | `127.0.0.1:8000` |
 | Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` and `--outbound` (asked on a console when omitted). On the appliance (not on a test pod) also its enforcement: ufw for what comes in, the `suveryn-egress` rules and the `suveryn-dns` resolver for what goes out, and `/etc/resolv.conf` pointing at that resolver | `/etc/suveryn/network-mode.env`, `approved-destinations`, `dnsmasq.conf` |

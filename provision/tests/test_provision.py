@@ -250,20 +250,54 @@ def test_on_the_read_only_system_the_firewall_and_updates_are_the_images(monkeyp
     assert not any(a and a[0] == "ufw" for a in ran)
 
 
-def test_postgresqls_cluster_is_made_only_when_there_is_none(monkeypatch):
+@pytest.mark.parametrize("release, pg", [("24.04", "16"), ("26.04", "18")])
+def test_postgresqls_cluster_is_made_only_when_there_is_none(monkeypatch, release, pg):
     ran = []
     monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
     monkeypatch.setattr(p, "systemd_running", lambda: False)
+    monkeypatch.setattr(p, "ubuntu_release", lambda root=None: release)
 
     class Listed:
         def __init__(self, out):
             self.stdout = out
-    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed("16 main 5432 online postgres /var/lib/postgresql/16/main\n"))
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed(f"{pg} main 5432 online postgres /var/lib/postgresql/{pg}/main\n"))
     p.ensure_cluster()
     assert ran == []
     monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: Listed(""))
     p.ensure_cluster()
-    assert ran == [("pg_createcluster", "16", "main")]
+    assert ran == [("pg_createcluster", pg, "main")]
+
+
+def test_each_supported_ubuntu_gets_its_own_postgresql_and_others_are_refused(tmp_path):
+    """#57: 26.04's archive has PostgreSQL 18, 24.04's has 16; both with pgvector."""
+    (tmp_path / "etc").mkdir()
+    for release, pg in (("24.04", "16"), ("26.04", "18")):
+        (tmp_path / "etc/os-release").write_text(f'NAME="Ubuntu"\nVERSION_ID="{release}"\n')
+        assert p.ubuntu_release(tmp_path) == release and p.postgres_major(tmp_path) == pg
+        packages = p.for_postgres(p.PACKAGES, pg)
+        assert f"postgresql-{pg}" in packages and f"postgresql-{pg}-pgvector" in packages
+        assert not any("{" in name for name in packages)
+    (tmp_path / "etc/os-release").write_text('VERSION_ID="22.04"\n')
+    with pytest.raises(SystemExit):
+        p.postgres_major(tmp_path)
+    (tmp_path / "etc/os-release").unlink()
+    assert p.ubuntu_release(tmp_path) == ""
+
+
+def test_keycloak_runs_on_java_21_wherever_it_starts():
+    """26.04 also has newer Java; Keycloak is started on 21 by its unit and by provision's own runs (#57)."""
+    unit = (HERE / "systemd" / "keycloak.service").read_text()
+    assert f"Environment=JAVA_HOME={p.JAVA_HOME}" in unit
+    assert "java-21-" in str(p.JAVA_HOME) and "openjdk-21-jre-headless" in p.RUNTIME_PACKAGES
+    src = (HERE / "suveryn-provision").read_text()
+    for call in ('"build", user="keycloak"', '"import", "--file"'):
+        line = src[src.index(call):src.index("capture=True", src.index(call))]
+        assert '"JAVA_HOME"' in line, call
+
+
+def test_the_readers_sudo_rule_has_no_requiretty():
+    """26.04's sudo-rs refuses `!requiretty` (#57); Ubuntu's sudo never asked for a terminal anyway."""
+    assert "requiretty" not in p.reader_sudoers()
 
 
 def prebuilt_tree(root: Path) -> None:
