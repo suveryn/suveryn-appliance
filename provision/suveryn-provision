@@ -531,10 +531,11 @@ def llama_server() -> None:
         env = {"PATH": "/usr/local/cuda/bin:" + os.environ["PATH"]}
         # native: the card in this machine. An image is built without one, so it gets the generations a
         # 24-48 GB office card can be: Ampere (8.6: RTX A5000/A6000, 3090), Ada (8.9: RTX 4090, L40S),
-        # Hopper (9.0); plus 8.0 (A100).
+        # Hopper (9.0), Blackwell (12.0: RTX PRO 6000, 5090); plus 8.0 (A100). Each as machine code: the
+        # image's driver (580) can't compile CUDA 13.2's intermediate code for a card left out (#57).
         # Its CPU code likewise: native here, generic in an image (built on an emulated CPU, run on the office's).
         on_target = not for_image()
-        archs = "native" if on_target else "80;86;89;90"
+        archs = "native" if on_target else IMAGE_CUDA_ARCHITECTURES
         # No NCCL: one card doesn't need it, and llama.cpp turns it on by itself when the build host has it.
         # A host without a driver (an image build) links against the toolkit's stub of libcuda.so.1.
         link = [f"-DCMAKE_EXE_LINKER_FLAGS=-Wl,-rpath-link,{d}"] if (d := cuda_stub_dir()) else []
@@ -545,6 +546,10 @@ def llama_server() -> None:
             env=env, capture=True)
     run("chmod", "-R", "a+rX", LLAMA)
     note(f"llama.cpp {v['tag']} ({v['commit'][:7]}): {binary}")
+
+
+# The GPU generations the image's llama-server carries machine code for (llama_server).
+IMAGE_CUDA_ARCHITECTURES = "80;86;89;90;120"
 
 
 def cuda_stub_dir() -> Path | None:
