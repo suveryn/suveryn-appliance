@@ -198,7 +198,8 @@ it against `realm-lock.json`'s sha256.
 Built and inspected on a virtual machine (22 and 23 October 2026): slot A holds 14.5 GiB of its 32,
 13 GB of it the services; the prebuild takes about 7 minutes on 32 cores. mkosi needs a host where it
 may create namespaces (a virtual or real machine, not a container like a RunPod pod); the prebuild runs
-in an Ubuntu 24.04 + CUDA 12.8 container or machine, with no GPU. The
+in an Ubuntu 26.04 + CUDA 13.2 container or machine, with no GPU. Those figures are from the 24.04
+image; the image is built on 26.04 since #57. The
 Packer build stays for developing and testing suveryn-core on a Pod.
 
 ### Backups (#33)
@@ -279,7 +280,7 @@ Details are #43's.
 
 ## How it's built
 
-**Proposal: build the image with mkosi** (systemd's image builder, in Ubuntu 24.04) instead of
+**Proposal: build the image with mkosi** (systemd's image builder, in Ubuntu's archive) instead of
 installing Ubuntu inside a Packer/QEMU machine. mkosi builds the read-only system, its verity, the
 boot file and the partition definitions directly from Ubuntu's packages, reproducibly, without
 running an installer. The current provisioning steps run inside it unchanged (`suveryn-provision

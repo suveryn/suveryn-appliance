@@ -384,6 +384,19 @@ def image_release() -> str:
     return {"noble": "24.04", "resolute": "26.04"}[codename]
 
 
+def test_the_image_is_ubuntu_26_04_with_its_own_boot_file():
+    """#57: resolute, from the archive over HTTPS; mkosi 26 reads UnifiedKernelImages=yes as a prebuilt,
+    distribution-signed boot file, which Ubuntu doesn't ship, so ours is built (unsigned until #45)."""
+    conf = (MKOSI / "mkosi.conf").read_text()
+    assert image_release() == "26.04"
+    assert re.search(r"^UnifiedKernelImages=unsigned$", conf, re.M)
+    sources = (MKOSI / "mkosi.sandbox/etc/apt/sources.list.d/mkosi.sources").read_text()
+    assert "Suites: resolute resolute-updates" in sources and "Suites: resolute-security" in sources
+    assert "noble" not in sources and "http://" not in sources
+    # 26.04 splits these off systemd; the installer stopped without systemd-repart (run-vm-tests, #57)
+    assert {"systemd-repart", "systemd-cryptsetup"} <= packages(MKOSI / "mkosi.conf")
+
+
 def test_the_image_has_every_package_the_services_need_at_run_time():
     """provision's RUNTIME_PACKAGES: what an ordinary Ubuntu gets from apt, the image has built in."""
     have = set()

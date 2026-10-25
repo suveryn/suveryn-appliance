@@ -306,7 +306,7 @@ def prebuilt_tree(root: Path) -> None:
                     ("keycloak/.suveryn-built", p.keycloak_built_as()), ("suveryn/ui/.suveryn-built", p.ui_built_as()),
                     ("suveryn/core/.venv/bin/suveryn-gateway", ""), ("suveryn/core/.venv/bin/python", ""),
                     ("suveryn/llama.cpp/build/bin/llama-server", ""), ("keycloak/bin/kc.sh", ""), ("suveryn/ui/index.html", ""),
-                    ("suveryn/lib/cuda/libcudart.so.12", ""), ("suveryn/hf/hub/models--x/config.json", "")):
+                    ("suveryn/lib/cuda/libcudart.so.13", ""), ("suveryn/hf/hub/models--x/config.json", "")):
         (o / f).parent.mkdir(parents=True, exist_ok=True)
         (o / f).write_text(text)
 
@@ -315,7 +315,7 @@ def test_the_prebuilt_services_must_be_the_pinned_ones_and_complete(tmp_path):
     prebuilt_tree(tmp_path)
     assert p.prebuilt_problems(tmp_path) == []
     (tmp_path / "opt/suveryn/core/.suveryn-built").write_text("suveryn-core@0000000\n")
-    (tmp_path / "opt/suveryn/lib/cuda/libcudart.so.12").unlink()
+    (tmp_path / "opt/suveryn/lib/cuda/libcudart.so.13").unlink()
     (tmp_path / "opt/suveryn/core/.git").mkdir()
     problems = p.prebuilt_problems(tmp_path)
     assert len(problems) == 3
@@ -448,3 +448,11 @@ def test_without_the_temporary_administrator_verify_says_the_sign_in_check_was_n
     first_boot = src[src.index("def first_boot("):src.index("def first_boot_config(")]
     assert first_boot.index("verify(a.public_url)") < first_boot.index("retire_bootstrap_admin(") < first_boot.index("FIRST_BOOT_DONE.write_text")
     assert "if ok and not staging:" in first_boot  # a test machine keeps it
+
+
+def test_the_images_llama_server_carries_machine_code_for_every_office_card():
+    """CUDA 13.2 with driver 580: a card without machine code would need the driver to compile CUDA 13.2's
+    intermediate code, which 580 can't (#57). So every generation an office card can be is listed."""
+    assert p.IMAGE_CUDA_ARCHITECTURES.split(";") == ["80", "86", "89", "90", "120"]
+    src = (HERE / "suveryn-provision").read_text()
+    assert '"native" if on_target else IMAGE_CUDA_ARCHITECTURES' in src

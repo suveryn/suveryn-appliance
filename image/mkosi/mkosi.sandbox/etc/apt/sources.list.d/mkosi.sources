@@ -3,12 +3,12 @@
 # Canonical (#47).
 Types: deb
 URIs: https://archive.ubuntu.com/ubuntu
-Suites: noble noble-updates
+Suites: resolute resolute-updates
 Components: main universe restricted
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 
 Types: deb
 URIs: https://security.ubuntu.com/ubuntu
-Suites: noble-security
+Suites: resolute-security
 Components: main universe restricted
 Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg

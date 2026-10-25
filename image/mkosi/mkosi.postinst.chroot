@@ -28,8 +28,8 @@ if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
   visudo -cqf /etc/sudoers.d/suveryn-reader
   # PostgreSQL's cluster is made at first boot on the data partition (suveryn-provision first-boot),
   # with its configuration there too: drop the one the package made in the image.
-  if pg_lsclusters -h 2>/dev/null | grep -q '^16 main '; then pg_dropcluster 16 main; fi
-  rm -rf /var/lib/postgresql/16
+  if pg_lsclusters -h 2>/dev/null | grep -q '^18 main '; then pg_dropcluster 18 main; fi
+  rm -rf /var/lib/postgresql/18
   # sūveryn itself, from prebuilt/ (prebuild-services on a Pod): the build stops unless each part is the
   # pinned one. Read-only for every service: owned by root.
   python3 -I /opt/suveryn/appliance/provision/suveryn-provision check-prebuilt
