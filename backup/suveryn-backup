@@ -37,6 +37,12 @@ what this appliance expects: the archive may hold only the manifest, this applia
 dumps and the four folders above; the manifest's databases must be this appliance's, its folders
 among the four, its name a host name and its date a date. Owners and paths come from this appliance,
 never from the manifest. Anything else and the backup is refused before anything is changed.
+Nor is it trusted to be small: unpacking stops at 10,000 entries, 256 MiB of folders, or before the
+data partition would be full.
+
+**All or nothing.** The databases and folders are restored beside the live ones, the databases swapped
+in one transaction, then the folders and the roles' passwords. The old databases and folders are kept
+until every step has worked; a failure after the swap puts them back.
 
 **PostgreSQL versions.** The manifest records the PostgreSQL major version the backup was made with
 (16 on Ubuntu 24.04, 18 on 26.04; a backup without it was made with 16). A backup restores onto the
@@ -77,6 +83,11 @@ MOUNT = Path(ENV("SUVERYN_BACKUP_MOUNT", "/run/suveryn/backup-target"))
 # The office's part of the data partition (docs/design/appliance-architecture.md, "Where the office's
 # settings live"), relative to VAR.
 FILES = ["etc", "host", "network", "nginx"]
+# Bounds on what a backup may unpack to (unpack): the four folders hold settings, certificates and the
+# web server's configuration, a few MB; the dumps are bounded by the free space, less a reserve.
+MAX_ENTRIES = 10_000
+MAX_FOLDER_BYTES = 256 * 2**20
+UNPACK_RESERVE = 2 * 2**30
 # database: its owner (the role the services use; restore keeps it the owner)
 DATABASES = dict(d.split(":") for d in ENV("SUVERYN_BACKUP_DATABASES", "suveryn:suveryn,keycloak:keycloak").split(","))
 # The PostgreSQL superuser the dumps and restores run as (peer authentication on the appliance).
@@ -391,18 +402,40 @@ def cmd_list(a) -> int:
 
 
 # ---------------------------------------------------------------------------- reading a backup back
+def unpack_budget(dest: Path) -> int:
+    """How many bytes a backup may unpack to in ``dest``: the free space, less what the appliance keeps
+    for itself (audit of 25 October 2026, finding 3)."""
+    if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_UNPACK_BUDGET"):
+        return int(ENV("SUVERYN_BACKUP_TEST_UNPACK_BUDGET"))
+    free = shutil.disk_usage(dest).free
+    return free - max(UNPACK_RESERVE, free // 10)
+
+
 def unpack(file: Path, identity: Path, dest: Path) -> dict:
-    """Decrypt and unpack into ``dest`` (on the data partition, 0700); the manifest, checked."""
+    """Decrypt and unpack into ``dest`` (on the data partition, 0700); the manifest, checked.
+
+    Within bounds: anyone with the public half of the recovery key can make a file this appliance
+    decrypts, so a backup is never trusted to be small. At most ``MAX_ENTRIES`` entries, the four
+    folders at most ``MAX_FOLDER_BYTES`` together, and everything within ``unpack_budget``: unpacking
+    stops before a crafted backup can fill the data partition."""
     age = subprocess.Popen(["age", "--decrypt", "--identity", str(identity), str(file)], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
     zstd = subprocess.Popen(["zstd", "-q", "-d", "-c"], stdin=age.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     age.stdout.close()
-    problem = None
+    problem, budget, entries, total, folders = None, unpack_budget(dest), 0, 0, 0
     try:
         with tarfile.open(fileobj=zstd.stdout, mode="r|") as tar:
             for member in tar:
                 if not expected_entry(member):
                     raise Failed("read", f"unexpected entry in the backup: {member.name[:120]!r}")
+                entries, total = entries + 1, total + max(member.size, 0)
+                folders += max(member.size, 0) if member.name.startswith("files/") else 0
+                if entries > MAX_ENTRIES:
+                    raise Failed("read", f"the backup holds more than {MAX_ENTRIES} entries")
+                if folders > MAX_FOLDER_BYTES:
+                    raise Failed("read", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
+                if total > budget:
+                    raise Failed("read", "the backup unpacks to more than this appliance has room for")
                 tar.extract(member, dest, filter="data")
     except (tarfile.TarError, OSError) as e:
         problem = str(e)
@@ -615,29 +648,27 @@ def restore_file(a, file: Path) -> int:
             except Failed:
                 discard_staged(manifest)
                 raise
-            for f in manifest["files"]:  # renames on the data partition: these don't fail halfway
-                target, replaced = folder_beside(f, None), folder_beside(f, "replaced")
-                if replaced.exists():
-                    shutil.rmtree(replaced)
-                if target.exists() and not target.is_symlink():
-                    os.rename(target, replaced)
-                os.rename(folder_beside(f, "restoring"), target)
-                if replaced.exists():
-                    shutil.rmtree(replaced)
+            # From here the restore is all or nothing too: until every folder is in place and the roles'
+            # passwords are set, the old folders (<f>.replaced) and databases (<db>_replaced) are kept, and
+            # a failure puts them back (audit of 25 October 2026, finding 2).
+            moved: list[tuple[str, bool]] = []
+            try:
+                swap_folders(manifest["files"], moved)
+                set_role_passwords(manifest)
+            except Failed as e:
+                put_back(manifest, moved)
+                raise Failed(e.step, f"{e}; the appliance was put back as it was") from None
+            for f in manifest["files"]:  # done: what was replaced goes
+                shutil.rmtree(folder_beside(f, "replaced"), ignore_errors=True)
             for db in manifest["databases"]:
                 subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]), capture_output=True)
-            sql = "".join(f"ALTER ROLE \"{role}\" PASSWORD '{pw.replace(chr(39), chr(39) * 2)}';\n"
-                          for role, pw in role_passwords(VAR / "etc").items() if role in manifest["databases"].values())
-            if sql:
-                r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input=sql,
-                                   capture_output=True, text=True)
-                if r.returncode != 0:
-                    raise Failed("database", "setting the roles' passwords failed")
             if systemd:
                 run("services", ["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"])
-        except Failed as e:
-            if systemd:  # whatever failed, the office's services run again on what is there
+        except Exception as e:  # noqa: BLE001 - whatever failed, the services run again and the reason is said
+            if systemd:  # the office's services run again on what is there
                 subprocess.run(["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"], check=False)
+            if not isinstance(e, Failed):  # its message could name a path; the type says enough
+                e = Failed("restore", f"unexpected {type(e).__name__}")
             say(f"restore failed ({e.step}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
@@ -664,6 +695,65 @@ def discard_staged(manifest: dict) -> None:
         staged = folder_beside(f, "restoring")
         if staged.is_dir() and not staged.is_symlink():
             shutil.rmtree(staged, ignore_errors=True)
+
+
+def swap_folders(files: list[str], moved: list[tuple[str, bool]]) -> None:
+    """The restored folders into place: each live one to ``<f>.replaced``, each restored one to ``<f>``.
+    ``moved`` records what was done, for ``put_back``: (folder, whether a live one was set aside), added
+    before the restored one goes into place."""
+    for f in files:
+        target, replaced, staged = folder_beside(f, None), folder_beside(f, "replaced"), folder_beside(f, "restoring")
+        try:
+            if replaced.exists():
+                shutil.rmtree(replaced)  # a leftover; the live folder is still in place
+            had = target.exists() and not target.is_symlink()
+            if had:
+                os.rename(target, replaced)
+            moved.append((f, had))
+            if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_FAIL_FOLDER") == f:
+                raise OSError(5, "a failure the tests make")
+            os.rename(staged, target)
+        except OSError as e:
+            raise Failed("files", f"putting the restored {f} folder in place failed: {e.strerror or e}") from None
+
+
+def set_role_passwords(manifest: dict) -> None:
+    """The roles' passwords from the restored settings, in one transaction: all of them or none."""
+    sql = "".join(f"ALTER ROLE \"{role}\" PASSWORD '{pw.replace(chr(39), chr(39) * 2)}';\n"
+                  for role, pw in role_passwords(VAR / "etc").items() if role in manifest["databases"].values())
+    if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_FAIL_ROLES") == "1":
+        sql += "SELECT 1 / 0;\n"  # the tests: a failure after the first password, inside the transaction
+    if sql:
+        r = subprocess.run(as_pg(["psql", "-q", "-1", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input=sql,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            raise Failed("database", "setting the roles' passwords failed")
+
+
+def put_back(manifest: dict, moved: list[tuple[str, bool]]) -> None:
+    """After the databases were swapped, a later step failed: the restored folders out again, the live ones
+    back, and the databases swapped back in one transaction. Then what was restored is discarded."""
+    for f, had in reversed(moved):
+        target, replaced, staged = folder_beside(f, None), folder_beside(f, "replaced"), folder_beside(f, "restoring")
+        if not staged.exists() and target.exists():
+            os.rename(target, staged)  # the restored one had gone into place
+        if had and replaced.exists():
+            os.rename(replaced, target)
+    names = ", ".join("'" + n.replace("'", "''") + "'" for db in manifest["databases"] for n in (db, f"{db}_replaced"))
+    live = set(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
+    quote = lambda name: '"' + name.replace('"', '""') + '"'  # noqa: E731 - names are this appliance's own (DATABASES)
+    sql = [f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ({names}) AND pid <> pg_backend_pid();",
+           "BEGIN;"]
+    for db in manifest["databases"]:
+        sql.append(f"ALTER DATABASE {quote(db)} RENAME TO {quote(db + '_restoring')};")
+        if f"{db}_replaced" in live:
+            sql.append(f"ALTER DATABASE {quote(db + '_replaced')} RENAME TO {quote(db)};")
+    sql.append("COMMIT;")
+    r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input="\n".join(sql) + "\n",
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Failed("database", "putting the old databases back failed: they are kept as <name>_replaced")
+    discard_staged(manifest)
 
 
 def swap_databases(databases: dict) -> None:
