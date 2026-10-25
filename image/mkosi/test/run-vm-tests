@@ -555,7 +555,8 @@ def main() -> int:
 
     note("10. a changed block in slot A")
     changed = work / "target-changed.raw"
-    shutil.copyfile(target, changed)
+    # Sparse, as the disk is: a plain copy writes out all 6 GiB (the cloud check ran out of space, #57).
+    subprocess.run(["cp", "--sparse=always", target, changed], check=True)
     layout = subprocess.run(["sfdisk", "--json", str(changed)], capture_output=True, text=True, check=True).stdout
     part = json.loads(layout)["partitiontable"]["partitions"][1]
     offset = (part["start"] + part["size"] // 2) * 512 + 123
