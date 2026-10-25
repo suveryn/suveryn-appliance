@@ -44,12 +44,23 @@ By hand, as root:
 
 1. Put the recovery key in a file on the appliance (from the office's offline copy) and the backup on
    a USB disk or the share.
-2. `suveryn-backup check` it, then `suveryn-backup restore … --yes`. The services stop; both databases
-   are replaced: each is restored beside the live one first, and only once that has worked is the live
-   one dropped and the restored one put in its place, so a failed restore leaves the appliance as it
-   was; the office's settings, secrets and certificates
-   come back; the database roles get the passwords those settings use; the services start again.
+2. `suveryn-backup check` it, then `suveryn-backup restore … --yes`. The services stop. Both databases
+   and the four folders are restored beside the live ones first; only once all of that has worked are
+   the databases swapped in one transaction and the folders renamed into place, so a failed restore
+   leaves the appliance as it was and says so. The database roles get the passwords the restored
+   settings use, and the services start again.
 3. Delete the key file. Register the new machine with the support portal.
+
+## A backup is checked before it is trusted
+
+Anyone with the office's public key (it is on the appliance and in the key file) can make a file the
+recovery key opens: encryption says who may read a backup, not who made it. So `check` and `restore`
+act only on what this appliance expects. The archive may hold only the manifest, this appliance's own
+database dumps and the four folders; the manifest's databases must be exactly this appliance's (their
+owners come from the appliance, never from the backup), its folders among the four, its appliance name
+a host name and its date a date. Anything else and the backup is refused before anything changes. That
+a backup comes from the office's own appliance isn't proven yet (backups aren't signed): the restore
+screen shows when it was made and by which appliance, for a person to check.
 
 The restore is tested in `tests/test_backup.py`:
 a backup made, checked, and restored onto changed databases against a real PostgreSQL with pgvector.
