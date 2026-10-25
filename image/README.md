@@ -1,8 +1,12 @@
 # The appliance image
 
-> **Being replaced.** The read-only, verified system of the approved design
-> ([`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)) is built with mkosi in
-> [`mkosi/`](mkosi/README.md). This Packer build stays until that system carries the sūveryn services.
+> **For testing with fictional documents only. Never an office's records.** This Packer image has no
+> encrypted data partition: whoever has the disk can read the documents, conversations and accounts on
+> it. The appliance offices get is the read-only, verified system of the approved design
+> ([`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)), built with mkosi in
+> [`mkosi/`](mkosi/README.md), with its data partition encrypted (LUKS2, TPM or recovery key). That system
+> carries the sūveryn services (#47); this build is retired once it has been installed on a real PC and
+> through first boot (#48).
 
 A **bare-metal disk image**: flashed onto the office's own server, which then runs sūveryn directly
 on its hardware (like pfSense or TrueNAS). It is not a VM image. GPU passthrough into a VM is

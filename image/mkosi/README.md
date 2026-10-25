@@ -2,15 +2,27 @@
 
 The appliance's system as the design describes it ([`docs/design/appliance-architecture.md`](../../docs/design/appliance-architecture.md),
 tracker #39): read-only, verified block by block, with everything the office writes on a separate
-data partition. Built with [mkosi](https://github.com/systemd/mkosi) (decision D1), which replaces
-the Packer build in [`image/`](../README.md) once this system carries the sūveryn services (a later
-step; until then both exist).
+data partition. Built with [mkosi](https://github.com/systemd/mkosi) (decision D1). **This is the only
+image an office's records may go on**: the Packer build in [`image/`](../README.md) has no encrypted
+data partition and is for testing with fictional documents only, until it is retired.
 
-**State (steps 1 and 2 of the design's build order):** the system, its verity, the boot file and
-the disk's partition definitions; the `/etc` links and `/var` on the data partition (#39). The data
-partition is encrypted (LUKS2), unlocked by the TPM (PCR 7) or a recovery key, and the installer's
-disk step (`install-disk`) creates all of it (#34). Not yet: the console installer and installer
-mode (#37), and the sūveryn services in this system.
+**State:**
+
+- the system, its verity, the boot file and the disk's partition definitions; the `/etc` links and
+  `/var` on the data partition (#39);
+- the data partition encrypted (LUKS2), unlocked by the TPM (PCR 7) or a recovery key, created by
+  the installer's disk step (`install-disk`) (#34);
+- the console installer and installer mode (#37), and the web setup (#37);
+- the sūveryn services built in: sūveryn itself, its models from signed bundles, llama-server and
+  the GPU driver, Keycloak, the chat UI, backups (#47), checked by building it on a VM.
+
+**Not yet:**
+
+- an installation from the stick onto a real PC, through first boot and provisioning with the real
+  services (#48);
+- Secure Boot signing (#45).
+
+Until both are done, no image is released to an office.
 
 ## Build
 
@@ -208,9 +220,9 @@ The web setup (screens 0 to 8, in the browser) is suveryn-core's `setup.html` wi
 [`setup`](../../setup/README.md) on the appliance's side, in this image (`mkosi.conf.d/20-web-setup.conf`):
 nginx, the setup service and its units, at `/opt/suveryn/appliance`. It opens at the first start of the
 installed appliance, writes `setup-cert.pem` while open and `setup-complete` when it closes. Its
-provisioning needs the sūveryn services, which come into this image with #39; until then the test
-system runs it with a stand-in (`run-vm-tests` step 4b). The chat UI's build isn't in the appliance
-image yet either (#39); the test system carries one (`test/make-test-ui`).
+provisioning runs the sūveryn services, which are in this image since #47; the VM tests still run it
+with a stand-in for provisioning (`run-vm-tests` step 4b, which has no GPU) and carry their own build
+of the chat UI (`test/make-test-ui`).
 
 ## The appliance's identity and system state (#35)
 

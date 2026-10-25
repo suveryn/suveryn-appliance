@@ -31,6 +31,19 @@ in ``/run``, never on a command line.
 are deleted, but the newest one is always kept, and a failed run deletes nothing. Backups are the
 outer bound of "deleted" in the data lifecycle (suveryn-docs ``administration/data-lifecycle.md``).
 
+**Restoring trusts nothing in the backup.** Anyone with the public half can encrypt a file for the
+office, so a backup proves who may read it, not who made it. ``check`` and ``restore`` act only on
+what this appliance expects: the archive may hold only the manifest, this appliance's own database
+dumps and the four folders above; the manifest's databases must be this appliance's, its folders
+among the four, its name a host name and its date a date. Owners and paths come from this appliance,
+never from the manifest. Anything else and the backup is refused before anything is changed.
+
+**A restore changes the live system at one moment, all or nothing.** The databases are restored
+beside the live ones (``<db>_restoring``) and the folders copied beside theirs (``<folder>.restoring``);
+only when every one has worked are the databases swapped in one transaction (the live ones renamed
+aside, the restored ones into their place), then the folders renamed into place, then what they
+replaced is dropped. A failure before the swap leaves the appliance as it was and says so.
+
 **What the administrator sees.** ``/var/lib/suveryn/backup/status.json`` (0644, no secrets), which the
 gateway shows: the last success, the last failure and its step, and the backups on the target.
 
@@ -48,8 +61,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ENV = os.environ.get
 CONFIG = Path(ENV("SUVERYN_BACKUP_CONFIG", "/etc/suveryn/backups.json"))
@@ -66,6 +78,8 @@ DATABASES = dict(d.split(":") for d in ENV("SUVERYN_BACKUP_DATABASES", "suveryn:
 PG_USER = ENV("SUVERYN_BACKUP_PG_USER", "postgres")
 KEYCLOAK_ROLE = ENV("SUVERYN_BACKUP_KEYCLOAK_ROLE", "keycloak")
 FORMAT = 1
+HOST_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+UTC_TIME = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 NAME = re.compile(r"suveryn-backup_(?P<name>[a-z0-9-]+)_(?P<when>\d{8}T\d{6}Z)\.tar\.zst\.age")
 AGE_RECIPIENT = re.compile(r"age1[02-9ac-hj-np-z]{58}")
 
@@ -376,8 +390,8 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     try:
         with tarfile.open(fileobj=zstd.stdout, mode="r|") as tar:
             for member in tar:
-                if not (member.name == "manifest.json" or member.name.startswith(("db/", "files/"))):
-                    raise Failed("read", f"unexpected entry in the backup: {member.name}")
+                if not expected_entry(member):
+                    raise Failed("read", f"unexpected entry in the backup: {member.name[:120]!r}")
                 tar.extract(member, dest, filter="data")
     except (tarfile.TarError, OSError) as e:
         problem = str(e)
@@ -392,20 +406,59 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     if zstd.wait() != 0:
         raise Failed("read", "the backup is damaged (zstd)")
     try:
-        manifest = json.loads((dest / "manifest.json").read_text())
+        manifest = checked_manifest(json.loads((dest / "manifest.json").read_text()))
     except (OSError, ValueError):
         raise Failed("read", "the backup has no manifest") from None
-    if manifest.get("format") != FORMAT:
-        raise Failed("read", f"backup format {manifest.get('format')} isn't one this appliance reads")
     for db in manifest["databases"]:
-        if not (dest / "db" / f"{db}.dump").is_file():
+        dump = dest / "db" / f"{db}.dump"
+        if dump.is_symlink() or not dump.is_file():
             raise Failed("read", f"the backup lacks the {db} database")
+    for f in manifest["files"]:
+        folder = dest / "files" / f
+        if folder.is_symlink() or not folder.is_dir():
+            raise Failed("read", f"the backup lacks the {f} folder")
     # PostgreSQL's superuser reads the dumps, whatever umask unpacked them (VM check of #33: with umask
     # 077 the db folder was 0700, and the restore failed after the database was already dropped).
     os.chmod(dest / "db", 0o755)
     for dump in (dest / "db").iterdir():
         os.chmod(dump, 0o644)
     return manifest
+
+
+def expected_entry(member: tarfile.TarInfo) -> bool:
+    """Whether a tar entry is one a backup of this appliance holds: the manifest, one of its own database
+    dumps (a file), or something inside one of the four folders. ``tar.extract``'s "data" filter refuses
+    the rest of what is unsafe (absolute names, links leading out, devices)."""
+    parts = PurePosixPath(member.name).parts
+    if ".." in parts or member.name.startswith("/"):
+        return False
+    if member.name == "manifest.json":
+        return member.isfile()
+    if member.name in ("db", "files"):  # the two folders themselves, as other tar tools write them
+        return member.isdir()
+    if len(parts) == 2 and parts[0] == "db":
+        return member.isfile() and parts[1] in {f"{db}.dump" for db in DATABASES}
+    return len(parts) >= 2 and parts[0] == "files" and parts[1] in FILES
+
+
+def checked_manifest(m) -> dict:
+    """The manifest as this appliance acts on it, or ``Failed``: its databases must be exactly this
+    appliance's (their owners are taken from here), its folders among ``FILES``, its name a host name and
+    its date a UTC time. A backup's own words are never a path, an owner or a name in SQL."""
+    if not isinstance(m, dict):
+        raise Failed("read", "the backup's manifest isn't readable")
+    if m.get("format") != FORMAT:
+        raise Failed("read", f"backup format {str(m.get('format'))[:20]} isn't one this appliance reads")
+    dbs, files = m.get("databases"), m.get("files")
+    if not isinstance(dbs, dict) or set(dbs) != set(DATABASES):
+        raise Failed("read", "the backup's databases aren't this appliance's")
+    if not isinstance(files, list) or not all(isinstance(f, str) and f in FILES for f in files) or len(set(files)) != len(files):
+        raise Failed("read", "the backup names folders this appliance doesn't back up")
+    name, created = m.get("appliance"), m.get("created")
+    if not isinstance(name, str) or not HOST_NAME.match(name) or not isinstance(created, str) or not UTC_TIME.match(created):
+        raise Failed("read", "the backup's name or date isn't one")
+    return {"format": FORMAT, "created": created, "appliance": name, "databases": dict(DATABASES),
+            "files": [f for f in FILES if f in files], "versions": m.get("versions") if isinstance(m.get("versions"), dict) else {}}
 
 
 def age_error(stderr: bytes | None) -> str:
@@ -516,27 +569,43 @@ def restore_file(a, file: Path) -> int:
             check_dumps(dest, manifest)
             if systemd:
                 run("services", ["systemctl", "stop", *SERVICES])
-            # Each database is restored beside the live one first; only once that has worked is the live
-            # one dropped and the restored one renamed into its place. A failed restore leaves it as it was.
+            # Everything is restored beside what is live first (the module's notes); nothing live changes
+            # until all of it has worked.
             try:
                 for db, owner in manifest["databases"].items():
                     incoming = f"{db}_restoring"
                     run("database", as_pg(["dropdb", "--if-exists", "--force", incoming]))
                     run("database", as_pg(["createdb", "--owner", owner, incoming]))
                     run("database", as_pg(["pg_restore", "--exit-on-error", "--dbname", incoming, dest / "db" / f"{db}.dump"]))
+                for f in manifest["files"]:
+                    if folder_beside(f, None).is_symlink():
+                        raise Failed("files", f"the live {f} folder is a link; it is left alone")
+                    staged = folder_beside(f, "restoring")
+                    if staged.exists() or staged.is_symlink():
+                        shutil.rmtree(staged) if staged.is_dir() and not staged.is_symlink() else staged.unlink()
+                    try:
+                        shutil.copytree(dest / "files" / f, staged, symlinks=True)
+                    except OSError as e:
+                        raise Failed("files", f"copying the {f} folder failed: {e.strerror or e}") from None
+            except Failed as e:
+                discard_staged(manifest)
+                raise Failed(e.step, f"{e}; nothing on this appliance was changed") from None
+            try:
+                swap_databases(manifest["databases"])  # one transaction: all of them or none
             except Failed:
-                for db in manifest["databases"]:
-                    subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_restoring"]), capture_output=True)
+                discard_staged(manifest)
                 raise
-            for db in manifest["databases"]:
-                run("database", as_pg(["dropdb", "--if-exists", "--force", db]))
-                run("database", as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres",
-                                       "-c", f'ALTER DATABASE "{db}_restoring" RENAME TO "{db}"']))
-            for f in manifest["files"]:
-                target = VAR / f
+            for f in manifest["files"]:  # renames on the data partition: these don't fail halfway
+                target, replaced = folder_beside(f, None), folder_beside(f, "replaced")
+                if replaced.exists():
+                    shutil.rmtree(replaced)
                 if target.exists() and not target.is_symlink():
-                    shutil.rmtree(target)
-                shutil.copytree(dest / "files" / f, target, symlinks=True)
+                    os.rename(target, replaced)
+                os.rename(folder_beside(f, "restoring"), target)
+                if replaced.exists():
+                    shutil.rmtree(replaced)
+            for db in manifest["databases"]:
+                subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]), capture_output=True)
             sql = "".join(f"ALTER ROLE \"{role}\" PASSWORD '{pw.replace(chr(39), chr(39) * 2)}';\n"
                           for role, pw in role_passwords(VAR / "etc").items() if role in manifest["databases"].values())
             if sql:
@@ -554,6 +623,52 @@ def restore_file(a, file: Path) -> int:
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
         f"{', '.join(manifest['databases'])} and {', '.join(manifest['files'])}")
     return 0
+
+
+def folder_beside(f: str, suffix: str | None) -> Path:
+    """One of the office's folders on the data partition, or the copy beside it (``.restoring``, ``.replaced``).
+    ``f`` is one of ``FILES``, never a name from a backup; checked again here, before anything is deleted."""
+    if f not in FILES:
+        raise Failed("files", "not one of the office's folders")
+    path = VAR / (f if suffix is None else f"{f}.{suffix}")
+    if path.parent.resolve() != VAR.resolve():
+        raise Failed("files", "a folder outside the data partition")
+    return path
+
+
+def discard_staged(manifest: dict) -> None:
+    """What a failed restore put beside the live system: the restored databases and folders."""
+    for db in manifest["databases"]:
+        subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_restoring"]), capture_output=True)
+    for f in manifest["files"]:
+        staged = folder_beside(f, "restoring")
+        if staged.is_dir() and not staged.is_symlink():
+            shutil.rmtree(staged, ignore_errors=True)
+
+
+def swap_databases(databases: dict) -> None:
+    """The restored databases into place in one transaction: each live one renamed to ``<db>_replaced``,
+    each restored one to ``<db>``. PostgreSQL renames databases transactionally, so a failure leaves every
+    one as it was. Leftovers of an earlier attempt are dropped first."""
+    for db in databases:
+        run("database", as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]))
+    live = set(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
+    quote = lambda name: '"' + name.replace('"', '""') + '"'  # noqa: E731 - names are this appliance's own (DATABASES)
+    # The services are stopped; a session still open would stop a rename, so it goes, as dropdb --force did.
+    names = ", ".join("'" + n.replace("'", "''") + "'" for db in databases for n in (db, f"{db}_restoring"))
+    sql = [f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ({names}) AND pid <> pg_backend_pid();",
+           "BEGIN;"]
+    for db in databases:
+        if db in live:
+            sql.append(f"ALTER DATABASE {quote(db)} RENAME TO {quote(db + '_replaced')};")
+        sql.append(f"ALTER DATABASE {quote(db + '_restoring')} RENAME TO {quote(db)};")
+    if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_FAIL_SWAP") == "1":
+        sql.append("SELECT 1 / 0;")  # the tests: a failure after the first rename, inside the transaction
+    sql.append("COMMIT;")
+    r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input="\n".join(sql) + "\n",
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise Failed("database", "swapping in the restored databases failed; nothing on this appliance was changed")
 
 
 def main() -> int:
