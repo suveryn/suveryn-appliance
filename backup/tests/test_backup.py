@@ -398,3 +398,93 @@ def test_the_databases_are_swapped_all_at_once_or_not_at_all(appliance):
     assert r.returncode == 0, r.stdout + r.stderr
     assert psql("SELECT count(*) FROM chunks", gw_db) == "2" and "gw-pass" in (var / "etc" / "gateway.env").read_text()
     assert not list(var.glob("*.replaced")) and not list(var.glob("*.restoring"))
+
+
+@needs
+@pytest.mark.parametrize("fail, says", [
+    ({"SUVERYN_BACKUP_TEST_FAIL_FOLDER": "etc"}, "putting the restored etc folder in place failed"),    # the first folder
+    ({"SUVERYN_BACKUP_TEST_FAIL_FOLDER": "host"}, "putting the restored host folder in place failed"),  # after etc was swapped
+    ({"SUVERYN_BACKUP_TEST_FAIL_ROLES": "1"}, "setting the roles' passwords failed"),                   # every folder in place
+])
+def test_a_failure_after_the_databases_were_swapped_puts_everything_back(appliance, fail, says):
+    """Audit of 25 October 2026, finding 2: the folders were replaced after the databases' transaction had
+    committed, so a failure there left restored databases beside old settings (and an unexpected error
+    left the services stopped). Now the old folders and databases are kept until every step has worked."""
+    env, var, (gw_db, kc_db), (gw_role, _) = appliance["env"], appliance["var"], appliance["dbs"], appliance["roles"]
+    backup = first_backup(appliance)
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    (var / "etc" / "gateway.env").write_text("changed after the backup\n")
+    (var / "host" / "hostname").write_text("renamed-after-the-backup\n")
+    password = psql(f"SELECT rolpassword FROM pg_authid WHERE rolname = '{gw_role}'")
+    r = tool({**env, **fail}, "restore", backup, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and says in r.stdout and r.stdout.rstrip().endswith("the appliance was put back as it was"), r.stdout
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3" and psql("SELECT count(*) FROM user_entity", kc_db) == "1"
+    assert (var / "etc" / "gateway.env").read_text() == "changed after the backup\n"
+    assert (var / "host" / "hostname").read_text() == "renamed-after-the-backup\n"
+    assert psql(f"SELECT rolpassword FROM pg_authid WHERE rolname = '{gw_role}'") == password
+    names = ", ".join(f"'{db}{s}'" for db in (gw_db, kc_db) for s in ("_restoring", "_replaced"))
+    assert psql(f"SELECT count(*) FROM pg_database WHERE datname IN ({names})") == "0"
+    assert not list(var.glob("*.restoring")) and not list(var.glob("*.replaced"))
+    # and a restore without the failure still works afterwards
+    assert tool(env, "restore", backup, "--identity", appliance["key"], "--yes").returncode == 0
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "2" and "gw-pass" in (var / "etc" / "gateway.env").read_text()
+
+
+class Zeros:
+    """A file of ``size`` zero bytes that is never written anywhere: a backup that packs small."""
+
+    def __init__(self, size):
+        self.left = size
+
+    def read(self, n=-1):
+        n = self.left if n < 0 else min(n, self.left)
+        self.left -= n
+        return b"\0" * n
+
+
+def crafted(appliance, entries) -> Path:
+    """A backup made by hand for the office's public key: the first backup's manifest and dumps, then
+    ``entries`` (name, size) of zeros, streamed through zstd and age."""
+    import tarfile
+    good = first_backup(appliance)
+    plain = subprocess.run(f'age -d -i "{appliance["key"]}" "{good}" | zstd -q -d -c', shell=True, capture_output=True, check=True).stdout
+    recipient = json.loads(appliance["config"].read_text())["recipient"]
+    out = appliance["target"] / f"crafted-{uuid.uuid4().hex[:6]}.tar.zst.age"
+    with open(out, "wb") as f:
+        age = subprocess.Popen(["age", "-r", recipient], stdin=subprocess.PIPE, stdout=f)
+        zstd = subprocess.Popen(["zstd", "-q", "-c"], stdin=subprocess.PIPE, stdout=age.stdin)
+        age.stdin.close()
+        with tarfile.open(fileobj=zstd.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+            import io
+            with tarfile.open(fileobj=io.BytesIO(plain)) as src:
+                for m in src.getmembers():
+                    tar.addfile(m, src.extractfile(m) if m.isfile() else None)
+            for name, size in entries:
+                info = tarfile.TarInfo(name)
+                info.size = size
+                tar.addfile(info, Zeros(size))
+        zstd.stdin.close()
+        assert zstd.wait() == 0 and age.wait() == 0
+    return out
+
+
+@needs
+@pytest.mark.parametrize("entries, extra_env, says", [
+    ([(f"files/etc/n{i}", 0) for i in range(10_001)], {}, "more than 10000 entries"),
+    ([("files/etc/big", 257 * 2**20)], {}, "folders are larger than 256 MiB"),
+    ([], {"SUVERYN_BACKUP_TEST_UNPACK_BUDGET": "1000"}, "more than this appliance has room for"),
+])
+def test_a_backup_that_unpacks_to_too_much_is_refused_before_it_fills_the_disk(appliance, entries, extra_env, says):
+    """Audit of 25 October 2026, finding 3: anyone with the public key can make a backup that packs small
+    and unpacks huge. Unpacking stops at the bounds, nothing is changed, and nothing is left behind."""
+    env, var, gw_db = appliance["env"], appliance["var"], appliance["dbs"][0]
+    backup = crafted(appliance, entries)
+    assert backup.stat().st_size < 4 * 2**20  # it packs small
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    env = {**env, **extra_env}
+    r = tool(env, "check", backup, "--identity", appliance["key"])
+    assert r.returncode == 1 and says in r.stdout, r.stdout
+    r = tool(env, "restore", backup, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and "restore failed (read)" in r.stdout and says in r.stdout, r.stdout
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
+    assert not [p for p in (var / "backup").iterdir() if p.name.startswith(("restore-", "check-"))]
