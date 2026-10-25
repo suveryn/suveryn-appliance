@@ -270,3 +270,106 @@ def test_the_newest_backup_on_a_target_is_checked_and_restored_by_settings_given
     r = tool(env, "--settings", given, "check", "suveryn-backup_x_20990101T000000Z.tar.zst.age", "--on-target", "--json",
              "--identity", appliance["key"])
     assert r.returncode == 1 and json.loads(r.stdout)["step"] == "target"
+
+
+# ---------------------------------------------------------------------------- a backup someone else made
+# Anyone with the office's public key can make a file the recovery key opens (the audit of 25 October
+# 2026, findings 2 and 8). Restoring must act only on what this appliance expects, and change the live
+# system all at once or not at all.
+import tarfile  # noqa: E402
+
+
+def remade(appliance, backup: Path, change) -> Path:
+    """The backup decrypted, unpacked, changed by ``change(folder, manifest)`` (which returns the manifest
+    to write), packed and encrypted again for the office's public key: what someone with that key can make."""
+    tmp = appliance["tmp"] / f"remade-{uuid.uuid4().hex[:6]}"
+    tmp.mkdir()
+    plain = subprocess.run(f'age -d -i "{appliance["key"]}" "{backup}" | zstd -q -d -c', shell=True, capture_output=True, check=True).stdout
+    tar_path = tmp / "in.tar"
+    tar_path.write_bytes(plain)
+    folder = tmp / "x"
+    with tarfile.open(tar_path) as t:
+        t.extractall(folder, filter="data")
+    manifest = change(folder, json.loads((folder / "manifest.json").read_text()))
+    (folder / "manifest.json").write_text(json.dumps(manifest))
+    out_tar = tmp / "out.tar"
+    with tarfile.open(out_tar, "w", format=tarfile.PAX_FORMAT) as t:
+        t.add(folder / "manifest.json", arcname="manifest.json")
+        for p in sorted(folder.iterdir()):
+            if p.name != "manifest.json":
+                t.add(p, arcname=p.name)
+    recipient = json.loads(appliance["config"].read_text())["recipient"]
+    out = appliance["target"] / f"crafted-{uuid.uuid4().hex[:6]}.tar.zst.age"
+    subprocess.run(f'zstd -q -c "{out_tar}" | age -r {recipient} -o "{out}"', shell=True, check=True)
+    return out
+
+
+def first_backup(appliance) -> Path:
+    assert tool(appliance["env"], "run").returncode == 0
+    return next((appliance["target"] / "suveryn-backups" / "test-appliance").glob("*.age"))
+
+
+@needs
+@pytest.mark.parametrize("change, says", [
+    (lambda d, m: {**m, "files": ["../../outside"]}, "folders this appliance doesn't back up"),
+    (lambda d, m: {**m, "files": ["etc", "etc"]}, "folders this appliance doesn't back up"),
+    (lambda d, m: {**m, "databases": {**m["databases"], 'x"; DROP DATABASE postgres; --': "postgres"}}, "databases aren't this appliance's"),
+    (lambda d, m: {**m, "databases": {}}, "databases aren't this appliance's"),
+    (lambda d, m: {**m, "appliance": "evil; rm -rf /"}, "name or date"),
+    (lambda d, m: {**m, "created": "yesterday"}, "name or date"),
+    (lambda d, m: [m], "manifest isn't readable"),
+])
+def test_a_manifest_that_isnt_this_appliances_is_refused_before_anything_changes(appliance, change, says):
+    env, var, gw_db = appliance["env"], appliance["var"], appliance["dbs"][0]
+    crafted = remade(appliance, first_backup(appliance), change)
+    outside = appliance["tmp"] / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("never touched\n")
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    r = tool(env, "check", crafted, "--identity", appliance["key"])
+    assert r.returncode == 1 and says in r.stdout, r.stdout
+    r = tool(env, "restore", crafted, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and "restore failed (read)" in r.stdout and says in r.stdout, r.stdout
+    assert (outside / "keep").exists() and (var / "etc" / "gateway.env").exists()
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
+
+
+@needs
+@pytest.mark.parametrize("change", [
+    lambda d, m: ((d / "evil.sh").write_text("#!/bin/sh\n"), m)[1],                     # something else in the archive
+    lambda d, m: ((d / "files" / "identity").mkdir(), m)[1],                            # a folder that isn't backed up
+    lambda d, m: ((d / "db" / "other.dump").write_text("x"), m)[1],                     # another database's dump
+    lambda d, m: (os.replace(d / "db" / f"{next(iter(m['databases']))}.dump", d / "dump"),
+                  os.symlink("../dump", d / "db" / f"{next(iter(m['databases']))}.dump"), m)[2],  # a dump that is a link
+])
+def test_an_archive_holding_anything_else_is_refused(appliance, change):
+    crafted = remade(appliance, first_backup(appliance), change)
+    r = tool(appliance["env"], "restore", crafted, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and "restore failed (read)" in r.stdout and "unexpected entry" in r.stdout, r.stdout
+
+
+@needs
+def test_the_databases_are_swapped_all_at_once_or_not_at_all(appliance):
+    """Finding 8: the live databases were replaced one after the other, so a failure after the first left a
+    mix. Now one transaction renames them all; here it fails after the first rename."""
+    env, var, (gw_db, kc_db) = appliance["env"], appliance["var"], appliance["dbs"]
+    backup = first_backup(appliance)
+    psql("INSERT INTO chunks VALUES (3, 'Fictional passage three', '[7,8,9]')", gw_db)
+    (var / "etc" / "gateway.env").write_text("changed after the backup\n")
+    r = tool({**env, "SUVERYN_BACKUP_TEST_FAIL_SWAP": "1"}, "restore", backup, "--identity", appliance["key"], "--yes")
+    assert r.returncode == 1 and "swapping in the restored databases failed; nothing on this appliance was changed" in r.stdout, r.stdout
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "3"  # the first database wasn't swapped either
+    assert psql("SELECT count(*) FROM pg_database WHERE datname LIKE '%\\_restoring' OR datname LIKE '%\\_replaced'") == "0"
+    assert (var / "etc" / "gateway.env").read_text() == "changed after the backup\n"  # nor the folders
+    assert not list(var.glob("*.restoring"))
+    # A session left open on a live database doesn't stop the swap (as dropdb --force didn't).
+    holder = subprocess.Popen(["psql", "-qAt", "-h", PG_HOST, "-p", PG_PORT, "-U", "postgres", "-d", kc_db, "-c", "SELECT pg_sleep(60)"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        r = tool(env, "restore", backup, "--identity", appliance["key"], "--yes")
+    finally:
+        holder.kill()
+        holder.wait()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert psql("SELECT count(*) FROM chunks", gw_db) == "2" and "gw-pass" in (var / "etc" / "gateway.env").read_text()
+    assert not list(var.glob("*.replaced")) and not list(var.glob("*.restoring"))
