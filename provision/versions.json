@@ -17,7 +17,7 @@
   },
   "suveryn_core": {
     "repo": "https://github.com/suveryn/suveryn-core",
-    "commit": "23dd410b29615b4614d54bd981b88de88e84d40a"
+    "commit": "1a5cfea1f4e530816cfb7dd7d273225158325706"
   },
   "node": {
     "version": "22.23.3",
