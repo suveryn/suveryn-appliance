@@ -12,6 +12,8 @@ ConditionPathExists=/etc/suveryn/keycloak.env
 User=keycloak
 Group=keycloak
 EnvironmentFile=/etc/suveryn/keycloak.env
+# Java 21, which this Keycloak release is checked on, also where an Ubuntu has newer Java (#57).
+Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 # The network mode: the login page shows its "Air-gapped" badge only when it is true (keycloak/theme).
 EnvironmentFile=-/etc/suveryn/network-mode.env
 ExecStart=/opt/keycloak/bin/kc.sh start --optimized

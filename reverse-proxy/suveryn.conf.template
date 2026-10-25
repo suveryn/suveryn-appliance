@@ -24,6 +24,7 @@ server {
 
 server {
     # HTTP/2 on the listen line: Ubuntu 24.04's nginx is 1.24, which doesn't know `http2 on;` (1.25.1+).
+    # 26.04's nginx 1.28 takes it with a deprecation warning; `http2 on;` once 24.04 goes (#57).
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name @HOST@;
