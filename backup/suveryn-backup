@@ -4,7 +4,9 @@
     suveryn-backup run                       make a backup now (the nightly timer runs this)
     suveryn-backup status [--json]           the last attempt, the last success, the backups on the target
     suveryn-backup list [--json]             the backups on the target, newest first
+    suveryn-backup find --identity KEY       the backups on the target this recovery key opens, newest first
     suveryn-backup check FILE --identity KEY decrypt a backup and check every part, restoring nothing
+    suveryn-backup key-test                  the administrator's test: the key left by the gateway opens the newest
     suveryn-backup restore FILE --identity KEY [--yes]
                                              put a backup back on this appliance (a replacement machine)
 
@@ -18,18 +20,35 @@ TPM, and a replacement makes its own (the support contract moves with the office
 **How.** Each part is written into one tar stream, compressed (zstd) and encrypted with age to the
 office's recovery key, the ``recipient`` the web setup saved in ``/etc/suveryn/backups.json``. The
 appliance holds only that public half: it can write backups, never read them. The office keeps the
-private half offline; ``check`` and ``restore`` need it. The file is written under a temporary name,
-checked (its size, and that age wrote it whole), then renamed:
-``suveryn-backup_<name>_<UTC time>.tar.zst.age`` in ``suveryn-backups/<name>/`` on the target.
+private half offline; ``check`` and ``restore`` need it. Each appliance has its own key (the web setup
+makes a new one each time). The file is written under a temporary name, hashed on the way, read back
+from the disk itself (not its cache) and compared, then renamed:
+``suveryn-backup_<name>_<UTC time>.tar.zst.age`` in ``suveryn-backups/<name>/`` on the target, with its
+SHA-256 beside it (``.sha256``), which ``check`` and ``restore`` compare first. A failing disk is found
+the night it fails, not on the day of a restore.
 
 **Where.** A USB disk (its first partition, or the disk itself; ext4, exFAT, FAT or NTFS) or a share
-on the office's network (SMB or NFS), mounted for the run only, ``nosuid,nodev,noexec``. A share's
+on the office's network (SMB or NFS), mounted for the run only, ``nosuid,nodev,noexec``. USB disks may
+be swapped (two disks, one kept elsewhere): when the chosen disk isn't connected, another disk with a
+``suveryn-backups`` folder at its top is used, unless that folder is marked as another appliance's (its
+``.office-recovery-key``, the public half, written on each disk used). A share's
 password is in ``/etc/suveryn/backups-share.secret`` (0600) and goes to mount.cifs in a credentials file
 in ``/run``, never on a command line.
 
-**How long.** ``retention_days`` (14, 30, 90 or 365): after a successful backup, those older than that
-are deleted, but the newest one is always kept, and a failed run deletes nothing. Backups are the
+**How long.** ``retention_days`` (14, 30, 90 or 365): those older than that are deleted before a backup
+is written and again after, but the newest one is always kept. Then, if tonight's backup won't fit
+(the last one's size and a quarter more), the run stops with "the backup disk is full" (step ``space``)
+rather than half-writing it. Backups are the
 outer bound of "deleted" in the data lifecycle (suveryn-docs ``administration/data-lifecycle.md``).
+
+**Which backups a restore may use.** Those the recovery key given opens, under any appliance's name on
+the target (``find``): a replacement has a name of its own until the restore gives it the old one, and
+an office may have several appliances backing up to one place. ``newest`` is the newest of those; a
+backup another appliance made is never offered, even when it is newer.
+
+**The administrator's key test** (``key-test``): the office's key opens this appliance's newest backup
+and every part of it is there; nothing is restored and the key is deleted after. The result goes to
+``key-test.json``, which the gateway shows, with a reminder when the last good test is old.
 
 **Restoring trusts nothing in the backup.** Anyone with the public half can encrypt a file for the
 office, so a backup proves who may read it, not who made it. ``check`` and ``restore`` act only on
@@ -85,6 +104,9 @@ SHARE_SECRET = Path(ENV("SUVERYN_BACKUP_SHARE_SECRET", "/etc/suveryn/backups-sha
 VAR = Path(ENV("SUVERYN_BACKUP_VAR", "/var/lib/suveryn"))
 STATE = Path(ENV("SUVERYN_BACKUP_STATE", str(VAR / "backup")))
 MOUNT = Path(ENV("SUVERYN_BACKUP_MOUNT", "/run/suveryn/backup-target"))
+# The administrator's key test: the gateway leaves the recovery key and a request here (in memory, the
+# gateway's folder), the path unit starts ``key-test``, which deletes the key whatever happens.
+KEY_TEST = Path(ENV("SUVERYN_BACKUP_KEY_TEST", "/run/suveryn/backup-key-test"))
 # The office's part of the data partition (docs/design/appliance-architecture.md, "Where the office's
 # settings live"), relative to VAR.
 FILES = ["etc", "host", "network", "nginx"]
@@ -185,6 +207,46 @@ def appliance_name() -> str:
 
 
 # ---------------------------------------------------------------------------- the target
+OFFICE_MARK = ".office-recovery-key"  # the public half: which office's backups a disk holds
+
+
+def office_disk(top: Path, recipient: str) -> bool:
+    """Whether a disk's ``suveryn-backups`` folder is for this office's backups: there, a real folder, and
+    either unmarked or marked with this office's recovery key (the public half)."""
+    if not top.is_dir() or top.is_symlink():
+        return False
+    mark = top / OFFICE_MARK
+    if not mark.exists():
+        return True
+    try:
+        return not mark.is_symlink() and mark.read_text().strip() == recipient
+    except OSError:
+        return False
+
+
+def lsblk_usb() -> dict:
+    r = subprocess.run(["lsblk", "-J", "-o", "NAME,PATH,TRAN,TYPE,FSTYPE,MODEL,SERIAL"], capture_output=True, text=True)
+    try:
+        return json.loads(r.stdout) if r.returncode == 0 else {}
+    except ValueError:
+        return {}
+
+
+def usb_candidates(listing: dict) -> list[tuple[Path, str]]:
+    """Every file system on a USB disk that could hold backups (from ``lsblk -J``): each disk's partitions,
+    or the disk itself when it has none; with the disk's model and serial, to say which was used."""
+    out = []
+    for d in listing.get("blockdevices") or []:
+        if d.get("tran") != "usb" or d.get("type") != "disk":
+            continue
+        label = re.sub(r"[^A-Za-z0-9._-]+", "_", f"usb-{' '.join((d.get('model') or 'disk').split())}_{d.get('serial') or d.get('name')}")
+        parts = [c for c in d.get("children") or [] if c.get("type") == "part"]
+        for c in parts or [d]:
+            if c.get("fstype") in ("ext4", "exfat", "vfat", "ntfs") and c.get("path"):
+                out.append((Path(c["path"]), label))
+    return out
+
+
 def usb_partition(disk_id: str) -> Path:
     """The USB disk the office chose (by its /dev/disk/by-id name): its first partition, or the disk."""
     by_id = Path("/dev/disk/by-id")
@@ -200,7 +262,7 @@ class Target:
     own, ``suveryn-backups/<name>``. Its parent holds every appliance's (``on_target`` looks there)."""
 
     def __init__(self, s: dict):
-        self.s, self.mounted, self.creds = s, False, None
+        self.s, self.mounted, self.creds, self.disk = s, False, None, None
 
     def __enter__(self) -> Path:
         try:
@@ -221,13 +283,7 @@ class Target:
                 run("target", ["umount", MOUNT])
             opts = "nosuid,nodev,noexec"
             if s["target"] == "usb":
-                dev = usb_partition(s["disk"])
-                kind = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", str(dev)], capture_output=True,
-                                      text=True).stdout.strip()
-                if kind not in ("ext4", "exfat", "vfat", "ntfs"):
-                    raise Failed("target", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
-                # NTFS through the kernel's own driver (ntfs3): there is no ntfs-3g on the appliance
-                run("target", ["mount", "-t", "ntfs3" if kind == "ntfs" else kind, "-o", opts, dev, MOUNT])
+                self.disk = self._usb(opts)
             elif s["protocol"] == "smb":
                 address = s["address"].replace("\\", "/")
                 fd, creds = tempfile.mkstemp(prefix="suveryn-backup-", dir="/run")
@@ -245,9 +301,47 @@ class Target:
         folder = base / "suveryn-backups" / appliance_name()
         try:
             folder.mkdir(parents=True, exist_ok=True)
+            if s["target"] == "usb" and s.get("recipient"):  # this office's disk from now on (rotation)
+                mark = base / "suveryn-backups" / OFFICE_MARK
+                if not mark.is_symlink() and (not mark.exists() or mark.read_text().strip() != s["recipient"]):
+                    mark.write_text(s["recipient"] + "\n")
         except OSError as e:
             raise Failed("target", f"can't write to the backup target: {e.strerror}") from None
         return folder
+
+    def _usb(self, opts: str) -> str:
+        """Mount the office's USB disk: the one chosen in the setup, or, when that isn't connected, another
+        disk the office uses for its backups (rotation: two disks swapped, one kept elsewhere). That is a
+        disk with a ``suveryn-backups`` folder at its top, made by this appliance or by the office, unless
+        the folder says it is another office's (its key). Returns which disk."""
+        s = self.s
+        try:
+            chosen = [(usb_partition(s["disk"]), s["disk"])]
+        except Failed:
+            if not s.get("recipient"):  # reading on a replacement: the disk the office chose there
+                raise
+            chosen = []
+        for dev, label in chosen or usb_candidates(lsblk_usb()):
+            kind = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", str(dev)], capture_output=True,
+                                  text=True).stdout.strip()
+            if kind not in ("ext4", "exfat", "vfat", "ntfs"):
+                if chosen:
+                    raise Failed("target", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
+                continue
+            # NTFS through the kernel's own driver (ntfs3): there is no ntfs-3g on the appliance. Another
+            # disk is looked at read-only first.
+            fs = ["-t", "ntfs3" if kind == "ntfs" else kind]
+            if chosen:
+                run("target", ["mount", *fs, "-o", opts, dev, MOUNT])
+                return label
+            if subprocess.run(["mount", *fs, "-o", f"{opts},ro", str(dev), str(MOUNT)], capture_output=True).returncode != 0:
+                continue
+            ours = office_disk(MOUNT / "suveryn-backups", s["recipient"])
+            subprocess.run(["umount", str(MOUNT)], capture_output=True)
+            if ours:
+                run("target", ["mount", *fs, "-o", opts, dev, MOUNT])
+                return label
+        raise Failed("target", "the backup disk isn't connected")
 
     def __exit__(self, *exc) -> None:
         if self.creds:
@@ -282,6 +376,7 @@ def expire(folder: Path, days: int, at: dt.datetime) -> list[str]:
     for b in backups_in(folder)[1:]:
         if at - b["when"] > dt.timedelta(days=days):
             (folder / b["file"]).unlink(missing_ok=True)
+            (folder / f"{b['file']}.sha256").unlink(missing_ok=True)
             gone.append(b["file"])
     return gone
 
@@ -322,39 +417,126 @@ def make(s: dict) -> dict:
                     "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions(),
                     "postgresql": postgres_major()}
         (work / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
-        with Target(s) as folder:
+        target = Target(s)
+        with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
             partial = folder / f".{final.name}.partial"
-            with open(partial, "wb") as out:
-                age = subprocess.Popen(["age", "--encrypt", "--recipient", s["recipient"]], stdin=subprocess.PIPE,
-                                       stdout=out, stderr=subprocess.PIPE)
-                zstd = subprocess.Popen(["zstd", "-q", "-T0", "-6", "-c"], stdin=subprocess.PIPE, stdout=age.stdin,
-                                        stderr=subprocess.PIPE)
-                age.stdin.close()  # zstd holds it now
-                try:
-                    with tarfile.open(fileobj=zstd.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar:
-                        tar.add(work / "manifest.json", arcname="manifest.json")
-                        for d in dumps:
-                            tar.add(d, arcname=f"db/{d.name}")
-                        for f in manifest["files"]:
-                            tar.add(VAR / f, arcname=f"files/{f}")
-                    zstd.stdin.close()
-                except (OSError, tarfile.TarError) as e:
-                    zstd.kill()
-                    age.kill()
-                    partial.unlink(missing_ok=True)
-                    raise Failed("write", f"writing the backup failed: {e}") from None
-                zstd_err, age_err = zstd.wait(), age.wait()
-            if zstd_err or age_err:
+            # Room first: what is past the retention period goes before tonight's is written, not only after
+            # a success, so a full disk doesn't stop every night's backup for good (review of the backup
+            # strategy, 26 October 2026). The newest is always kept.
+            gone = expire(folder, s["retention_days"], started)
+            need = room_needed(folder, [*dumps, *(VAR / f for f in manifest["files"])])
+            free = free_space(folder)
+            if free < need:
+                raise Failed("space", f"the backup disk is full: tonight's backup needs about {need // 2**20:,} MB and "
+                                      f"{free // 2**20:,} MB is free; keep backups for fewer days, or use a larger disk")
+            digest = write_backup(partial, s["recipient"], work / "manifest.json", dumps, manifest["files"])
+            # Read back from the disk itself, not the cache: a failing USB disk is found tonight, not on the
+            # day of a restore. The checksum stays beside the backup, for check and restore to compare.
+            if read_back(partial) != digest:
                 partial.unlink(missing_ok=True)
-                raise Failed("encrypt", f"compressing or encrypting failed: {(age.stderr.read() or b'').decode().strip()[-200:]}")
+                raise Failed("verify", "the backup disk didn't give back what was written; the disk may be failing")
+            (folder / f"{final.name}.sha256").write_text(f"{digest}  {final.name}\n")
             size = partial.stat().st_size
             os.replace(partial, final)
-            gone = expire(folder, s["retention_days"], started)
+            gone += expire(folder, s["retention_days"], started)
             kept = backups_in(folder)
     return {"at": manifest["created"], "file": final.name, "size": size, "expired": len(gone),
-            "on_target": len(kept), "oldest": kept[-1]["at"] if kept else None,
+            "on_target": len(kept), "oldest": kept[-1]["at"] if kept else None, "sha256": digest,
+            **({"disk": target.disk} if target.disk else {}),
             "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds())}
+
+
+def room_needed(folder: Path, parts: list[Path]) -> int:
+    """About how much tonight's backup takes: the last one's size and a quarter more, or, the first time,
+    what goes in uncompressed (more than it will take)."""
+    last = backups_in(folder)
+    if last:
+        return int(last[0]["size"] * 1.25) + 64 * 2**20
+    total = 0
+    for part in parts:
+        total += sum(f.stat().st_size for f in part.rglob("*") if f.is_file()) if part.is_dir() else part.stat().st_size
+    return total + 64 * 2**20
+
+
+def free_space(folder: Path) -> int:
+    if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_FREE"):
+        return int(ENV("SUVERYN_BACKUP_TEST_FREE"))
+    return shutil.disk_usage(folder).free
+
+
+def write_backup(partial: Path, recipient: str, manifest: Path, dumps: list[Path], files: list[str]) -> str:
+    """The tar stream, compressed and encrypted, into ``partial``; its SHA-256 as written."""
+    import hashlib
+    import threading
+    digest, problem = hashlib.sha256(), []
+    with open(partial, "wb") as out:
+        age = subprocess.Popen(["age", "--encrypt", "--recipient", recipient], stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        zstd = subprocess.Popen(["zstd", "-q", "-T0", "-6", "-c"], stdin=subprocess.PIPE, stdout=age.stdin,
+                                stderr=subprocess.PIPE)
+        age.stdin.close()  # zstd holds it now
+
+        def copy() -> None:  # age's output to the disk, hashed on the way
+            try:
+                while block := age.stdout.read(1 << 20):
+                    digest.update(block)
+                    out.write(block)
+            except OSError as e:
+                problem.append(e)
+                age.stdout.read()  # keep age from blocking
+        copier = threading.Thread(target=copy)
+        copier.start()
+        try:
+            with tarfile.open(fileobj=zstd.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar:
+                tar.add(manifest, arcname="manifest.json")
+                for d in dumps:
+                    tar.add(d, arcname=f"db/{d.name}")
+                for f in files:
+                    tar.add(VAR / f, arcname=f"files/{f}")
+            zstd.stdin.close()
+        except (OSError, tarfile.TarError) as e:
+            zstd.kill()
+            age.kill()
+            copier.join()
+            partial.unlink(missing_ok=True)
+            raise Failed("write", f"writing the backup failed: {e}") from None
+        zstd_err, age_err = zstd.wait(), age.wait()
+        copier.join()
+        try:
+            out.flush()
+            os.fsync(out.fileno())
+        except OSError as e:
+            problem.append(e)
+    if problem:
+        partial.unlink(missing_ok=True)
+        e = problem[0]
+        if getattr(e, "errno", None) == 28:  # ENOSPC
+            raise Failed("space", "the backup disk ran full while writing; keep backups for fewer days, or use a larger disk")
+        raise Failed("write", f"writing the backup failed: {e.strerror or e}")
+    if zstd_err or age_err:
+        partial.unlink(missing_ok=True)
+        raise Failed("encrypt", f"compressing or encrypting failed: {(age.stderr.read() or b'').decode().strip()[-200:]}")
+    if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_CORRUPT") == "1":
+        with open(partial, "r+b") as f:  # the tests: a disk that gives back something else
+            f.seek(100)
+            f.write(b"\xff" if f.read(1) != b"\xff" else b"\x00")
+    return digest.hexdigest()
+
+
+def read_back(file: Path) -> str:
+    """The file's SHA-256 as the disk gives it back: the cache dropped first, so it is read from the disk."""
+    import hashlib
+    digest = hashlib.sha256()
+    fd = os.open(file, os.O_RDONLY)
+    try:
+        if hasattr(os, "posix_fadvise"):
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        while block := os.read(fd, 1 << 20):
+            digest.update(block)
+    finally:
+        os.close(fd)
+    return digest.hexdigest()
 
 
 def cmd_run(_a) -> int:
@@ -432,6 +614,11 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     decrypts, so a backup is never trusted to be small. At most ``MAX_ENTRIES`` entries, the four
     folders at most ``MAX_FOLDER_BYTES`` together, and everything within ``unpack_budget``: unpacking
     stops before a crafted backup can fill the data partition."""
+    sidecar = file.with_name(f"{file.name}.sha256")
+    if sidecar.is_file() and not sidecar.is_symlink():
+        expected = (sidecar.read_text(errors="replace").split() or [""])[0]
+        if read_back(file) != expected:
+            raise Failed("read", "the backup isn't what was written: its checksum doesn't match; the disk may be failing")
     age = subprocess.Popen(["age", "--decrypt", "--identity", str(identity), str(file)], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
     zstd = subprocess.Popen(["zstd", "-q", "-d", "-c"], stdin=age.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -554,18 +741,103 @@ def on_target(a, act) -> int:
     if s is None:
         raise Failed("settings", "no backup target in the settings")
     with Target(s) as own:
-        # Under every appliance's name, not only this one's: a replacement has a name of its own until the
-        # restore gives it the old one (VM check of #57: "there is no backup on the target").
-        folders = sorted({own, *appliance_folders(own.parent)})
-        found = sorted((dict(b, folder=f) for f in folders for b in backups_in(f)), key=lambda b: b["when"], reverse=True)
-        if not found:
-            raise Failed("target", "there is no backup on the target")
-        name = found[0]["file"] if str(a.file) == "newest" else str(a.file)
-        m = NAME.fullmatch(name)
-        file = own.parent / m["name"] / name if m else None
-        if file is None or not HOST_NAME.match(m["name"]) or file.parent.is_symlink() or not file.is_file():
-            raise Failed("target", f"no backup {name} on the target")
-        return act(file)
+        mine = backups_for_key(own, a.identity)
+        name = mine[0]["file"] if str(a.file) == "newest" else str(a.file)
+        chosen = next((b for b in mine if b["file"] == name), None)
+        if chosen is None:
+            raise Failed("target", f"no backup {name} on the target that this recovery key opens")
+        return act(own.parent / chosen["appliance"] / chosen["file"])
+
+
+def backups_for_key(own: Path, identity: Path) -> list[dict]:
+    """The backups on the target the recovery key opens, newest first, under every appliance's name.
+
+    A replacement has a name of its own until the restore gives it the old one (VM check of #57: "there is
+    no backup on the target"), and an office may have several appliances backing up to one disk or share.
+    Each appliance has its own key (the web setup makes a new one each time), so the key says whose
+    backups are whose: another appliance's can't be chosen, even by mistake. Real folders with a host
+    name only, never links. ``Failed`` when there are none, or none the key opens (``decrypt``)."""
+    found = [dict(b, appliance=f.name) for f in sorted({own, *appliance_folders(own.parent)}) for b in backups_in(f)]
+    if not found:
+        raise Failed("target", "there is no backup on the target")
+    mine = [b for b in found if opens(own.parent / b["appliance"] / b["file"], identity)]
+    if not mine:
+        raise Failed("decrypt", "the recovery key opens none of the backups on the target")
+    return sorted(mine, key=lambda b: b["when"], reverse=True)
+
+
+def opens(file: Path, identity: Path) -> bool:
+    """Whether the recovery key opens a backup: age writes nothing unless the key is the one the backup was
+    made for, so the first byte is enough; the rest isn't read."""
+    p = subprocess.Popen(["age", "--decrypt", "--identity", str(identity), str(file)], stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL)
+    try:
+        return bool(p.stdout.read(1))
+    finally:
+        p.kill()
+        p.wait()
+        p.stdout.close()
+
+
+def recipient_of(identity: Path) -> str:
+    """The public half of a recovery key file."""
+    r = subprocess.run(["age-keygen", "-y", str(identity)], capture_output=True, text=True)
+    return r.stdout.strip().splitlines()[0] if r.returncode == 0 and r.stdout.strip() else ""
+
+
+def cmd_key_test(_a) -> int:
+    """The administrator's test (review of the backup strategy, 26 October 2026): does the office's recovery
+    key still open this appliance's newest backup, and is every part of it there? The appliance can't read
+    its own backups, so without this a lost key or a damaged backup shows only on the day of a restore.
+    Restores nothing. The key is deleted at the end whatever happened; the result goes to key-test.json
+    (no secrets), which the gateway shows."""
+    key, result = KEY_TEST / "key", {"at": now()}
+    try:
+        (KEY_TEST / "request").unlink(missing_ok=True)
+        if not key.is_file() or key.is_symlink():
+            raise Failed("settings", "no recovery key was given")
+        s = settings()
+        if s is None:
+            raise Failed("settings", "backups aren't set up")
+        if recipient_of(key) != s["recipient"]:
+            raise Failed("decrypt", "this isn't this appliance's recovery key: it opens none of its backups")
+        with Target(s) as folder:
+            found = backups_in(folder)
+            if not found:
+                raise Failed("target", "there is no backup on the target yet")
+            STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="check-", dir=STATE) as d:
+                manifest = unpack(folder / found[0]["file"], key, Path(d))
+                check_dumps(Path(d), manifest)
+        result.update(ok=True, file=found[0]["file"], created=manifest["created"])
+    except Failed as e:
+        result.update(ok=False, step=e.step, message=str(e)[:300])
+    finally:
+        key.unlink(missing_ok=True)
+        STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+        tmp = STATE / ".key-test.json.tmp"
+        tmp.write_text(json.dumps(result, indent=1) + "\n")
+        os.chmod(tmp, 0o644)  # the gateway shows it; no secrets
+        os.replace(tmp, STATE / "key-test.json")
+    say(f"key test: {'the key opens the newest backup, and every part of it is there' if result['ok'] else result['message']}")
+    return 0 if result["ok"] else 1
+
+
+def cmd_find(a) -> int:
+    """The backups on the target this recovery key opens: what a replacement may restore, and from when."""
+    s = settings(for_writing=False)
+    try:
+        if s is None:
+            raise Failed("settings", "no backup target in the settings")
+        with Target(s) as own:
+            mine = backups_for_key(own, a.identity)
+    except Failed as e:
+        print(json.dumps({"found": False, "step": e.step, "message": str(e)}) if a.json else f"find failed ({e.step}): {e}")
+        return 1
+    out = [{k: v for k, v in b.items() if k != "when"} for b in mine]
+    print(json.dumps({"found": True, "backups": out}, indent=1) if a.json
+          else "\n".join(f"{b['at']}  {b['size']:>14,}  {b['appliance']}  {b['file']}" for b in out))
+    return 0
 
 
 def cmd_check(a) -> int:
@@ -810,12 +1082,17 @@ def main() -> int:
     sub.add_parser("run", help="make a backup now")
     for name in ("status", "list"):
         sub.add_parser(name).add_argument("--json", action="store_true")
+    sub.add_parser("key-test", help=f"the administrator's test of the recovery key left in {KEY_TEST}")
+    p = sub.add_parser("find", help="the backups on the settings' target this recovery key opens")
+    p.add_argument("--identity", type=Path, required=True, help="a file with the office's recovery key (AGE-SECRET-KEY-…)")
+    p.add_argument("--json", action="store_true")
     for name in ("check", "restore"):
         p = sub.add_parser(name)
         p.add_argument("file", type=Path)
         p.add_argument("--identity", type=Path, required=True, help="a file with the office's recovery key (AGE-SECRET-KEY-…)")
         p.add_argument("--on-target", action="store_true",
-                       help="FILE is a backup's name on the settings' target, or newest; the target is mounted for it")
+                       help="FILE is a backup's name on the settings' target, or newest: of the backups this "
+                            "recovery key opens; the target is mounted for it")
         if name == "check":
             p.add_argument("--json", action="store_true")
         if name == "restore":
@@ -823,10 +1100,11 @@ def main() -> int:
     a = ap.parse_args()
     CONFIG = a.settings or CONFIG
     SHARE_SECRET = a.share_secret or SHARE_SECRET
-    if a.command in ("run", "list", "restore") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
+    if a.command in ("run", "list", "restore", "key-test") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
         ap.error("run as root")
     try:
-        return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore}[a.command](a)
+        return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore,
+                "find": cmd_find, "key-test": cmd_key_test}[a.command](a)
     except Failed as e:
         say(f"{a.command} failed ({e.step}): {e}")
         return 1

@@ -407,11 +407,12 @@ def test_on_systemd_the_site_is_reloaded_and_the_backup_timer_runs_at_once(monke
     monkeypatch.setattr(p, "REPO", Path("/root/suveryn-appliance"))
     written = {}
     monkeypatch.setattr(p.Path, "write_text", lambda self, text: written.__setitem__(str(self), text))
-    monkeypatch.setattr(p.Path, "read_text", lambda self: (HERE.parent / "backup" / "systemd" / self.name).read_bytes().decode())
+    monkeypatch.setattr(p.Path, "read_text", lambda self: (HERE.parent / "backup" / self.parent.name / self.name).read_bytes().decode())
     p.backup_service()
     unit = written["/etc/systemd/system/suveryn-backup.service"]
     assert "/root/suveryn-appliance/backup/suveryn-backup run" in unit and "ProtectHome=read-only" in unit
-    assert ("systemctl", "enable", "--now", "suveryn-backup.timer") in ran
+    assert ("systemctl", "enable", "--now", "suveryn-backup.timer", "suveryn-backup-key-test.path") in ran
+    assert "suveryn-backup-key-test.service" in "".join(written) and "/run/suveryn/backup-key-test" in written["/etc/tmpfiles.d/suveryn-backup.conf"]
 
 
 def test_the_temporary_keycloak_administrator_goes_once_the_office_has_its_own(monkeypatch, tmp_path):

@@ -1,0 +1,17 @@
+# Does the office's recovery key open this appliance's newest backup, and is every part of it there?
+# Restores nothing; deletes the key whatever happens (backup/suveryn-backup key-test).
+[Unit]
+Description=sūveryn backup key test
+After=local-fs.target network-online.target
+# Not while tonight's backup is being written: the test waits for it.
+After=suveryn-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup key-test
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+TimeoutStartSec=3h
