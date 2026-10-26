@@ -543,11 +543,19 @@ args = sys.argv[1:]
 settings = json.load(open(args[args.index("--settings") + 1]))
 key = open(args[args.index("--identity") + 1]).read().strip()
 json.dump({{"settings": settings, "key_ok": key == {KEY!r}}}, open({str(seen)!r}, "w"))
-print(json.dumps({{"usable": True, "file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
-                  "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent", "entries": {{}}, "files": ["etc"]}}))
+if args[args.index("--share-secret") + 2 if "--share-secret" in args else 2] == "find":
+    print(json.dumps({{"found": True, "backups": [
+        {{"file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age", "at": "2026-10-23T02:39:00Z", "size": 1200,
+         "appliance": "notary-ghent"}},
+        {{"file": "suveryn-backup_notary-ghent_20261016T023900Z.tar.zst.age", "at": "2026-10-16T02:39:00Z", "size": 1100,
+         "appliance": "notary-ghent"}}]}}))
+else:
+    assert args[args.index("check") + 1] == "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age"  # the newest of the key's, checked
+    print(json.dumps({{"usable": True, "file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
+                      "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent", "entries": {{}}, "files": ["etc"]}}))
 """)
     s.PROVISION = stand_in(tmp_path / "provision", """import sys
-assert sys.argv[1] == "restore" and "--backup" in sys.argv
+assert sys.argv[1] == "restore" and sys.argv[sys.argv.index("--backup") + 1] == "suveryn-backup_notary-ghent_20261016T023900Z.tar.zst.age"
 for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)", "Network mode", "Starting the services", "Verify"):
     print("== " + t, flush=True)
 """)
@@ -559,11 +567,14 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
     assert s.restore_check() == 0
     assert json.loads(seen.read_text()) == {"settings": {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53"}, "key_ok": True}
     _, r = api("GET", "restore")
-    assert r == {"state": "checked", "backup": {"file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
-                                                "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent"}}
+    assert r["state"] == "checked" and r["backup"] == {"file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age",
+                                                       "created": "2026-10-23T02:39:00Z", "appliance": "notary-ghent"}
+    assert [c["created"] for c in r["choices"]] == ["2026-10-23T02:39:00Z", "2026-10-16T02:39:00Z"]
     assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == (204, None)  # still open until it starts
-    status, r = api("POST", "restore/start")
-    assert status == 200 and r["state"] == "restoring"
+    # only one of the backups the check found for this key, never another appliance's
+    assert api("POST", "restore/start", {"file": "suveryn-backup_other_20261024T023900Z.tar.zst.age"})[0] == 422
+    status, r = api("POST", "restore/start", {"file": "suveryn-backup_notary-ghent_20261016T023900Z.tar.zst.age"})  # a week earlier
+    assert status == 200 and r["state"] == "restoring" and r["backup"]["created"] == "2026-10-16T02:39:00Z"
     assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == (422, {"error": "restore_started"})
     assert s.restore_run() == 0
     done = json.loads(s.RESTORE.read_text())

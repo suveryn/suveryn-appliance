@@ -1,0 +1,10 @@
+# The administrator's "Test with the recovery key" (Administration › Backups): the gateway leaves the key
+# and then a request in /run/suveryn/backup-key-test (backup/tmpfiles); this starts the test.
+[Unit]
+Description=sūveryn backup key test, when the administrator asks
+
+[Path]
+PathExists=/run/suveryn/backup-key-test/request
+
+[Install]
+WantedBy=paths.target

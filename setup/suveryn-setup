@@ -511,13 +511,22 @@ def progress() -> dict | None:
     return p if isinstance(p, dict) and p.get("state") in ("running", "done", "failed") else None
 
 
+def chosen_backup(r: dict) -> dict | None:
+    """The backup the office chose on the confirm screen (``restore-start``): one of those the check found
+    for its key, or None. Read back as untrusted input."""
+    choice = read_json(ANSWERS / "restore-start")
+    file = choice.get("file") if isinstance(choice, dict) else None
+    return next((c for c in r.get("choices") or [] if isinstance(c, dict) and c.get("file") == file), None)
+
+
 def restore_progress() -> dict | None:
     """How far a restore is (#56); a request not yet picked up shows as checking or restoring."""
     if (ANSWERS / "restore-check").exists():
         return {"state": "checking"}
     r = read_json(RESTORE)
     if (ANSWERS / "restore-start").exists() and isinstance(r, dict):
-        return {**r, "state": "restoring", "steps": [{"id": s, "state": "waiting"} for s in RESTORE_STEPS]}
+        return {**r, "backup": chosen_backup(r) or r.get("backup"), "state": "restoring",
+                "steps": [{"id": s, "state": "waiting"} for s in RESTORE_STEPS]}
     return r if isinstance(r, dict) and r.get("state") in ("checking", "checked", "restoring", "done", "failed") else None
 
 
@@ -557,15 +566,21 @@ class App:
         if r and r["state"] in ("checking", "restoring", "done"):
             raise Refused({"_": "restore_started"})
 
-    def start_restore(self) -> dict:
-        """The restore of the backup the check found starts; once started, nothing changes (#56)."""
+    def start_restore(self, data) -> dict:
+        """The restore starts, of the backup the office chose among those the check found for its key (the
+        newest unless it chose another date); once started, nothing changes (#56)."""
         with self.lock:
             r = restore_progress()
             if r and r["state"] in ("restoring", "done"):
                 return r
             if not r or r["state"] != "checked":
                 raise Refused({"_": "not_checked"})
-            write_file(ANSWERS / "restore-start", "requested by the web setup\n", 0o644)
+            file = data.get("file") if isinstance(data, dict) else None
+            if file is None:
+                file = (r.get("backup") or {}).get("file")
+            if not any(c.get("file") == file for c in r.get("choices") or [] if isinstance(c, dict)):
+                raise Refused({"file": "invalid"})
+            write_file(ANSWERS / "restore-start", json.dumps({"file": file}), 0o644)
             return restore_progress()
 
     def state(self) -> dict:
@@ -602,7 +617,7 @@ class App:
         if route == "POST provision":
             return 200, self.start()
         if route == "POST restore/start":
-            return 200, self.start_restore()
+            return 200, self.start_restore(data)
         self.locked()
         if route == "PUT answers/restore":
             answer, key, password = check_restore(data)
@@ -968,6 +983,8 @@ def restore_work() -> Path:
     return work
 
 
+NAME_OF_BACKUP = re.compile(r"suveryn-backup_[a-z0-9-]+_\d{8}T\d{6}Z\.tar\.zst\.age")
+HOST_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 # "version": a backup from a newer PostgreSQL than this appliance's, e.g. a 26.04 appliance's onto 24.04 (#57).
 CHECK_ERRORS = {"decrypt": "wrong_key", "read": "damaged", "check": "damaged", "settings": "invalid", "database": "damaged",
                 "version": "newer"}
@@ -982,8 +999,12 @@ def forget_restore_secrets(work: Path | None = None) -> None:
             remove(work / f)
 
 
+MAX_CHOICES = 400  # a year of nightly backups, and some
+
+
 def restore_check() -> int:
-    """Find the newest backup on the target and check it with the key: what the screen asks to confirm."""
+    """Find the backups on the target the key opens (its appliance's: each has its own key), and check the
+    newest with the key: what the screen asks to confirm, with the others' dates to choose from."""
     write_file(RESTORE, json.dumps({"state": "checking"}), 0o644)
     remove(ANSWERS / "restore-check")
     work = restore_work()
@@ -993,14 +1014,27 @@ def restore_check() -> int:
         write_file(RESTORE, json.dumps({"state": "failed", "error": "invalid"}), 0o644)
         forget_restore_secrets(work)
         return 1
-    code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", "newest", "--on-target", "--json",
-                    "--identity", ANSWERS / "recovery-key", timeout=1800)
+    code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "find", "--json", "--identity", ANSWERS / "recovery-key",
+                    timeout=600)
     try:
-        r = json.loads(out.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        r = {"usable": False, "step": "check"}
+        found = json.loads(out.strip()) if out.strip().startswith("{") else {}
+    except ValueError:
+        found = {}
+    choices = [{"file": b["file"], "created": b["at"], "appliance": b["appliance"], "size": b["size"]}
+               for b in found.get("backups") or [] if isinstance(b, dict) and NAME_OF_BACKUP.fullmatch(str(b.get("file")))
+               and isinstance(b.get("size"), int) and HOST_LABEL.fullmatch(str(b.get("appliance")))][:MAX_CHOICES]
+    if not found.get("found") or not choices:
+        r = {"usable": False, "step": found.get("step", "check"), "message": found.get("message", "")}
+    else:
+        code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", choices[0]["file"], "--on-target", "--json",
+                        "--identity", ANSWERS / "recovery-key", timeout=1800)
+        try:
+            r = json.loads(out.strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            r = {"usable": False, "step": "check"}
     if r.get("usable"):
-        result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]}}
+        result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
+                  "choices": choices}
     else:
         error = ("no_backup" if "no backup" in str(r.get("message", "")) else "unreachable") if r.get("step") == "target" \
             else CHECK_ERRORS.get(r.get("step"), "damaged")
@@ -1013,8 +1047,8 @@ def restore_check() -> int:
 def restore_run() -> int:
     """Restore the backup the check found (suveryn-provision restore), reporting its steps; then close setup."""
     found = read_json(RESTORE, {}) or {}
+    backup = chosen_backup(found) or found.get("backup") or {}
     remove(ANSWERS / "restore-start")
-    backup = found.get("backup") or {}
     r = {"state": "restoring", "backup": backup, "address": f"https://{backup.get('appliance', '')}.local",
          "steps": [{"id": s, "state": "waiting"} for s in RESTORE_STEPS]}
 
