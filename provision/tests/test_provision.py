@@ -451,7 +451,7 @@ def test_without_the_temporary_administrator_verify_says_the_sign_in_check_was_n
 
 
 def test_the_images_llama_server_carries_machine_code_for_every_office_card():
-    """CUDA 13.2 with driver 580: a card without machine code would need the driver to compile CUDA 13.2's
+    """CUDA 13 with driver 580: a card without machine code would need the driver to compile a newer CUDA 13's
     intermediate code, which 580 can't (#57). So every generation an office card can be is listed."""
     assert p.IMAGE_CUDA_ARCHITECTURES.split(";") == ["80", "86", "89", "90", "120"]
     src = (HERE / "suveryn-provision").read_text()

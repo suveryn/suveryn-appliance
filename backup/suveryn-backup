@@ -40,6 +40,11 @@ never from the manifest. Anything else and the backup is refused before anything
 Nor is it trusted to be small: unpacking stops at 10,000 entries, 256 MiB of folders, or before the
 data partition would be full.
 
+**Test machines.** The folders are those on the data partition of the stick's layout
+(``/var/lib/suveryn/etc`` and so on, which ``/etc/suveryn`` links to). A test machine installed with the
+provision path keeps its settings in ``/etc/suveryn`` itself, so its backups hold the databases only and
+nobody signs in after restoring one elsewhere; give it the layout first (VM check of #57).
+
 **All or nothing.** The databases and folders are restored beside the live ones, the databases swapped
 in one transaction, then the folders and the roles' passwords. The old databases and folders are kept
 until every step has worked; a failure after the swap puts them back.
@@ -191,7 +196,8 @@ def usb_partition(disk_id: str) -> Path:
 
 
 class Target:
-    """The folder backups go to, mounted for the run (``with Target(settings) as folder``)."""
+    """The folder backups go to, mounted for the run (``with Target(settings) as folder``): this appliance's
+    own, ``suveryn-backups/<name>``. Its parent holds every appliance's (``on_target`` looks there)."""
 
     def __init__(self, s: dict):
         self.s, self.mounted, self.creds = s, False, None
@@ -249,6 +255,14 @@ class Target:
         if self.mounted:
             subprocess.run(["sync"], check=False)
             subprocess.run(["umount", str(MOUNT)], check=False, capture_output=True)
+
+
+def appliance_folders(base: Path) -> list[Path]:
+    """The appliances' folders under ``suveryn-backups``: real folders with a host name, never links."""
+    try:
+        return [f for f in base.iterdir() if f.is_dir() and not f.is_symlink() and HOST_NAME.match(f.name)]
+    except OSError:
+        return []
 
 
 def backups_in(folder: Path) -> list[dict]:
@@ -539,14 +553,19 @@ def on_target(a, act) -> int:
     s = settings(for_writing=False)
     if s is None:
         raise Failed("settings", "no backup target in the settings")
-    with Target(s) as folder:
-        found = backups_in(folder)
+    with Target(s) as own:
+        # Under every appliance's name, not only this one's: a replacement has a name of its own until the
+        # restore gives it the old one (VM check of #57: "there is no backup on the target").
+        folders = sorted({own, *appliance_folders(own.parent)})
+        found = sorted((dict(b, folder=f) for f in folders for b in backups_in(f)), key=lambda b: b["when"], reverse=True)
         if not found:
             raise Failed("target", "there is no backup on the target")
         name = found[0]["file"] if str(a.file) == "newest" else str(a.file)
-        if not NAME.fullmatch(name) or not (folder / name).is_file():
+        m = NAME.fullmatch(name)
+        file = own.parent / m["name"] / name if m else None
+        if file is None or not HOST_NAME.match(m["name"]) or file.parent.is_symlink() or not file.is_file():
             raise Failed("target", f"no backup {name} on the target")
-        return act(folder / name)
+        return act(file)
 
 
 def cmd_check(a) -> int:

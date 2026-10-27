@@ -27,9 +27,10 @@ inside the test system (mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest)
 6. five wrong keys: a new TPM again; after five wrong keys the unlock gives up and nothing starts
 7. a changed block in slot A: verity refuses it
 
-Needs root, qemu-system-x86_64, OVMF, swtpm, sfdisk, losetup, mkfs.vfat and mtools, and for step 4
-Python Playwright with Chromium and the test image built with the chat UI (test/make-test-ui). Without
-KVM each boot takes two to five minutes.
+Needs root, qemu-system-x86_64, OVMF, swtpm (with swtpm-tools), sfdisk, losetup, mkfs.vfat, mtools and
+Python's pyte, and for step 4 Python Playwright with Chromium (1.64 or later on Ubuntu 26.04: older ones
+refuse it) and the test image built with the chat UI (test/make-test-ui). About 4 GB of memory per test
+machine. Without KVM each boot takes two to five minutes.
 
     sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
 """
@@ -165,7 +166,9 @@ def boot(work: Path, name: str, disks: list[Path], tpm: TPM, vars_file: Path, cr
     log = work / f"{name}.log"
     sersock = work / f"{name}.serial"
     tpmsock = tpm.start()
-    cmd = ["qemu-system-x86_64", "-machine", "q35", "-accel", ACCEL, "-cpu", "max", "-smp", "2", "-m", "2048",
+    # 4 GB: kernel 7.0's kexec handover can reserve over a gigabyte at boot, and with 2 GB the install
+    # boot's initrd didn't fit (VM check of #57: "Initramfs unpacking failed: write error").
+    cmd = ["qemu-system-x86_64", "-machine", "q35", "-accel", ACCEL, "-cpu", "max", "-smp", "2", "-m", "4096",
            "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF_CODE}",
            "-drive", f"if=pflash,format=raw,file={vars_file}",
            "-chardev", f"socket,id=chrtpm,path={tpmsock}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm",
