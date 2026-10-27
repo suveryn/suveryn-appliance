@@ -28,7 +28,9 @@ MACHINE = {
         "fingerprint": "4F:9A:1C:E2:07:B3:58:D6:21:AF:90:3C:7E:55:C1:08:B2:6D:F4:19:83:0A:E7:42:5B:CC:61:9E:D0:37:2A:F5",
         "identity": {"uuid": "7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41",
                      "fingerprint": "cf79c57e87d030fc85927cae01a0cd47dc551f75234ea29943fb148408fe8a16"},
-        "installed": "2026-10-12T12:00:00Z", "language": "en", "manifest": None, "timezone": "Europe/Brussels",
+        # two days ago: the support grace period (14 days) counts from the installation, by the clock
+        "installed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 2 * 86400)), "language": "en",
+        "manifest": None, "timezone": "Europe/Brussels",
         "now": 1791807120,
     },
 }

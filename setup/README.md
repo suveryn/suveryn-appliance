@@ -67,10 +67,12 @@ send without the browser asking first. The service logs method, path and status 
 `suveryn-setup provision`, started by the same path unit, sees `answers/restore-check` or
 `answers/restore-start` instead of `answers/start`:
 
-- **check**: `suveryn-backup --settings <target> check newest --on-target --json --identity <key>`;
+- **check**: `suveryn-backup --settings <target> find --json --identity <key>` (the backups that key opens,
+  under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
+  offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
   the result says `checked` with the backup, or `failed` with `wrong_key`, `no_backup`, `unreachable`,
   `damaged`, `newer` (made with a newer PostgreSQL than this appliance's, #57) or `invalid`.
-- **restore**: `suveryn-provision restore --settings … --identity … --backup <the file checked>`, its
+- **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its
   `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old
   appliance's network mode and name) and **services**. The key and the share's password are deleted
   afterwards whether it worked or not. On success setup closes as below; the appliance now answers at
