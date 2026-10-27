@@ -525,3 +525,142 @@ def test_a_backup_that_unpacks_to_too_much_is_refused_before_it_fills_the_disk(a
     assert r.returncode == 1 and "restore failed (read)" in r.stdout and says in r.stdout, r.stdout
     assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
     assert not [p for p in (var / "backup").iterdir() if p.name.startswith(("restore-", "check-"))]
+
+
+@needs
+def test_with_several_appliances_on_one_target_the_key_says_whose_backups_to_restore(appliance, tmp_path):
+    """An office with two appliances backing up to the same share: the replacement for the first must restore
+    the first's backups, even when the second's are newer. Each appliance has its own recovery key, and a
+    backup is only offered when the key given opens it."""
+    env, var = appliance["env"], appliance["var"]
+    assert tool(env, "run").returncode == 0  # test-appliance, the office's recovery key
+    other_key = tmp_path / "other.key"
+    subprocess.run(["age-keygen", "-o", str(other_key)], capture_output=True, check=True)
+    other = next(line.split(": ")[1] for line in other_key.read_text().splitlines() if line.startswith("# public key"))
+    config = json.loads(appliance["config"].read_text())
+    other_config = tmp_path / "other.json"
+    other_config.write_text(json.dumps({**config, "recipient": other}))
+    (var / "host" / "hostname").write_text("notary-02\n")
+    import time
+    time.sleep(1.1)  # a newer backup, by the second
+    assert tool({**env, "SUVERYN_BACKUP_CONFIG": str(other_config)}, "run").returncode == 0
+    (var / "host" / "hostname").write_text("suveryn-4f2a\n")  # the replacement for test-appliance
+    given = tmp_path / "restore-settings.json"
+    given.write_text(json.dumps({"target": "folder", "path": str(appliance["target"])}))
+    env = {**env, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "none.json")}
+
+    r = tool(env, "--settings", given, "find", "--json", "--identity", appliance["key"])
+    found = json.loads(r.stdout)
+    assert r.returncode == 0 and [b["appliance"] for b in found["backups"]] == ["test-appliance"], r.stdout
+    r = tool(env, "--settings", given, "find", "--json", "--identity", other_key)
+    assert [b["appliance"] for b in json.loads(r.stdout)["backups"]] == ["notary-02"]
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["key"])
+    assert json.loads(r.stdout)["appliance"] == "test-appliance", r.stdout  # not the newer notary-02
+    # notary-02's backup by name, with test-appliance's key: not offered
+    r = tool(env, "--settings", given, "check", json.loads(tool(env, "--settings", given, "find", "--json", "--identity",
+             other_key).stdout)["backups"][0]["file"], "--on-target", "--json", "--identity", appliance["key"])
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "target"
+    # a key that opens none of them
+    stranger = tmp_path / "stranger.key"
+    subprocess.run(["age-keygen", "-o", str(stranger)], capture_output=True, check=True)
+    r = tool(env, "--settings", given, "find", "--json", "--identity", stranger)
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "decrypt"
+    r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", stranger)
+    assert r.returncode == 1 and json.loads(r.stdout)["step"] == "decrypt"
+
+
+@needs
+def test_a_full_disk_clears_what_is_past_the_retention_first_and_then_says_it_is_full(appliance):
+    """Review of the backup strategy: backups past the retention period went only after a success, so a full
+    disk failed every night for good. Now they go first; if it still doesn't fit, the step is "space"."""
+    env, folder = appliance["env"], appliance["target"] / "suveryn-backups" / "test-appliance"
+    assert tool(env, "run").returncode == 0
+    newest = next(folder.glob("*.age")).name
+    old = folder / "suveryn-backup_test-appliance_20200101T000000Z.tar.zst.age"
+    old.write_bytes(b"an old backup")
+    (folder / f"{old.name}.sha256").write_text("0  x\n")
+    # the newest stays the newest: the old one is past the 30 days
+    r = tool({**env, "SUVERYN_BACKUP_TEST_FREE": "1000"}, "run")
+    assert r.returncode == 1 and "backup failed (space): the backup disk is full" in r.stdout, r.stdout
+    assert not old.exists() and not (folder / f"{old.name}.sha256").exists()  # cleared before the check
+    assert sorted(p.name for p in folder.iterdir()) == [newest, f"{newest}.sha256"]  # the newest always stays
+    status = json.loads((appliance["var"] / "backup" / "status.json").read_text())
+    assert status["last_error"]["step"] == "space"
+
+
+@needs
+def test_each_backup_is_read_back_from_the_disk_and_its_checksum_kept_and_compared(appliance):
+    """Review of the backup strategy: a backup was checked only by its size. Now it is read back from the
+    disk and compared, its checksum stays beside it, and check and restore compare it first."""
+    env, folder = appliance["env"], appliance["target"] / "suveryn-backups" / "test-appliance"
+    r = tool({**env, "SUVERYN_BACKUP_TEST_CORRUPT": "1"}, "run")
+    assert r.returncode == 1 and "backup failed (verify): the backup disk didn't give back what was written" in r.stdout, r.stdout
+    assert not list(folder.iterdir())  # nothing half-written left
+    assert tool(env, "run").returncode == 0
+    [backup] = folder.glob("*.age")
+    import hashlib
+    sidecar = (folder / f"{backup.name}.sha256").read_text().split()
+    assert sidecar == [hashlib.sha256(backup.read_bytes()).hexdigest(), backup.name]
+    status = json.loads((appliance["var"] / "backup" / "status.json").read_text())
+    assert status["last_success"]["sha256"] == sidecar[0]
+    with open(backup, "r+b") as f:  # the disk changes a byte later on
+        f.seek(200)
+        b = f.read(1)
+        f.seek(200)
+        f.write(bytes([b[0] ^ 1]))
+    r = tool(env, "check", backup, "--identity", appliance["key"])
+    assert r.returncode == 1 and "its checksum doesn't match; the disk may be failing" in r.stdout, r.stdout
+
+
+def test_a_second_usb_disk_for_rotation_is_recognised_and_another_offices_never(tmp_path):
+    """Review of the backup strategy: only the one disk chosen in the setup was accepted, so two disks swapped
+    weekly (one kept elsewhere) weren't possible. A disk with a suveryn-backups folder is this office's,
+    unless the folder is marked with another office's key."""
+    m = load()
+    listing = {"blockdevices": [
+        {"name": "sda", "path": "/dev/sda", "tran": "sata", "type": "disk", "fstype": None, "children": [
+            {"name": "sda1", "path": "/dev/sda1", "type": "part", "fstype": "ext4"}]},                      # the appliance's own
+        {"name": "sdb", "path": "/dev/sdb", "tran": "usb", "type": "disk", "model": "Extreme  SSD", "serial": "4C53", "children": [
+            {"name": "sdb1", "path": "/dev/sdb1", "type": "part", "fstype": "exfat"},
+            {"name": "sdb2", "path": "/dev/sdb2", "type": "part", "fstype": "swap"}]},
+        {"name": "sdc", "path": "/dev/sdc", "tran": "usb", "type": "disk", "model": "Elements", "serial": None, "fstype": "ntfs"}]}
+    assert m.usb_candidates(listing) == [(Path("/dev/sdb1"), "usb-Extreme_SSD_4C53"), (Path("/dev/sdc"), "usb-Elements_sdc")]
+    ours, theirs = "age1" + "q" * 58, "age1" + "p" * 58
+    top = tmp_path / "suveryn-backups"
+    assert not m.office_disk(top, ours)            # no folder: someone's own disk, never written to
+    top.mkdir()
+    assert m.office_disk(top, ours)                # the office made the folder on its second disk
+    (top / m.OFFICE_MARK).write_text(ours + "\n")
+    assert m.office_disk(top, ours)
+    (top / m.OFFICE_MARK).write_text(theirs + "\n")
+    assert not m.office_disk(top, ours)            # another office's (or another appliance's) disk
+
+
+@needs
+def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key(appliance, tmp_path):
+    """Review of the backup strategy: the appliance can't read its own backups, so a lost key or a damaged
+    backup showed only on the day of a restore. The administrator's test checks the newest with the key,
+    restores nothing, and deletes the key whatever happens."""
+    drop = tmp_path / "key-test"
+    drop.mkdir()
+    env = {**appliance["env"], "SUVERYN_BACKUP_KEY_TEST": str(drop)}
+    result = appliance["var"] / "backup" / "key-test.json"
+
+    def test_with(key_text):
+        (drop / "key").write_text(key_text)
+        (drop / "request").write_text("asked\n")
+        r = tool(env, "key-test")
+        assert not (drop / "key").exists() and not (drop / "request").exists()  # gone, whatever happened
+        return r, json.loads(result.read_text())
+
+    r, out = test_with(appliance["key"].read_text())
+    assert r.returncode == 1 and out["ok"] is False and out["step"] == "target"  # nothing backed up yet
+    assert tool(env, "run").returncode == 0
+    r, out = test_with(appliance["key"].read_text())
+    assert r.returncode == 0 and out["ok"] is True and out["file"].startswith("suveryn-backup_test-appliance_"), out
+    assert oct(result.stat().st_mode & 0o777) == "0o644" and "AGE-SECRET-KEY" not in result.read_text()
+    other = tmp_path / "other.key"
+    subprocess.run(["age-keygen", "-o", str(other)], capture_output=True, check=True)
+    r, out = test_with(other.read_text())  # another appliance's key, or an old one
+    assert r.returncode == 1 and out["ok"] is False and out["step"] == "decrypt" and "isn't this appliance's recovery key" in out["message"]
+    assert tool(env, "key-test").returncode == 1 and json.loads(result.read_text())["step"] == "settings"  # no key given

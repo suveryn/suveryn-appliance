@@ -52,7 +52,7 @@ if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
   # The network mode's outgoing rules and resolver, once first boot has set the mode.
   systemctl enable suveryn-egress.service suveryn-dns.service
   # Backups (#33): nightly, once the web setup has saved where to. NFS needs no rpcbind for v4: none runs.
-  systemctl enable suveryn-backup.timer
+  systemctl enable suveryn-backup.timer suveryn-backup-key-test.path
   systemctl mask rpcbind.service rpcbind.socket 2>/dev/null || true
 fi
 link /var/lib/suveryn/postgresql-etc   /etc/postgresql

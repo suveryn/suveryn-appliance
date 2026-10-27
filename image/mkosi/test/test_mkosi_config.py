@@ -549,7 +549,12 @@ def test_backups_are_in_the_image_nightly_and_without_rpcbind():
     conf = (MKOSI / "mkosi.conf.d" / "30-services.conf").read_text()
     assert {"age", "zstd", "cifs-utils", "nfs-common"} <= packages(MKOSI / "mkosi.conf.d" / "30-services.conf")
     assert "../../backup:/opt/suveryn/appliance/backup" in conf and "../../backup/systemd:/usr/lib/systemd/system" in conf
-    assert "systemctl enable suveryn-backup.timer" in POSTINST and "systemctl mask rpcbind.service rpcbind.socket" in POSTINST
+    assert "systemctl enable suveryn-backup.timer suveryn-backup-key-test.path" in POSTINST
+    assert "systemctl mask rpcbind.service rpcbind.socket" in POSTINST
+    assert "../../backup/tmpfiles:/usr/lib/tmpfiles.d" in conf  # the key test's folder, for the gateway
+    key_test = (REPO / "backup" / "systemd" / "suveryn-backup-key-test.path").read_text()
+    assert "PathExists=/run/suveryn/backup-key-test/request" in key_test
+    assert re.search(r"^d /run/suveryn/backup-key-test\s+0700 suveryn\s+suveryn", (REPO / "backup" / "tmpfiles" / "suveryn-backup.conf").read_text(), re.M)
     unit = (REPO / "backup" / "systemd" / "suveryn-backup.service").read_text()
     assert "ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup run" in unit
     assert "ConditionPathExists=/etc/suveryn/backups.json" in unit
