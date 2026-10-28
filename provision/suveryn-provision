@@ -1638,7 +1638,8 @@ def image(with_web_setup: bool = True) -> None:
         web_setup()
 
 
-BACKUP_UNITS = ["suveryn-backup.service", "suveryn-backup.timer", "suveryn-backup-key-test.path", "suveryn-backup-key-test.service"]
+BACKUP_UNITS = ["suveryn-backup.service", "suveryn-backup.timer", "suveryn-backup-key-test.path", "suveryn-backup-key-test.service",
+                "suveryn-backup-request.path", "suveryn-backup-request.service"]
 
 
 def backup_service() -> None:
@@ -1652,13 +1653,15 @@ def backup_service() -> None:
         if str(REPO).startswith(("/root/", "/home/")):  # the tool is read from there (VM check of #33)
             text = text.replace("ProtectHome=yes", "ProtectHome=read-only")
         Path(f"/etc/systemd/system/{unit}").write_text(text)
-    # the administrator's key test: its folder in memory, for the gateway
+    # the administrator's key test and requests: their folders in memory, for the gateway
     Path("/etc/tmpfiles.d/suveryn-backup.conf").write_text((REPO / "backup" / "tmpfiles" / "suveryn-backup.conf").read_text())
     run("systemd-tmpfiles", "--create", "/etc/tmpfiles.d/suveryn-backup.conf", check=False)
     if systemd_running():
         run("systemctl", "daemon-reload")
-        run("systemctl", "enable", "--now", "suveryn-backup.timer", "suveryn-backup-key-test.path")  # started, not only at the next boot
-    note("suveryn-backup.timer: nightly, once a backup target is set; the key test when the administrator asks")
+        run("systemctl", "enable", "--now", "suveryn-backup.timer", "suveryn-backup-key-test.path",
+            "suveryn-backup-request.path")  # started, not only at the next boot
+    note("suveryn-backup.timer: at the office's hour, once a backup target is set; the key test and the "
+         "administrator's requests when asked")
 
 
 SETUP_UNITS = ["suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"]
