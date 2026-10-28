@@ -182,6 +182,29 @@ def test_the_directory_client_must_carry_view_users_in_its_scope_and_nothing_mor
             build_realm.production_realm({**with_dir, "clientScopeMappings": bad}, URL, "c", "d")
 
 
+ADMIN_COMPOSITE = {"name": "suveryn-admin", "composite": True,
+                   "composites": {"client": {"realm-management": ["manage-users", "view-users", "view-realm", "view-events"]}}}
+
+
+def test_only_the_administrator_role_carries_account_management_and_no_more(dev):
+    """Administration › Users manages the accounts with the administrator's own token (suveryn-core,
+    Filip, 28 October), so suveryn-admin is a composite of the four realm-management roles it needs.
+    More than those, a realm role inside it, or another composite role is refused."""
+    realm = build_realm.production_realm({**dev, "roles": {"realm": [ADMIN_COMPOSITE]}}, URL, "c",
+                                         "d" if build_realm.has_directory_client(dev) else "")
+    assert realm["roles"]["realm"] == [ADMIN_COMPOSITE]
+    build_realm.production_realm({**dev, "roles": {"realm": [{"name": "suveryn-admin"}]}}, URL, "c",
+                                 "d" if build_realm.has_directory_client(dev) else "")  # a plain role, as before
+    more = {"realm-management": ["manage-users", "manage-realm"]}
+    for bad in ({**ADMIN_COMPOSITE, "composites": {"client": more}},
+                {**ADMIN_COMPOSITE, "composites": {"realm": ["offline_access"]}},
+                {**ADMIN_COMPOSITE, "composites": {"client": {"account": ["manage-account"]}}},
+                {**ADMIN_COMPOSITE, "name": "office-staff"}):
+        with pytest.raises(SystemExit, match="carries more than"):
+            build_realm.production_realm({**dev, "roles": {"realm": [bad]}}, URL, "c",
+                                         "d" if build_realm.has_directory_client(dev) else "")
+
+
 def test_the_realm_comes_from_a_checkout_without_git_when_its_hash_is_the_locks(tmp_path, dev):
     """The read-only system's /opt/suveryn/core has no git and no .git (#47): the lock's sha256 pins it."""
     (tmp_path / LOCK["path"]).parent.mkdir(parents=True)
