@@ -1,0 +1,13 @@
+# One request from the administrator (backup/suveryn-backup request). Not after a running backup: a backup
+# may take hours, and a request takes seconds; a share is tested on a mount point of its own.
+[Unit]
+Description=sūveryn backup request
+After=local-fs.target network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup request
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+TimeoutStartSec=2min
