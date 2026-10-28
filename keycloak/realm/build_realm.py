@@ -63,6 +63,10 @@ MIN_PASSWORD = 15
 # What the office's administrator may do in Keycloak's admin console for this realm: manage the
 # office's own accounts. Nothing on the realm's settings, clients or other realms.
 ADMIN_CLIENT_ROLES = ["manage-users", "view-users", "query-users", "query-groups"]
+# What the suveryn-admin realm role itself may carry (suveryn-core's realm): the gateway manages the
+# office's accounts for Administration › Users with the administrator's own token, so the role is a
+# composite of these and no more (users, the role list, sign-in and admin events).
+ADMIN_ROLE_COMPOSITES = {"manage-users", "view-users", "view-realm", "view-events"}
 DIRECTORY_ROLES = {"view-users", "view-realm"}  # the directory service account: read-only, nothing else (avatars: view-realm lists who administers)
 # Keycloak's pbkdf2-sha512 credential (its default before Keycloak 24, still read by 26): the
 # password never appears in the realm file, only its hash.
@@ -197,6 +201,15 @@ def verify(realm: dict, public_url: str) -> None:
             problems.append(f"client {c['clientId']} must have no sign-in flow of its own")
         if c.get("attributes", {}).get("pkce.code.challenge.method") != "S256":
             problems.append(f"client {c['clientId']} doesn't require PKCE S256")
+    for role in realm.get("roles", {}).get("realm", []):
+        composites = role.get("composites") or {}
+        if not (role.get("composite") or composites):
+            continue
+        given = composites.get("client", {})
+        if (role.get("name") != "suveryn-admin" or composites.keys() - {"client"} or given.keys() - {"realm-management"}
+                or not set(given.get("realm-management", [])) <= ADMIN_ROLE_COMPOSITES):
+            problems.append(f"realm role {role.get('name')} carries more than {', '.join(sorted(ADMIN_ROLE_COMPOSITES))} "
+                            "(only suveryn-admin may, for Administration › Users)")
     for u in realm.get("users", []):
         if u.get("serviceAccountClientId"):
             roles = set(u.get("clientRoles", {}).get("realm-management", [])) if u.get("clientRoles", {}).keys() <= {"realm-management"} else None
