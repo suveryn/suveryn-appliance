@@ -411,7 +411,7 @@ def test_on_systemd_the_site_is_reloaded_and_the_backup_timer_runs_at_once(monke
     p.backup_service()
     unit = written["/etc/systemd/system/suveryn-backup.service"]
     assert "/root/suveryn-appliance/backup/suveryn-backup run" in unit and "ProtectHome=read-only" in unit
-    assert ("systemctl", "enable", "--now", "suveryn-backup.timer", "suveryn-backup-key-test.path") in ran
+    assert ("systemctl", "enable", "--now", "suveryn-backup.timer", "suveryn-backup-key-test.path", "suveryn-backup-request.path") in ran
     assert "suveryn-backup-key-test.service" in "".join(written) and "/run/suveryn/backup-key-test" in written["/etc/tmpfiles.d/suveryn-backup.conf"]
 
 

@@ -1,11 +1,12 @@
-# Nightly, in the small hours of the office's time zone, and on the next start when the appliance was
-# off at that time (Persistent).
+# Every hour on the hour: suveryn-backup run --scheduled makes the backup only at the office's hour (the
+# "hour" in /etc/suveryn/backups.json, 02:00 local time by default, chosen in Administration › Backups) or
+# when the administrator asked for one now. /etc is read-only, so the hour lives in the settings, not in this
+# timer. When the appliance was off at that hour, the first run after it starts makes it (Persistent).
 [Unit]
 Description=sūveryn nightly backup
 
 [Timer]
-OnCalendar=*-*-* 02:30:00
-RandomizedDelaySec=30min
+OnCalendar=*-*-* *:00:00
 Persistent=true
 
 [Install]

@@ -1,0 +1,11 @@
+# The administrator's requests from Administration › Backups: back up now, the USB disks, a share's test,
+# new settings. The gateway leaves request.json in /run/suveryn/backup-requests (backup/tmpfiles); this
+# starts suveryn-backup request, which deletes it at once and answers in request-result.json.
+[Unit]
+Description=sūveryn backup request, when the administrator asks
+
+[Path]
+PathExists=/run/suveryn/backup-requests/request.json
+
+[Install]
+WantedBy=paths.target

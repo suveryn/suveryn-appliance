@@ -1,12 +1,14 @@
 #!/usr/bin/python3
 """The appliance's backups (tracker #33): encrypted for the office's recovery key, kept for a period, restorable.
 
-    suveryn-backup run                       make a backup now (the nightly timer runs this)
+    suveryn-backup run [--scheduled]         make a backup now (the hourly timer: only at the office's hour)
     suveryn-backup status [--json]           the last attempt, the last success, the backups on the target
     suveryn-backup list [--json]             the backups on the target, newest first
     suveryn-backup find --identity KEY       the backups on the target this recovery key opens, newest first
     suveryn-backup check FILE --identity KEY decrypt a backup and check every part, restoring nothing
     suveryn-backup key-test                  the administrator's test: the key left by the gateway opens the newest
+    suveryn-backup request                   the administrator's request left by the gateway: back up now, the
+                                             USB disks, a share's test, new settings
     suveryn-backup restore FILE --identity KEY [--yes]
                                              put a backup back on this appliance (a replacement machine)
 
@@ -88,11 +90,14 @@ Python 3 standard library; needs ``age``, ``zstd``, PostgreSQL's client tools, a
 
 import argparse
 import datetime as dt
+import fcntl
+import ipaddress
 import json
 import os
 import pwd
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -108,6 +113,14 @@ MOUNT = Path(ENV("SUVERYN_BACKUP_MOUNT", "/run/suveryn/backup-target"))
 # The administrator's key test: the gateway leaves the recovery key and a request here (in memory, the
 # gateway's folder), the path unit starts ``key-test``, which deletes the key whatever happens.
 KEY_TEST = Path(ENV("SUVERYN_BACKUP_KEY_TEST", "/run/suveryn/backup-key-test"))
+# The administrator's other requests from Administration › Backups (``request``): the gateway leaves one
+# request.json here, the path unit starts ``request``, which deletes it at once (a share's password may be
+# in it) and answers in STATE/request-result.json, with no secret.
+REQUESTS = Path(ENV("SUVERYN_BACKUP_REQUESTS", "/run/suveryn/backup-requests"))
+TEST_MOUNT = Path(ENV("SUVERYN_BACKUP_TEST_MOUNT", "/run/suveryn/backup-share-test"))
+RETENTION = (14, 30, 90, 365)
+DEFAULT_HOUR = 2  # the nightly backup's hour, local time, until the administrator chooses another
+SHARE_TIMEOUT = 5
 # The office's part of the data partition (docs/design/appliance-architecture.md, "Where the office's
 # settings live"), relative to VAR.
 FILES = ["etc", "host", "network", "nginx"]
@@ -177,8 +190,10 @@ def settings(for_writing: bool = True) -> dict | None:
         return c
     if not AGE_RECIPIENT.fullmatch(str(c.get("recipient", ""))):
         raise Failed("settings", "no valid recovery key (recipient) in the backup settings")
-    if c.get("retention_days") not in (14, 30, 90, 365):
+    if c.get("retention_days") not in RETENTION:
         raise Failed("settings", "the retention period isn't one of 14, 30, 90 or 365 days")
+    if "hour" in c and (type(c["hour"]) is not int or not 0 <= c["hour"] <= 23):
+        raise Failed("settings", "the backup's hour isn't one from 0 to 23")
     return c
 
 
@@ -226,21 +241,40 @@ def office_disk(top: Path, recipient: str) -> bool:
 
 
 def lsblk_usb() -> dict:
-    r = subprocess.run(["lsblk", "-J", "-o", "NAME,PATH,TRAN,TYPE,FSTYPE,MODEL,SERIAL"], capture_output=True, text=True)
+    r = subprocess.run(["lsblk", "-J", "-o", "NAME,PATH,TRAN,TYPE,FSTYPE,VENDOR,MODEL,SERIAL"], capture_output=True, text=True)
     try:
         return json.loads(r.stdout) if r.returncode == 0 else {}
     except ValueError:
         return {}
 
 
+def disk_id(d: dict) -> str:
+    """A USB disk's name in the settings, as the web setup gives it (setup/suveryn-setup usb_disks): model (or
+    vendor), serial (or device name). Not the /dev/disk/by-id name, which udev forms differently."""
+    model = " ".join((d.get("model") or d.get("vendor") or "disk").split())
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", f"usb-{model}_{d.get('serial') or d.get('name')}")
+
+
+def usb_disks() -> list[dict]:
+    """The USB disks connected now, for the administrator to choose from: id, name, size."""
+    r = subprocess.run(["lsblk", "-J", "-b", "-d", "-o", "NAME,SIZE,TRAN,TYPE,VENDOR,MODEL,SERIAL"], capture_output=True, text=True)
+    try:
+        devices = json.loads(r.stdout).get("blockdevices") or [] if r.returncode == 0 else []
+    except ValueError:
+        devices = []
+    return [{"id": disk_id(d), "name": " ".join(str(d.get("model") or d.get("vendor") or d.get("name")).split()),
+             "size_bytes": int(d["size"])} for d in devices
+            if d.get("tran") == "usb" and d.get("type") == "disk" and str(d.get("size") or "").isdigit()]
+
+
 def usb_candidates(listing: dict) -> list[tuple[Path, str]]:
     """Every file system on a USB disk that could hold backups (from ``lsblk -J``): each disk's partitions,
-    or the disk itself when it has none; with the disk's model and serial, to say which was used."""
+    or the disk itself when it has none; with the disk's id (``disk_id``), to say which was used."""
     out = []
     for d in listing.get("blockdevices") or []:
         if d.get("tran") != "usb" or d.get("type") != "disk":
             continue
-        label = re.sub(r"[^A-Za-z0-9._-]+", "_", f"usb-{' '.join((d.get('model') or 'disk').split())}_{d.get('serial') or d.get('name')}")
+        label = disk_id(d)
         parts = [c for c in d.get("children") or [] if c.get("type") == "part"]
         for c in parts or [d]:
             if c.get("fstype") in ("ext4", "exfat", "vfat", "ntfs") and c.get("path"):
@@ -248,13 +282,17 @@ def usb_candidates(listing: dict) -> list[tuple[Path, str]]:
     return out
 
 
-def usb_partition(disk_id: str) -> Path:
-    """The USB disk the office chose (by its /dev/disk/by-id name): its first partition, or the disk."""
+def usb_partition(chosen: str) -> Path:
+    """The USB disk the office chose: its first partition with a file system, or the disk. By the web setup's
+    id (``disk_id``); a /dev/disk/by-id name, as an older settings file may hold, is found too."""
+    for dev, label in usb_candidates(lsblk_usb()):
+        if label == chosen:
+            return dev
     by_id = Path("/dev/disk/by-id")
-    disk = by_id / disk_id
-    if not disk.exists():
+    disk = by_id / chosen
+    if "/" in chosen or not disk.exists():
         raise Failed("target", "the backup disk isn't connected")
-    parts = sorted(by_id.glob(f"{disk_id}-part*"), key=lambda p: int(re.sub(r"\D", "", p.name.rsplit("-part", 1)[1]) or 0))
+    parts = sorted(by_id.glob(f"{chosen}-part*"), key=lambda p: int(re.sub(r"\D", "", p.name.rsplit("-part", 1)[1]) or 0))
     return parts[0] if parts else disk
 
 
@@ -262,8 +300,10 @@ class Target:
     """The folder backups go to, mounted for the run (``with Target(settings) as folder``): this appliance's
     own, ``suveryn-backups/<name>``. Its parent holds every appliance's (``on_target`` looks there)."""
 
-    def __init__(self, s: dict):
+    def __init__(self, s: dict, password: str | None = None, mount: Path | None = None):
+        """``password`` and ``mount``: the administrator's share test, before anything is saved."""
         self.s, self.mounted, self.creds, self.disk = s, False, None, None
+        self.password, self.mount = password, mount or MOUNT
 
     def __enter__(self) -> Path:
         try:
@@ -279,6 +319,7 @@ class Target:
         if s["target"] == "folder":
             base = Path(s["path"])
         else:
+            MOUNT = self.mount
             MOUNT.mkdir(mode=0o700, parents=True, exist_ok=True)
             if os.path.ismount(MOUNT):
                 run("target", ["umount", MOUNT])
@@ -290,7 +331,8 @@ class Target:
                 fd, creds = tempfile.mkstemp(prefix="suveryn-backup-", dir="/run")
                 self.creds = Path(creds)
                 with os.fdopen(fd, "w") as f:
-                    password = SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
+                    password = self.password if self.password is not None else \
+                        SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
                     f.write(f"username={s.get('user') or 'guest'}\npassword={password}\n")
                 # vers=3: the highest SMB 3 dialect both sides speak (a NAS may allow 3.1.1 only)
                 run("target", ["mount", "-t", "cifs", address, MOUNT,
@@ -311,6 +353,7 @@ class Target:
         return folder
 
     def _usb(self, opts: str) -> str:
+        MOUNT = self.mount
         """Mount the office's USB disk: the one chosen in the setup, or, when that isn't connected, another
         disk the office uses for its backups (rotation: two disks swapped, one kept elsewhere). That is a
         disk with a ``suveryn-backups`` folder at its top, made by this appliance or by the office, unless
@@ -349,7 +392,7 @@ class Target:
             self.creds.unlink(missing_ok=True)
         if self.mounted:
             subprocess.run(["sync"], check=False)
-            subprocess.run(["umount", str(MOUNT)], check=False, capture_output=True)
+            subprocess.run(["umount", str(self.mount)], check=False, capture_output=True)
 
 
 def appliance_folders(base: Path) -> list[Path]:
@@ -540,7 +583,59 @@ def read_back(file: Path) -> str:
     return digest.hexdigest()
 
 
-def cmd_run(_a) -> int:
+RUN_NOW = "run-requested"  # in STATE: the administrator's "Back up now" (``request``), taken by the next run
+
+
+def due(s: dict | None, status: dict, at: dt.datetime | None = None) -> bool:
+    """Whether the hourly timer's run should make tonight's backup: the administrator asked for one now, or the
+    office's hour (``hour``, local time, 02:00 by default) has come since the last attempt. An appliance that
+    was off at that hour backs up when it is on again (the timer is Persistent), once."""
+    if (STATE / RUN_NOW).exists():
+        return True
+    at = (at or dt.datetime.now().astimezone()).astimezone()
+    hour = (s or {}).get("hour", DEFAULT_HOUR)
+    slot = at.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot > at:
+        slot -= dt.timedelta(days=1)
+    last = status.get("last_attempt")
+    if not isinstance(last, str) or not UTC_TIME.match(last):
+        return at.hour == hour  # never tried: at the hour, not straight after the setup
+    return dt.datetime.strptime(last, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc) < slot
+
+
+def cmd_run(a) -> int:
+    """One backup. ``--scheduled`` (the hourly timer): only when ``due``. One at a time: a second run while one
+    is writing says so and stops."""
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    lock = open(STATE / ".run.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        say("a backup is already being made")
+        return 0
+    try:
+        if getattr(a, "scheduled", False):
+            try:
+                current = settings(for_writing=False)
+            except Failed:
+                current = None
+            if not due(current, read_status()):
+                return 0
+        (STATE / RUN_NOW).unlink(missing_ok=True)
+        status = read_status()
+        status["running_since"] = now()
+        write_status(status)
+        try:
+            return make_and_record()
+        finally:
+            status = read_status()
+            status.pop("running_since", None)
+            write_status(status)
+    finally:
+        lock.close()
+
+
+def make_and_record() -> int:
     status = read_status()
     try:
         s = settings()
@@ -555,7 +650,8 @@ def cmd_run(_a) -> int:
         write_status(status)
         say("backups aren't set up (the web setup's Backups step, or the administrator's dashboard)")
         return 0
-    status.update(configured=True, target=s["target"], retention_days=s["retention_days"], last_attempt=now())
+    status.update(configured=True, target=s["target"], retention_days=s["retention_days"], hour=s.get("hour", DEFAULT_HOUR),
+                  last_attempt=now())
     try:
         done = make(s)
     except Failed as e:
@@ -850,6 +946,202 @@ def cmd_key_test(_a) -> int:
     return 0 if result["ok"] else 1
 
 
+# ---------------------------------------------------------------------------- the administrator's requests
+# Administration › Backups (suveryn-core docs/design/admin.md, artboard 36): the gateway runs as its own user
+# and can change nothing here, so it leaves a request (REQUESTS/request.json, its folder, 0700) and the path
+# unit runs ``request`` as root. The same checks as the web setup's (setup/suveryn-setup check_backups,
+# test_share), since the setup's own service is gone once it has finished.
+SMB = re.compile(r"(?:\\\\|//)([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\])[\\/][^\s\\/][^\s]*")
+NFS = re.compile(r"([A-Za-z0-9.-]+|\[[0-9a-fA-F:]+\]):(/[^\s]*)")
+REQUEST_ID = re.compile(r"[0-9a-f]{8,32}")
+MAX_REQUEST = 8192
+
+
+def share_host(protocol, address) -> str | None:
+    if protocol not in ("smb", "nfs") or not isinstance(address, str) or len(address) > 512:
+        return None
+    m = (SMB if protocol == "smb" else NFS).fullmatch(address.strip())
+    return m.group(1).strip("[]") if m else None
+
+
+def reachable(protocol: str, host: str) -> str | None:
+    """None when the share's server answers on the office's network; else why not: ``not_local`` (an address
+    outside it: backups never leave the office) or ``unreachable``."""
+    try:
+        infos = socket.getaddrinfo(host, 445 if protocol == "smb" else 2049, type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError):
+        return "unreachable"
+    for *_, addr in infos:
+        ip = ipaddress.ip_address(addr[0])
+        if not (ip.is_private or ip.is_link_local) or ip.is_loopback:
+            return "not_local"
+    for family, kind, proto, _, addr in infos:
+        try:
+            with socket.socket(family, kind, proto) as sock:
+                sock.settimeout(SHARE_TIMEOUT)
+                sock.connect(addr)
+                return None
+        except OSError:
+            continue
+    return "unreachable"
+
+
+def test_share(r: dict) -> str | None:
+    """None when the appliance signs in to the share and may write there, as the backup will; else why not:
+    ``address``, ``not_local``, ``unreachable``, ``login`` (the user or password) or ``write``. The web setup
+    could only see whether the server answered; a wrong password showed at the first backup."""
+    host = share_host(r.get("protocol"), r.get("address"))
+    if host is None:
+        return "address"
+    if problem := reachable(r["protocol"], host):
+        return problem
+    password = r.get("password")
+    if password is None and r.get("keep_password") and SHARE_SECRET.exists():
+        password = SHARE_SECRET.read_text().strip()
+    target = {"target": "share", "protocol": r["protocol"], "address": r["address"].strip(), "user": r.get("user") or None}
+    try:
+        with Target(target, password=password or "", mount=TEST_MOUNT) as folder:
+            probe = folder / f".write-test-{os.getpid()}"
+            probe.write_text("sūveryn\n")
+            probe.unlink()
+    except Failed as e:
+        text = str(e).lower()
+        return "login" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
+            "write" if "can't write" in text else "unreachable"
+    except OSError:
+        return "write"
+    return None
+
+
+def valid_recipient(recipient) -> bool:
+    """An age recipient age itself accepts (its checksum too): what the office's backups are encrypted to."""
+    if not isinstance(recipient, str) or not AGE_RECIPIENT.fullmatch(recipient):
+        return False
+    return subprocess.run(["age", "--encrypt", "--recipient", recipient], input=b"", capture_output=True).returncode == 0
+
+
+def new_settings(r: dict, current: dict | None) -> tuple[dict, str | None, list[str]]:
+    """The settings to save from the administrator's request, the share's password to keep (None: none), and
+    what is wrong ({field: code} as the setup's, as a list of "field:code"). A recovery key left out keeps the
+    current one; a password left out for the same share and user keeps the current one."""
+    errors = []
+    current = current or {}
+    target = r.get("target")
+    if target not in ("usb", "share"):
+        return {}, None, ["target:invalid"]
+    retention, hour = r.get("retention_days"), r.get("hour", current.get("hour", DEFAULT_HOUR))
+    if retention not in RETENTION:
+        errors.append("retention_days:invalid")
+    if type(hour) is not int or not 0 <= hour <= 23:
+        errors.append("hour:invalid")
+    recipient = r.get("recipient") or current.get("recipient")
+    if not valid_recipient(recipient):
+        errors.append("recipient:invalid")
+    out = {"target": target, "retention_days": retention, "hour": hour, "recipient": recipient}
+    password = None
+    if target == "usb":
+        disk = r.get("disk")
+        if not isinstance(disk, str) or (disk not in {d["id"] for d in usb_disks()} and disk != current.get("disk")):
+            errors.append("disk:disk_gone")
+        out["disk"] = disk
+    else:
+        protocol, user = r.get("protocol"), r.get("user") or None
+        if share_host(protocol, r.get("address")) is None:
+            errors.append("address:address")
+        if user is not None and (not isinstance(user, str) or len(user) > 256 or "\n" in user):
+            errors.append("user:invalid")
+        given = r.get("password")
+        if given is not None and (not isinstance(given, str) or len(given) > 512 or "\n" in given):
+            errors.append("password:invalid")
+        same = current.get("target") == "share" and current.get("address") == str(r.get("address", "")).strip() \
+            and current.get("user") == user
+        if protocol == "smb":
+            password = given or (SHARE_SECRET.read_text().strip() if same and r.get("keep_password") and SHARE_SECRET.exists() else None)
+        out.update(protocol=protocol, address=str(r.get("address", "")).strip(), user=user)
+    return out, password, errors
+
+
+def write_private(path: Path, text: str, mode: int) -> None:
+    """Replace a file at once (a temporary file beside it, then a rename), never through a link."""
+    if path.is_symlink():
+        raise Failed("settings", f"{path.name} is a link; it is left alone")
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def apply_settings(r: dict) -> dict:
+    current = settings(for_writing=False)
+    if current and current.get("target") not in ("usb", "share"):
+        current = None
+    new, password, errors = new_settings(r, current)
+    if errors:
+        return {"ok": False, "errors": dict(e.split(":", 1) for e in errors)}
+    write_private(CONFIG, json.dumps(new, indent=1) + "\n", 0o644)  # the gateway shows it; no secret in it
+    if password:
+        write_private(SHARE_SECRET, password, 0o600)
+    else:
+        SHARE_SECRET.unlink(missing_ok=True)  # no share, NFS, or a guest share: no password left behind
+    status = read_status()
+    status.update(configured=True, target=new["target"], retention_days=new["retention_days"], hour=new["hour"])
+    write_status(status)
+    return {"ok": True, "key_changed": bool(current and current.get("recipient") != new["recipient"])}
+
+
+def cmd_request(_a) -> int:
+    """The administrator's request left by the gateway: ``run`` (back up now), ``disks`` (the USB disks
+    connected now), ``test-share`` (sign in and write, before saving) or ``settings`` (save them). The request
+    file is deleted before anything else: a share's password may be in it."""
+    path = REQUESTS / "request.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return 0
+    try:
+        raw = os.read(fd, MAX_REQUEST + 1)
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+    try:
+        r = json.loads(raw) if len(raw) <= MAX_REQUEST else None
+    except ValueError:
+        r = None
+    if not isinstance(r, dict) or not REQUEST_ID.fullmatch(str(r.get("id", ""))):
+        say("request: not one the gateway makes; ignored")
+        return 1
+    result = {"id": r["id"], "kind": r.get("kind"), "at": now()}
+    try:
+        if r.get("kind") == "run":
+            STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+            (STATE / RUN_NOW).write_text(now() + "\n")
+            started = subprocess.run(["systemctl", "start", "--no-block", "suveryn-backup.service"], capture_output=True)
+            result["ok"] = started.returncode == 0 or ENV("SUVERYN_BACKUP_TEST") == "1"
+        elif r.get("kind") == "disks":
+            result.update(ok=True, disks=usb_disks())
+        elif r.get("kind") == "test-share":
+            problem = test_share(r)
+            result.update(ok=problem is None, **({"error": problem} if problem else {}))
+        elif r.get("kind") == "settings":
+            result.update(apply_settings(r))
+        else:
+            result.update(ok=False, error="invalid")
+    except Failed as e:
+        result.update(ok=False, error="failed", message=str(e)[:300])
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    tmp = STATE / ".request-result.json.tmp"
+    tmp.write_text(json.dumps(result, indent=1) + "\n")
+    os.chmod(tmp, 0o644)  # the gateway reads it; never a password
+    os.replace(tmp, STATE / "request-result.json")
+    say(f"request {result['kind']}: {'done' if result.get('ok') else result.get('error') or result.get('errors')}")
+    return 0 if result.get("ok") else 1
+
+
 def cmd_find(a) -> int:
     """The backups on the target this recovery key opens: what a replacement may restore, and from when."""
     s = settings(for_writing=False)
@@ -1105,7 +1397,9 @@ def main() -> int:
                     "restore gives the target the office's backups are on")
     ap.add_argument("--share-secret", type=Path, help=f"the share's password file (default {SHARE_SECRET})")
     sub = ap.add_subparsers(dest="command", required=True)
-    sub.add_parser("run", help="make a backup now")
+    sub.add_parser("run", help="make a backup now").add_argument(
+        "--scheduled", action="store_true", help="the hourly timer: only at the office's hour, or when asked for")
+    sub.add_parser("request", help=f"the administrator's request left by the gateway in {REQUESTS}")
     for name in ("status", "list"):
         sub.add_parser(name).add_argument("--json", action="store_true")
     sub.add_parser("key-test", help=f"the administrator's test of the recovery key left in {KEY_TEST}")
@@ -1126,11 +1420,11 @@ def main() -> int:
     a = ap.parse_args()
     CONFIG = a.settings or CONFIG
     SHARE_SECRET = a.share_secret or SHARE_SECRET
-    if a.command in ("run", "list", "restore", "key-test") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
+    if a.command in ("run", "list", "restore", "key-test", "request") and os.geteuid() != 0 and ENV("SUVERYN_BACKUP_TEST") != "1":
         ap.error("run as root")
     try:
         return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore,
-                "find": cmd_find, "key-test": cmd_key_test}[a.command](a)
+                "find": cmd_find, "key-test": cmd_key_test, "request": cmd_request}[a.command](a)
     except Failed as e:
         say(f"{a.command} failed ({e.step}): {e}")
         return 1
