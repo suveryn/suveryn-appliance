@@ -1702,6 +1702,20 @@ def restore(a: argparse.Namespace) -> None:
         note(line)
     if r.returncode != 0:
         fail("the backup couldn't be restored")
+    try:
+        after_restore()
+    except SystemExit as e:
+        if e.code not in (0, None):
+            # Pod check of 27 October 2026, finding 3: a step after the restore failed (the network mode, where
+            # nft may not run). Without this line it read as if nothing had been restored.
+            print("suveryn-provision: the backup itself is restored: the office's data and settings are back. "
+                  "What failed is a step after it, above; fix that and run the restore again (it is safe to "
+                  "repeat), or ask support.", file=sys.stderr)
+        raise
+
+
+def after_restore() -> None:
+    """What the replacement adds itself once the backup is back: models, network mode, name, trust, services."""
     gw = read_env(ETC / "gateway.env")
     issuer = gw.get("SUVERYN_OIDC_ISSUER", "")
     public_url = issuer.split("/idp", 1)[0] if issuer.startswith("https://") else None
