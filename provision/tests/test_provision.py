@@ -472,3 +472,26 @@ def test_a_step_after_the_restore_that_fails_says_the_backup_itself_is_back(monk
         p.restore(args)
     err = capsys.readouterr().err
     assert e.value.code == 1 and "nft -f - failed" in err and "the backup itself is restored" in err
+
+
+def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_more(monkeypatch, capsys):
+    """The realm is imported once: an appliance installed before suveryn-core's Users gets the suveryn-admin
+    role's composites added (checked against Keycloak 26.8 on 28 October 2026); never a role beyond the four."""
+    api, posted = "http://kc/admin/realms/suveryn", []
+    roles = {n: {"id": f"id-{n}", "name": n} for n in ("manage-users", "view-users", "view-realm", "view-events", "manage-realm")}
+
+    def http(url, headers=None, data=None, timeout=10):
+        if data is not None:
+            posted.append((url, json.loads(data)))
+            return 204, b""
+        answers = {f"{api}/clients?clientId=realm-management": [{"id": "rm"}], f"{api}/roles/suveryn-admin": {"name": "suveryn-admin"},
+                   f"{api}/roles/suveryn-admin/composites/clients/rm": [roles["view-users"], roles["view-realm"]]}
+        if url in answers:
+            return 200, json.dumps(answers[url]).encode()
+        name = url.rsplit("/", 1)[1]
+        return (200, json.dumps(roles[name]).encode()) if url.startswith(f"{api}/clients/rm/roles/") else (404, b"")
+
+    monkeypatch.setattr(p, "http", http)
+    p.admin_role_composites({}, api)
+    assert posted == [(f"{api}/roles/suveryn-admin/composites", [roles["manage-users"], roles["view-events"]])]
+    assert "added manage-users, view-events" in capsys.readouterr().out
