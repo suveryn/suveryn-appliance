@@ -457,3 +457,18 @@ def test_the_images_llama_server_carries_machine_code_for_every_office_card():
     assert p.IMAGE_CUDA_ARCHITECTURES.split(";") == ["80", "86", "89", "90", "120"]
     src = (HERE / "suveryn-provision").read_text()
     assert '"native" if on_target else IMAGE_CUDA_ARCHITECTURES' in src
+
+
+def test_a_step_after_the_restore_that_fails_says_the_backup_itself_is_back(monkeypatch, capsys, tmp_path):
+    """Pod check of 27 October 2026, finding 3: the network mode failed after the restore (nft in a container),
+    and exit 1 read as if nothing had been restored."""
+    monkeypatch.setattr(p, "postgres", lambda: None)
+    monkeypatch.setattr(p, "step", lambda text: None)
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "restored the backup\n", ""))
+    monkeypatch.setattr(p, "after_restore", lambda: p.fail("suveryn-network-mode: nft -f - failed (1)"))
+    args = type("A", (), {"settings": tmp_path / "backups.json", "share_secret": None, "backup": "newest",
+                          "identity": tmp_path / "key"})()
+    with pytest.raises(SystemExit) as e:
+        p.restore(args)
+    err = capsys.readouterr().err
+    assert e.value.code == 1 and "nft -f - failed" in err and "the backup itself is restored" in err
