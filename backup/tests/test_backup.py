@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -664,3 +665,59 @@ def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key
     r, out = test_with(other.read_text())  # another appliance's key, or an old one
     assert r.returncode == 1 and out["ok"] is False and out["step"] == "decrypt" and "isn't this appliance's recovery key" in out["message"]
     assert tool(env, "key-test").returncode == 1 and json.loads(result.read_text())["step"] == "settings"  # no key given
+
+
+@needs
+@pytest.mark.skipif(os.geteuid() != 0 or not shutil.which("runuser"), reason="needs root and runuser, as on the appliance")
+def test_check_and_the_key_test_read_the_dumps_as_postgresql_without_opening_them_to_everyone(appliance, tmp_path):
+    """Pod check of 27 October 2026, finding 1: pg_restore runs as PostgreSQL's superuser, which couldn't open
+    root's 0700 work folder, so ``check`` and the key test called every good backup damaged. Run as on the
+    appliance: root, with pg_restore through runuser. The work folder sits where postgres may pass (the
+    appliance's /var/lib/suveryn/backup is 0755; pytest's own folders are root's 0700)."""
+    import pwd
+    try:
+        pwd.getpwnam("postgres")
+    except KeyError:
+        pytest.skip("no postgres user")
+    state = Path(tempfile.mkdtemp(prefix="suveryn-backup-state-", dir="/var/tmp"))
+    try:
+        os.chmod(state, 0o755)
+        env = {**appliance["env"], "SUVERYN_BACKUP_STATE": str(state)}
+        assert tool(env, "run").returncode == 0
+        [backup] = (appliance["target"] / "suveryn-backups" / "test-appliance").glob("*.age")
+        as_appliance = {**env, "SUVERYN_BACKUP_PG_USER": "postgres"}
+        r = tool(as_appliance, "check", backup, "--identity", appliance["key"])
+        assert r.returncode == 0 and r.stdout.startswith("usable:"), r.stdout + r.stderr
+        drop = tmp_path / "key-test"
+        drop.mkdir()
+        (drop / "key").write_text(appliance["key"].read_text())
+        r = tool({**as_appliance, "SUVERYN_BACKUP_KEY_TEST": str(drop)}, "key-test")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert json.loads((state / "key-test.json").read_text())["ok"] is True
+        r = tool(as_appliance, "restore", backup, "--identity", appliance["key"], "--yes")  # pg_restore into the databases too
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert not [p for p in state.iterdir() if p.name.startswith("check-")]  # nothing left behind
+    finally:
+        shutil.rmtree(state, ignore_errors=True)
+
+
+def test_the_unpacked_dumps_are_postgresqls_alone(tmp_path, monkeypatch):
+    """The work folder: root:postgres 0710; the dumps postgres's own, 0600 in a 0700 folder. Never 0711 with
+    readable files, which anyone who lists the backup's state folder could read."""
+    if os.geteuid() != 0:
+        pytest.skip("needs root")
+    import pwd
+    try:
+        pg = pwd.getpwnam("postgres")
+    except KeyError:
+        pytest.skip("no postgres user")
+    b = load()
+    monkeypatch.setattr(b, "PG_USER", "postgres")
+    (tmp_path / "work" / "db").mkdir(parents=True)
+    (tmp_path / "work" / "db" / "suveryn.dump").write_text("fictional")
+    os.chmod(tmp_path / "work" / "db" / "suveryn.dump", 0o644)
+    b.hand_dumps_to_postgres(tmp_path / "work")
+    work, db, dump = tmp_path / "work", tmp_path / "work" / "db", tmp_path / "work" / "db" / "suveryn.dump"
+    assert (work.stat().st_uid, work.stat().st_gid, work.stat().st_mode & 0o777) == (0, pg.pw_gid, 0o710)
+    assert (db.stat().st_uid, db.stat().st_mode & 0o777) == (pg.pw_uid, 0o700)
+    assert (dump.stat().st_uid, dump.stat().st_mode & 0o777) == (pg.pw_uid, 0o600)

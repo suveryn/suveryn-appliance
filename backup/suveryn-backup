@@ -90,6 +90,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -718,9 +719,35 @@ def age_error(stderr: bytes | None) -> str:
     return re.sub(r"^(age:\s*)?(error:\s*)?", "", text)[-200:] or "decryption failed"
 
 
+def hand_dumps_to_postgres(dest: Path) -> None:
+    """Let PostgreSQL's superuser read the unpacked dumps, and nobody else: pg_restore runs as it (``as_pg``).
+
+    ``dest`` is root's, from ``tempfile`` (0700): ``postgres`` couldn't open it, so the key test and ``check``
+    called every good backup damaged (Pod check of 27 October 2026, finding 1). It becomes root:postgres 0710
+    (postgres may pass through, not list), and ``db`` with its dumps postgres's own, 0700 and 0600. Not opened
+    to everyone: the folder sits in a listable one, and the dumps hold Keycloak's database too."""
+    if os.geteuid() != 0 or PG_USER == "root":
+        return
+    try:
+        pg = pwd.getpwnam(PG_USER)
+    except KeyError as e:
+        raise Failed("check", f"no {PG_USER} user on this appliance") from e
+    os.chown(dest, 0, pg.pw_gid)
+    os.chmod(dest, 0o710)
+    db = dest / "db"
+    if db.is_dir() and not db.is_symlink():
+        os.chown(db, pg.pw_uid, pg.pw_gid)
+        os.chmod(db, 0o700)
+        for f in db.iterdir():
+            if f.is_file() and not f.is_symlink():
+                os.chown(f, pg.pw_uid, pg.pw_gid)
+                os.chmod(f, 0o600)
+
+
 def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
     """Each database dump readable by pg_restore: its number of entries. A dump from an older PostgreSQL
     restores into a newer one (a 24.04 appliance's backup onto 26.04, #57), never the other way."""
+    hand_dumps_to_postgres(dest)
     here = postgres_major()
     if manifest["postgresql"] > here:
         raise Failed("version", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
@@ -906,8 +933,7 @@ def restore_file(a, file: Path) -> int:
     systemd = Path("/run/systemd/system").is_dir() and ENV("SUVERYN_BACKUP_NO_SERVICES") != "1"
     STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="restore-", dir=STATE) as d:
-        dest = Path(d)
-        os.chmod(dest, 0o711)  # PostgreSQL's superuser reads the dumps from here
+        dest = Path(d)  # check_dumps lets PostgreSQL's superuser read the dumps in it
         try:
             manifest = unpack(file, a.identity, dest)
             check_dumps(dest, manifest)
