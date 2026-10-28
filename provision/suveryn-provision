@@ -1232,12 +1232,38 @@ def keycloak_admin() -> dict[str, str] | None:
 
 
 DIRECTORY_SCOPE = ("view-users", "view-realm")
+KC_API = "http://127.0.0.1:8180/idp/admin/realms/suveryn"
+# What the suveryn-admin role carries, as in suveryn-core's realm file: Administration › Users manages the
+# accounts with the administrator's own token (build_realm.ADMIN_ROLE_COMPOSITES checks the same four).
+ADMIN_ROLE_COMPOSITES = ("manage-users", "view-users", "view-realm", "view-events")
+
+
+def admin_role_composites(auth: dict[str, str], api: str = KC_API) -> None:
+    """The suveryn-admin role's composites, on a realm imported before the realm file had them: the realm is
+    imported once, so an appliance installed earlier would never get them, and Users would answer that
+    Keycloak refused the administrator's rights. Adds what is missing, never more. Idempotent."""
+    def get(url: str):
+        status, body = http(url, auth)
+        return json.loads(body) if status == 200 else None
+    found = get(f"{api}/clients?clientId=realm-management") or []
+    role = get(f"{api}/roles/suveryn-admin")
+    if not found or role is None:
+        return note("administrator role: not in this realm, nothing to do")
+    management = found[0]["id"]
+    have = {r["name"] for r in get(f"{api}/roles/suveryn-admin/composites/clients/{management}") or []}
+    missing = [r for r in ADMIN_ROLE_COMPOSITES if r not in have]
+    if not missing:
+        return note("administrator role: manages the office's accounts")
+    roles = [r for name in missing if (r := get(f"{api}/clients/{management}/roles/{name}")) is not None]
+    status, _ = http(f"{api}/roles/suveryn-admin/composites", auth, json.dumps(roles).encode())
+    note(f"administrator role: added {', '.join(missing)} ({status})")
 
 
 def directory_scope() -> None:
     """The directory client's scope mapping, on a realm imported before the realm file had it (Pod check
-    of 5e9a539: without it its token carries no roles and adding members fails). Idempotent; a realm
-    imported from a current realm file already has it."""
+    of 5e9a539: without it its token carries no roles and adding members fails), and the administrator
+    role's composites (``admin_role_composites``). Idempotent; a realm imported from a current realm file
+    already has both."""
     # Part of "Starting the services": a "Keycloak" step here would send the web setup's screen back a step.
     if not wait_for(lambda: 200 in (http("http://127.0.0.1:9000/idp/health/ready")[0], http("http://127.0.0.1:9000/health/ready")[0]),
                     "Keycloak", 180):
@@ -1245,7 +1271,8 @@ def directory_scope() -> None:
     auth = keycloak_admin()
     if auth is None:
         return note("directory client: no bootstrap administrator any more, not checked (verify reports the directory)")
-    api = "http://127.0.0.1:8180/idp/admin/realms/suveryn"
+    api = KC_API
+    admin_role_composites(auth, api)
     def client_uuid(client_id: str) -> str | None:
         status, body = http(f"{api}/clients?clientId={client_id}", auth)
         found = json.loads(body) if status == 200 else []
