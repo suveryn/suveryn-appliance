@@ -721,3 +721,129 @@ def test_the_unpacked_dumps_are_postgresqls_alone(tmp_path, monkeypatch):
     assert (work.stat().st_uid, work.stat().st_gid, work.stat().st_mode & 0o777) == (0, pg.pw_gid, 0o710)
     assert (db.stat().st_uid, db.stat().st_mode & 0o777) == (pg.pw_uid, 0o700)
     assert (dump.stat().st_uid, dump.stat().st_mode & 0o777) == (pg.pw_uid, 0o600)
+
+
+# ---------------------------------------------------------------------------- Administration › Backups
+def a_recipient(tmp_path) -> str:
+    key = tmp_path / "admin.key"
+    subprocess.run(["age-keygen", "-o", str(key)], capture_output=True, check=True)
+    return next(line.split(": ")[1] for line in key.read_text().splitlines() if line.startswith("# public key"))
+
+
+def test_the_hourly_timer_backs_up_once_at_the_offices_hour_or_when_asked(tmp_path, monkeypatch):
+    b = load()
+    monkeypatch.setattr(b, "STATE", tmp_path)
+    tz = dt.timezone(dt.timedelta(hours=1))
+    at = lambda h, m=0, day=29: dt.datetime(2026, 10, day, h, m, tzinfo=tz)  # noqa: E731
+    utc = lambda d: d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    s = {"hour": 2}
+    assert b.due(s, {"last_attempt": utc(at(2, 0, day=28))}, at(2, 0)) is True  # last night's, so tonight's is due
+    assert b.due(s, {"last_attempt": utc(at(2, 0))}, at(3, 0)) is False  # done tonight
+    assert b.due(s, {"last_attempt": utc(at(2, 0, day=28))}, at(9, 0)) is True  # off at 02:00: on start, once
+    assert b.due(s, {"last_attempt": utc(at(9, 0))}, at(10, 0)) is False
+    assert b.due({"hour": 22}, {"last_attempt": utc(at(2, 0))}, at(21, 0)) is False  # not yet
+    assert b.due({}, {}, at(2, 0)) is True and b.due({}, {}, at(11, 0)) is False  # never tried: at the hour, 02:00
+    (tmp_path / b.RUN_NOW).write_text("asked\n")
+    assert b.due(s, {"last_attempt": utc(at(2, 0))}, at(11, 0)) is True  # Back up now
+
+
+def request(b, tmp_path, body: dict) -> dict:
+    (tmp_path / "requests").mkdir(exist_ok=True)
+    (tmp_path / "requests" / "request.json").write_text(json.dumps({"id": "0123abcd", **body}))
+    b.cmd_request(None)
+    assert not (tmp_path / "requests" / "request.json").exists()  # deleted at once: a password may be in it
+    return json.loads((tmp_path / "state" / "request-result.json").read_text())
+
+
+@pytest.fixture
+def admin(tmp_path, monkeypatch):
+    if not shutil.which("age"):
+        pytest.skip("needs age")
+    b = load()
+    for name, value in (("STATE", tmp_path / "state"), ("REQUESTS", tmp_path / "requests"), ("CONFIG", tmp_path / "backups.json"),
+                        ("SHARE_SECRET", tmp_path / "share.secret")):
+        monkeypatch.setattr(b, name, value)
+    monkeypatch.setattr(b, "usb_disks", lambda: [{"id": "usb-Extreme_SER1", "name": "Extreme", "size_bytes": 10**12}])
+    recipient = a_recipient(tmp_path)
+    (tmp_path / "backups.json").write_text(json.dumps({"target": "usb", "disk": "usb-Old_SER0", "retention_days": 30,
+                                                       "recipient": recipient}))
+    return b, recipient
+
+
+def test_the_administrator_changes_where_when_and_how_long_and_the_key_stays(admin, tmp_path):
+    b, recipient = admin
+    out = request(b, tmp_path, {"kind": "settings", "target": "usb", "disk": "usb-Extreme_SER1", "retention_days": 90, "hour": 23})
+    assert out["ok"] is True and out["key_changed"] is False
+    saved = json.loads((tmp_path / "backups.json").read_text())
+    assert saved == {"target": "usb", "retention_days": 90, "hour": 23, "recipient": recipient, "disk": "usb-Extreme_SER1"}
+    assert oct((tmp_path / "backups.json").stat().st_mode & 0o777) == "0o644"
+    out = request(b, tmp_path, {"kind": "settings", "target": "usb", "disk": "usb-Gone_SER9", "retention_days": 7, "hour": 24,
+                                "recipient": "age1notakey"})
+    assert out["ok"] is False and out["errors"] == {"disk": "disk_gone", "retention_days": "invalid", "hour": "invalid",
+                                                    "recipient": "invalid"}
+    assert json.loads((tmp_path / "backups.json").read_text()) == saved  # nothing changed
+
+
+def test_a_share_keeps_its_password_apart_and_never_in_the_result(admin, tmp_path):
+    b, recipient = admin
+    share = {"kind": "settings", "target": "share", "protocol": "smb", "address": "\\\\nas.office.lan\\backups", "user": "backup",
+             "retention_days": 30, "hour": 2}
+    out = request(b, tmp_path, {**share, "password": "not-a-real-password"})
+    assert out["ok"] is True and "not-a-real-password" not in json.dumps(out)
+    assert (tmp_path / "share.secret").read_text() == "not-a-real-password"
+    assert oct((tmp_path / "share.secret").stat().st_mode & 0o777) == "0o600"
+    assert "password" not in json.loads((tmp_path / "backups.json").read_text())
+    assert request(b, tmp_path, {**share, "keep_password": True})["ok"] is True  # the same share and user: kept
+    assert (tmp_path / "share.secret").read_text() == "not-a-real-password"
+    assert request(b, tmp_path, {**share, "user": "other", "keep_password": True})["ok"] is True  # another user: not
+    assert not (tmp_path / "share.secret").exists()
+    nfs = request(b, tmp_path, {**share, "protocol": "nfs", "address": "10.0.0.5:/srv/backups", "password": "ignored"})
+    assert nfs["ok"] is True and not (tmp_path / "share.secret").exists()  # NFS: no password kept
+    assert request(b, tmp_path, {**share, "address": "nas"})["errors"] == {"address": "address"}
+
+
+def test_a_new_recovery_key_is_said_and_a_bad_request_is_ignored(admin, tmp_path):
+    b, recipient = admin
+    (tmp_path / "x").mkdir()
+    new = a_recipient(tmp_path / "x")  # the administrator made a new recovery key
+    out = request(b, tmp_path, {"kind": "settings", "target": "usb", "disk": "usb-Extreme_SER1", "retention_days": 30, "hour": 2,
+                                "recipient": new})
+    assert out["ok"] is True and out["key_changed"] is True
+    assert json.loads((tmp_path / "backups.json").read_text())["recipient"] == new
+    (tmp_path / "requests" / "request.json").write_text('{"id": "../../etc", "kind": "run"}')
+    assert b.cmd_request(None) == 1 and not (tmp_path / "requests" / "request.json").exists()
+
+
+def test_the_disks_and_back_up_now(admin, tmp_path, monkeypatch):
+    b, _ = admin
+    assert request(b, tmp_path, {"kind": "disks"})["disks"] == [{"id": "usb-Extreme_SER1", "name": "Extreme", "size_bytes": 10**12}]
+    started = []
+    monkeypatch.setattr(b.subprocess, "run", lambda cmd, **k: started.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+    assert request(b, tmp_path, {"kind": "run"})["ok"] is True
+    assert started == [["systemctl", "start", "--no-block", "suveryn-backup.service"]] and (tmp_path / "state" / b.RUN_NOW).exists()
+
+
+def test_a_share_is_tested_by_signing_in_and_writing(admin, tmp_path, monkeypatch):
+    b, _ = admin
+    monkeypatch.setattr(b, "reachable", lambda protocol, host: "not_local" if host == "files.example.com" else None)
+    smb = {"kind": "test-share", "protocol": "smb", "address": "//nas.office.lan/backups", "user": "backup", "password": "x"}
+    assert request(b, tmp_path, {**smb, "address": "//files.example.com/b"}) == {
+        "id": "0123abcd", "kind": "test-share", "at": json.loads((tmp_path / "state" / "request-result.json").read_text())["at"],
+        "ok": False, "error": "not_local"}
+    def refused(step, cmd, **k):
+        raise b.Failed(step, "mount failed: mount error(13): Permission denied")
+    monkeypatch.setattr(b, "run", refused)
+    monkeypatch.setattr(b, "TEST_MOUNT", tmp_path / "mnt")
+    assert request(b, tmp_path, smb)["error"] == "login"
+
+
+def test_the_web_setups_disk_id_finds_the_disk_whatever_udev_calls_it(monkeypatch):
+    b = load()
+    listing = {"blockdevices": [{"name": "sdb", "path": "/dev/sdb", "tran": "usb", "type": "disk", "vendor": "SanDisk ",
+                                 "model": "Extreme  55AE", "serial": "3233", "children": [
+                                     {"name": "sdb1", "path": "/dev/sdb1", "type": "part", "fstype": "exfat"}]}]}
+    monkeypatch.setattr(b, "lsblk_usb", lambda: listing)
+    assert b.disk_id(listing["blockdevices"][0]) == "usb-Extreme_55AE_3233"
+    assert b.usb_partition("usb-Extreme_55AE_3233") == Path("/dev/sdb1")
+    with pytest.raises(b.Failed):
+        b.usb_partition("usb-Other_1")
