@@ -221,7 +221,9 @@ newest backup from its web setup (Restore from a backup) and takes the old appli
   tries. The running system is never touched.
 - The appliance restarts into the new slot. A health check (the core of `suveryn-provision verify`)
   marks it good. If it fails three times, systemd-boot starts the previous slot again by itself.
-- Installers refuse updates released after the manifest's `valid_until` (#35).
+- An expired support agreement doesn't block an update (Filip, 28 October 2026): *Updates and models*
+  says support has ended and installs anyway, and everyone who signs in sees the notice (#35, #41).
+  Nothing is ever blocked by the agreement.
 
 ### The office's data during an update
 

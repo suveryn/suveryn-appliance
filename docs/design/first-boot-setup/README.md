@@ -64,14 +64,23 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - Layout aligned with the Keycloak login: lockup and tagline above a 560 px card, language dropdown in the card's top-right corner (English, Nederlands, Français). Focus ring: border `#0F8A82` plus a 3 px `rgba(58,212,202,.15)` glow.
 - Network: Connected (default) with "Approved destinations only" (default) or "Allow all outgoing traffic", or Air-gapped. The appliance's own firewall enforces it, and provisioning checks it last (screen 8 shows the result).
 - Administrator password: at least 15 characters, not a common or leaked password, not the name, email or appliance name; show/hide toggle; no checklist on screen, errors only on Continue. Keycloak's password policy must enforce the same rules.
-- Support agreement (tracker #35): shows appliance ID and key fingerprint, a QR code with a portal link (no app needed), and a manifest upload. Optional: Continue works without one. Without a valid manifest: admin-only reminder for 14 days, then a banner for everyone who signs in. Every deviation from the manifest (users over contract, uncertified connectors or third-party playbooks, missed quarterly check-in, expiry) is shown to everyone. Nothing is ever blocked.
+- Support agreement (tracker #35): shows appliance ID and key fingerprint, a QR code with a portal link (no app needed), and a manifest upload. Optional: Continue works without one. Without a valid manifest: admin-only reminder for 14 days, then a banner for everyone who signs in. Every deviation from the manifest (users over contract, uncertified connectors or third-party playbooks, missed quarterly check-in, expiry) is shown to everyone; when support ends, the banner comes back for everyone (Filip, 28 October 2026). Nothing is ever blocked, updates and model bundles included.
 - Backups (tracker #33): USB disk (pick the detected disk) or network share (SMB or NFS, address, user, password, Test connection), or Set up later with a warning. Retention 14 days, 30 days (default, proposed), 90 days, 1 year. Backups are encrypted to a recovery key generated in the browser; only the public half goes to the appliance; the admin must confirm storing it offline.
 - Conversation retention and the "what deleting means" explanation (tracker #31) are in the admin dashboard, not in setup.
 - Restore from a backup (tracker #56, added 24 October 2026 after the screens were built, so R1 to R4 follow the built screens rather than the design canvas): a secondary button on Welcome under *Get started*. The appliance finds the newest backup on the USB disk or share and checks it with the recovery key file before asking; then it takes the old appliance's name, accounts and settings, and setup closes. The key is kept on the encrypted data partition for that one check and restore only. No step counter: it isn't one of the six steps.
 
 **Copy and brand rules**
 - UK English. Dutch formal (u/uw). The product name is lower case "sūveryn" except at the start of a sentence; the company is "Sūveryn Labs". Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
-- No em dashes in UI copy. Errors use accent ink `#C42F00` with an icon, never a separate red. Lucide icons only.
+- No em dashes in UI copy. Lucide icons only.
+- **Colour (since 28 October 2026)**: the web setup shares the chat UI's kit (`packages/chat-ui/src/ui`), so
+  the colour rules of suveryn-core `docs/design/chat-ui.md` section 1 apply to it too (Filip, 28 October):
+  - orange only for the one primary button per screen and text actions;
+  - errors and warnings in ink with their own icon (circle-alert, triangle, cross), never orange or red;
+    invalid fields get a 1.5 px ink border;
+  - selected radio cards, radio dots and checkboxes in ink, the card's icon on `surface-alt`;
+  - teal for system statuses and system work: a step done on the rail, progress bars, a running step,
+    "Reachable", a downloaded key, the final check.
+  The mock-ups below predate this and show orange for these; the built screens follow the rules.
 
 ## Resolved while building
 
