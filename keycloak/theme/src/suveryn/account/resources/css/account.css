@@ -1,8 +1,11 @@
 /*
  * Sūveryn account console (light only), on top of Keycloak's keycloak.v3 account console
  * (PatternFly 5). Only brand variables and a few components are changed. Text on the accent orange
- * is always ink (#020205), never white; links use the brand's accent-ink (#C42F00), which meets 4.5:1 measured
- * from OKLCH lightness, where the accent itself (#FA5B35) only reaches 2.9:1. Fonts are bundled (fonts/), nothing is loaded from the internet.
+ * is always ink, never white; links use the brand's accent-ink, which meets 4.5:1 measured from OKLCH
+ * lightness, where the accent itself only reaches 2.9:1. Fonts are bundled (fonts/), nothing is loaded
+ * from the internet. Colours are suveryn-brand's tokens v3.4, with what each colour means: orange for
+ * acting only (buttons that act, links), teal for a system status only (the focus ring, a success's
+ * check), ink for everything else, the menu's current item, required marks, warnings and errors included.
  */
 @font-face { font-family: "Inter"; src: url("../fonts/Inter-Variable.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
 @font-face { font-family: "Space Grotesk"; src: url("../fonts/SpaceGrotesk-Variable.woff2") format("woff2"); font-weight: 300 700; font-display: block; }
@@ -40,10 +43,10 @@ body { font-family: "Inter", system-ui, sans-serif; color: oklch(0.0900 0.0140 2
   --pf-v5-c-nav__link--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-nav__link--hover--Color: oklch(0.0900 0.0140 258.00);
   --pf-v5-c-nav__link--BackgroundColor: transparent; --pf-v5-c-nav__link--hover--BackgroundColor: oklch(0.9550 0.0040 258.00);
   --pf-v5-c-nav__link--m-current--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-nav__link--m-current--BackgroundColor: oklch(0.9550 0.0040 258.00);
-  --pf-v5-c-nav__link--m-current--after--BorderColor: oklch(0.6770 0.2010 34.60);
+  --pf-v5-c-nav__link--m-current--after--BorderColor: oklch(0.0900 0.0140 258.00);
 }
 /* PatternFly's sidebar is dark by default: keep the selected and hovered item light, with ink text */
-.pf-v5-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current:hover { background-color: oklch(0.9550 0.0040 258.00); color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-nav__link.pf-m-current, .pf-v5-c-nav__link.pf-m-current:hover { background-color: oklch(0.9550 0.0040 258.00); color: oklch(0.0900 0.0140 258.00); font-weight: 600; }
 .pf-v5-c-nav__link:hover { background-color: oklch(0.9550 0.0040 258.00); color: oklch(0.0900 0.0140 258.00); }
 .pf-v5-c-form-control:focus-within { --pf-v5-c-form-control--after--BorderBottomColor: oklch(0.5720 0.0970 188.40); }
 .pf-v5-c-card { border-radius: 14px; }
@@ -85,17 +88,61 @@ body { font-family: "Inter", system-ui, sans-serif; color: oklch(0.0900 0.0140 2
   min-height: 44px; padding: 12px 20px; font-size: 14.5px; line-height: 1.2; font-weight: 600;
 }
 
-/* labels as the sign-in's; the required mark in accent-ink (the brand has no separate red) */
+/* labels as the sign-in's; the required mark in ink (orange means "act", and the brand has no red) */
 .pf-v5-c-form__label-text { font-size: 13.5px; font-weight: 600; }
-.pf-v5-c-form__label-required { color: oklch(0.5270 0.1867 34.60); }
+.pf-v5-c-form__label-required { color: oklch(0.0900 0.0140 258.00); }
+
+/* field errors in ink, the border heavier, as the sign-in and the chat UI: told apart by icon and message */
+.pf-v5-c-form-control.pf-m-error { --pf-v5-c-form-control--m-error__icon--Color: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-form-control.pf-m-error::before { border-color: oklch(0.0900 0.0140 258.00); border-width: 1.5px; }
+/* the account console marks a wrong field only with the message under it (Keycloak 26.8), so the field follows the message */
+.pf-v5-c-form__group:has(.pf-v5-c-helper-text__item.pf-m-error) .pf-v5-c-form-control::before { border-color: oklch(0.0900 0.0140 258.00); border-width: 1.5px; }
+.pf-v5-c-form-control__icon.pf-m-status,
+.pf-v5-c-helper-text__item.pf-m-error, .pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-text,
+.pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-icon { color: oklch(0.0900 0.0140 258.00); }
+
+/* notices and toasts: the brand's one notice box (surface-alt, a line border, 10px corners, ink text),
+   not PatternFly's coloured alerts; the icon carries the meaning: ink for warnings and errors, a
+   teal-ink check for a success (a good system status), quiet for information */
+.pf-v5-c-alert {
+  --pf-v5-c-alert--BackgroundColor: oklch(0.9550 0.0040 258.00); --pf-v5-c-alert--BoxShadow: none; --pf-v5-c-alert--BorderTopWidth: 0;
+  --pf-v5-c-alert__title--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-alert--m-success__title--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-alert--m-danger__title--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-alert--m-warning__title--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-alert--m-info__title--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-alert--m-success__icon--Color: oklch(0.5200 0.0903 188.40);
+  --pf-v5-c-alert--m-danger__icon--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-alert--m-warning__icon--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-alert--m-info__icon--Color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.62);
+  background: oklch(0.9550 0.0040 258.00); border: 1px solid oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); border-radius: 10px; box-shadow: none;
+}
+.pf-v5-c-alert::before { display: none; }
+
+/* a destructive button acts, so it is orange as any other: the brand has no red, the words say what it does */
+.pf-v5-c-button.pf-m-danger {
+  --pf-v5-c-button--m-danger--BackgroundColor: oklch(0.6770 0.2010 34.60); --pf-v5-c-button--m-danger--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-danger--hover--BackgroundColor: oklch(0.6170 0.2010 34.60); --pf-v5-c-button--m-danger--hover--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-danger--focus--BackgroundColor: oklch(0.6170 0.2010 34.60); --pf-v5-c-button--m-danger--focus--Color: oklch(0.0900 0.0140 258.00);
+  --pf-v5-c-button--m-danger--active--BackgroundColor: oklch(0.6170 0.2010 34.60); --pf-v5-c-button--m-danger--active--Color: oklch(0.0900 0.0140 258.00);
+  background-color: oklch(0.6770 0.2010 34.60); color: oklch(0.0900 0.0140 258.00);
+}
+.pf-v5-c-button.pf-m-danger:hover { background-color: oklch(0.6170 0.2010 34.60); }
 
 /* the sidebar's dividers: the hairline, not the dark line of PatternFly's dark sidebar (#3c3f42, on
    the links' ::before) */
 .pf-v5-c-nav { --pf-v5-c-nav__link--before--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); --pf-v5-c-nav__item--before--BorderColor: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
 .pf-v5-c-nav__link::before, .pf-v5-c-nav__item::before, .pf-v5-c-nav__item.pf-m-expandable::before { border-color: oklch(from var(--pf-v5-global--Color--100) l c h / 0.12); }
-/* the current item's bar in the accent, in sub-menus too (PatternFly's is light blue there) */
-.pf-v5-c-nav__subnav { --pf-v5-c-nav__subnav__link--m-current--after--BorderColor: oklch(0.6770 0.2010 34.60); }
-.pf-v5-c-nav__link.pf-m-current::after { border-color: oklch(0.6770 0.2010 34.60); }
+/* Cancel is a quiet control, so ink like a secondary button; other link buttons act and stay orange
+   (below). And the page's "Jump to section" list is navigation: its current item's bar is ink. */
+#cancel-btn.pf-v5-c-button.pf-m-link, #cancel-btn.pf-v5-c-button.pf-m-link:hover {
+  --pf-v5-c-button--m-link--Color: oklch(0.0900 0.0140 258.00); --pf-v5-c-button--m-link--hover--Color: oklch(0.0900 0.0140 258.00);
+  color: oklch(0.0900 0.0140 258.00);
+}
+.pf-v5-c-jump-links { --pf-v5-c-jump-links__item--m-current__link--before--BorderColor: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-jump-links__item.pf-m-current .pf-v5-c-jump-links__link::before { border-color: oklch(0.0900 0.0140 258.00); }
+
+/* the current item: an ink bar and bold text, in sub-menus too (PatternFly's is light blue there);
+   navigation is never orange, as in the chat UI's Administration menu */
+.pf-v5-c-nav__subnav { --pf-v5-c-nav__subnav__link--m-current--after--BorderColor: oklch(0.0900 0.0140 258.00); }
+.pf-v5-c-nav__link.pf-m-current::after { border-color: oklch(0.0900 0.0140 258.00); }
 
 /* Link and secondary buttons in the brand's colours, set on the buttons themselves: PatternFly's own
    blue (#0066cc) came back on some pages, its variables being set again after this stylesheet. */
