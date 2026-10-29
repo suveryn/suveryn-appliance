@@ -50,7 +50,7 @@ language.
 | `PUT answers/certificate` | Self-signed: names `<name>.local` and the address. Own: a PEM certificate (and its chain, in the same file or apart) and an unencrypted PEM private key; the key belongs to the certificate, it hasn't expired, it covers `<name>.local` (a `*.local` wildcard does), and the chain leads to it. With `openssl`, the files in memory only |
 | `POST manifest` | A support manifest ([`support/`](../support/README.md)): signed by a trusted portal key, for this appliance, not expired |
 | `PUT answers/support` | `{"skipped": true}` |
-| `POST backups/test` | The share's address (`\\server\share` or `server:/path`) is on the office's own network (private or link-local) and its server answers on 445 (SMB) or 2049 (NFS). **Reachability only**: signing in and writing a test file need the backup service's mount (tracker #33) |
+| `POST backups/test` | The share's address (`\\server\share` or `server:/path`) is on the office's own network (private or link-local) and its server answers on 445 (SMB) or 2049 (NFS). **Reachability only**: the backup service's own test, used after setup, signs in and writes (see [`backup/`](../backup/README.md)) |
 | `PUT answers/backups` | A USB disk plugged in now, or a share's address; 14, 30, 90 or 365 days; an age recipient (`age1…`, bech32 checksum checked). The recovery key's private half never reaches the appliance |
 | `POST provision` | Every step answered. Starts provisioning, or starts it again after a failure; while it runs or once done, answers can't change |
 | `GET provision` | (Progress: `running`, `done` or `failed`, per step) |
@@ -94,6 +94,13 @@ the office's administrator in it as a hash only; see [`keycloak/realm`](../keycl
 check`: limited, blocked, not limited, or not checked when all outgoing traffic is allowed). A
 failure marks its step, the screen offers Try again, and nothing entered is lost. The log is
 `/var/log/suveryn/setup-provision.log`, without secrets.
+
+The LLM files come from the signed model bundles the installer copied from the stick
+(`/var/lib/suveryn/bundles/model/…`), used where they are once their size and SHA-256 match
+suveryn-core's manifest. Without such a bundle, a connected appliance downloads them and the others
+need a `SUVERYN-MODELS` disk. Once `verify` has passed, provisioning deletes Keycloak's temporary
+administrator (`suveryn-setup` in the master realm) and its password, if the office's administrator
+exists (#55). A test machine (`install`, or `first-boot --test-machine`) keeps it.
 
 Once done it keeps what later parts read: `/etc/suveryn/support/manifest.yaml`,
 `/etc/suveryn/backups.json` (where, how long, the recipient) and the share's password in
@@ -152,12 +159,6 @@ machine provisioned before: never the one with real documents.
 - **The leaked-password list** (open point, #37): the common-password list is the screen's short
   placeholder, kept identical by a test. The real list goes on the appliance, shared with Keycloak's
   `passwordBlacklist`.
-- **The share test** reaches the server only. Signing in and writing come with the backup service
-  (#33), which mounts the share.
-- **Models from bundles:** on an appliance installed from the stick (mkosi), the installer copies
-  signed model bundles to `/var/lib/suveryn/bundles`; provisioning still takes the LLM files from
-  suveryn-core's manifest (downloaded, or from a `SUVERYN-MODELS` disk). Joining the two is the
-  image split (#39).
-- **Keycloak's temporary admin** (`suveryn-setup` in the master realm) is still created by
-  provisioning; with the office's administrator now made by the web setup it can be removed at the
-  end of provisioning.
+- **The share test** here reaches the server only. The backup service's own test (`suveryn-backup
+  request`, `test-share`, used from Administration › Backups) signs in and writes a test file. The web
+  setup could use that test later.

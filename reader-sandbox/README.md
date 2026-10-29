@@ -62,9 +62,11 @@ GPU devices must be readable by `suveryn-reader`; nothing under a 0700 home fold
 
 ## Keeping the parsers patched
 
-Ghostscript, Tesseract and qpdf come from the distribution. The appliance image keeps them current
-with the distribution's security updates (unattended-upgrades); the Python parsers (pypdfium2,
-pikepdf, Docling) are pinned in suveryn-core's `uv.lock` and updated with it.
+Ghostscript, Tesseract and qpdf come from Ubuntu's packages. The read-only system has no apt and
+no unattended-upgrades: their security fixes come as sūveryn updates, a new system built with
+Ubuntu's fixed packages (decision D3 in [`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md), #40).
+On an ordinary Ubuntu (the Packer test image) unattended-upgrades applies them. The Python parsers
+(pypdfium2, pikepdf, Docling) are pinned in suveryn-core's `uv.lock` and updated with it.
 
 ## Tested
 

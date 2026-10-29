@@ -49,8 +49,11 @@ each part only when it matches what it should be built from.
 **The web setup** (suveryn-tracker#37): when no `first-boot.env` is on the EFI partition, the first
 start opens `https://<name>.local/` and someone on the office's network answers the setup screens;
 [`setup`](../setup/README.md) then runs `suveryn-provision first-boot` with those answers. Nothing the
-office sets touches the EFI partition. `first-boot.env` below is the earlier way, kept until the web
-setup has been tested end to end on a machine (#37 part 6).
+office sets touches the EFI partition. `first-boot.env` below is the earlier way. It stays in this
+test image until the web setup's real provisioning (#37 part 6b) has passed end to end. What has been
+tested so far is in [`setup/README.md`](../setup/README.md#testing): the screens in a browser with a
+stand-in for provisioning, on any machine and on the read-only system in a VM (part 6a). The read-only
+system has no `first-boot.env`.
 
 The installer flashes the image, then writes the office's settings to the **EFI partition**, which
 is FAT32 and so writable from any computer, at `suveryn/first-boot.env`:
@@ -88,7 +91,7 @@ that the services start on their own at every boot.
 | LLM files | Downloaded, checked against the manifest's sha256 | Same | From media: a USB disk labelled `SUVERYN-MODELS` (mounted read-only), checked the same way |
 | Outgoing traffic | The office's network, and the approved destinations (sūveryn, Hugging Face, Ubuntu's security updates, time, the office's connectors) | Anything | The office's own network only |
 | Ubuntu security updates | Automatic (unattended-upgrades) | Same | Off: a signed update bundle on media (#40, not built yet) |
-| Subscription manifest (Enterprise) | Verified locally when it exists; it is never fetched (development context §8; not built yet) | Same | Same |
+| Subscription manifest (Enterprise) | Checked locally by the web setup when the office gives one ([`support/`](../support/README.md)); it is never fetched | Same | Same |
 
 ufw lets in only 80 and 443 in every mode. What goes out is enforced by the network mode's own
 nftables table and resolver (`suveryn-egress`, `suveryn-dns`), loaded before the network comes up
@@ -108,7 +111,7 @@ access except, when connected, for the LLM files.
   and the gateway listen on loopback only. Nothing answers on 80/443 until first boot has written the
   office's site.
 - **No SSH server and no login:** the build user and the SSH server are removed last, and root is
-  locked. Remote support access is an open decision.
+  locked. Remote support is decided for connected appliances only (decision D6, #43) and isn't built.
 - **Kernel settings:** pointer and dmesg restrictions, BPF hardening, kexec disabled, ptrace limited
   to admins, no redirects or source routing.
 - **No core dumps** (they would hold document text), and a persistent journal capped at 1 GB.
@@ -149,8 +152,10 @@ dev pod.
 
 ## Open
 
-- **Remote support access** (SSH or otherwise): none in the image.
+- **Remote support:** decided for connected appliances only, never air-gapped (decision D6, #43;
+  [`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)). Not built:
+  none in the image.
 - **Updates for offline installations:** a signed bundle on media, tied to the signing decisions
   (development context §8, §11).
-- **Console setup:** the web setup ([`setup`](../setup/README.md)) replaces `first-boot.env` once it
-  has been tested end to end (#37 part 6).
+- **`first-boot.env`:** the web setup ([`setup`](../setup/README.md)) replaces it once the real
+  provisioning through the web setup (#37 part 6b) has passed on a machine.

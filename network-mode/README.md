@@ -52,7 +52,8 @@ The appliance's own destinations can't be removed. Change the mode with the tool
 the file, then run `apply` and restart the services that read the mode (the gateway and Keycloak).
 
 Provisioning sets it from `--network-mode` and `--outbound` (`NETWORK_MODE` and `OUTBOUND` in
-`first-boot.env`). The web setup screen (#37) will set it the same way. The mode is **declared, not
+`first-boot.env`). The web setup (#37) sets it the same way: it runs `suveryn-provision first-boot
+--network-mode <mode>` (and `--outbound` when connected) with the office's answer. The mode is **declared, not
 measured**, but on the appliance it is also enforced (below), and the check says whether that holds.
 
 ## Reading it (any component)
@@ -82,8 +83,11 @@ shows its "Air-gapped" badge only when the mode is `air-gapped` ([`keycloak/them
 
 ## How the appliance enforces it
 
-ufw only decides what comes in (80 and 443). What goes out is decided by the network mode, in two
-parts that `apply` writes and loads:
+What comes in is decided apart from the mode. On the read-only system it is the image's fixed
+nftables table `inet suveryn_inbound` (`suveryn-inbound.service`): 80 and 443, DHCP's answers and mDNS.
+On an appliance on an ordinary Ubuntu (the Packer test image) it is ufw: 80 and 443. A test machine
+(`install`, or `first-boot --test-machine`) gets neither. What goes out is decided by the network
+mode, in two parts that `apply` writes and loads:
 
 1. **`suveryn-egress`** (systemd, before the network comes up): an nftables table, `inet
    suveryn_egress`, on outgoing traffic. It lets out: loopback; connections already established; the
