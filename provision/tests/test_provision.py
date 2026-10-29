@@ -495,3 +495,26 @@ def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_m
     p.admin_role_composites({}, api)
     assert posted == [(f"{api}/roles/suveryn-admin/composites", [roles["manage-users"], roles["view-events"]])]
     assert "added manage-users, view-events" in capsys.readouterr().out
+
+
+def test_verify_finds_the_egress_unit_wherever_systemd_has_it(monkeypatch):
+    """The read-only system's suveryn-egress.service is in /usr/lib/systemd/system, not /etc: verify asks
+    systemd, so the outgoing-traffic check runs there too. A test machine without it: not checked."""
+    asked = []
+
+    def systemctl(argv, **k):
+        asked.append(argv)
+        return subprocess.CompletedProcess(argv, 0 if found else 1, b"", b"")
+    monkeypatch.setattr(p.subprocess, "run", systemctl)
+    monkeypatch.setattr(p, "systemd_running", lambda: True)
+    found = True
+    assert p.unit_installed("suveryn-egress.service") is True
+    assert asked == [["systemctl", "cat", "suveryn-egress.service"]]
+    found = False
+    assert p.unit_installed("suveryn-egress.service") is False
+    monkeypatch.setattr(p, "systemd_running", lambda: False)
+    asked.clear()
+    assert p.unit_installed("suveryn-egress.service") is False and asked == []
+    src = (HERE / "suveryn-provision").read_text()
+    part = src[src.index("def verify("):src.index("def directory_auth(")]
+    assert 'if unit_installed("suveryn-egress.service"):' in part and "/etc/systemd/system/suveryn-egress" not in part
