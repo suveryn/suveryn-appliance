@@ -32,6 +32,8 @@ Copy `build/theme/suveryn` into Keycloak's `themes/` folder, or `build/suveryn-k
 kcadm.sh update realms/suveryn -s loginTheme=suveryn -s accountTheme=suveryn -s emailTheme=suveryn
 ```
 
+After a new theme, empty Keycloak's gzip cache (`data/tmp/kc-gzip-cache`) before it starts: Keycloak keeps compressed copies of the theme's files under a version of its own that doesn't change with the theme, and browsers would get the old ones. On the appliance `keycloak.service` does this at every start.
+
 ## Design rules it keeps
 
 From the reviewed login mockup and the Sūveryn Design System:
