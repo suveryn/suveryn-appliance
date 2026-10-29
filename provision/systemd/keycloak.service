@@ -2,7 +2,13 @@
 [Unit]
 Description=Keycloak (sūveryn sign-in)
 After=network.target postgresql.service
-Requires=postgresql.service
+# Wants, not Requires: with Requires, stopping PostgreSQL stopped Keycloak, and starting PostgreSQL didn't
+# bring it back, so no one could sign in (round 2, finding 2). Keycloak outlives a stopped database: its
+# sign-ins fail meanwhile and work again within about ten seconds of the database's return (checked on
+# Keycloak 26.8 with PostgreSQL 16).
+Wants=postgresql.service
+# Should it stop on its own anyway, it starts again, for as long as it takes.
+StartLimitIntervalSec=0
 
 # On the read-only system the unit is enabled in the image and starts once first boot has written
 # its settings (#47).
@@ -17,7 +23,8 @@ Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 # The network mode: the login page shows its "Air-gapped" badge only when it is true (keycloak/theme).
 EnvironmentFile=-/etc/suveryn/network-mode.env
 ExecStart=/opt/keycloak/bin/kc.sh start --optimized
-Restart=on-failure
+Restart=always
+RestartSec=5
 NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
