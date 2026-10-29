@@ -305,6 +305,17 @@ def test_keycloak_outlives_a_stopped_database():
     assert lines.index("StartLimitIntervalSec=0") < lines.index("[Service]")  # a [Unit] setting
 
 
+def test_keycloak_never_serves_an_old_themes_gzip_copy():
+    """VM check of 29 October, round 3, finding 1: Keycloak's gzip copies of the theme's files sit under a path
+    that doesn't change with the theme, so browsers got the previous stylesheet after an install. The unit
+    empties that cache before each start."""
+    unit = (HERE / "systemd" / "keycloak.service").read_text()
+    lines = [line.strip() for line in unit.splitlines() if line.strip() and not line.startswith("#")]
+    pre = "ExecStartPre=/usr/bin/rm -rf /opt/keycloak/data/tmp/kc-gzip-cache"
+    assert pre in lines and lines.index(pre) < lines.index("ExecStart=/opt/keycloak/bin/kc.sh start --optimized")
+    assert str(p.KEYCLOAK) == "/opt/keycloak"
+
+
 def test_the_readers_sudo_rule_has_no_requiretty():
     """26.04's sudo-rs refuses `!requiretty` (#57); Ubuntu's sudo never asked for a terminal anyway."""
     assert "requiretty" not in p.reader_sudoers()
