@@ -16,7 +16,7 @@ OS image build, hardening and first-boot provisioning for sūveryn appliances, i
 | [`bundles`](bundles/README.md) | Signed bundles (models now, system updates later): `suveryn-bundle-release` makes and signs them at Sūveryn Labs (AWS KMS); the appliance checks them with `/usr/lib/suveryn/bundle` |
 | [`setup`](setup/README.md) | The web setup on the appliance's side: answers the setup screens (suveryn-core `setup.html`) on the first start, checks and keeps the office's answers, runs provisioning with them and closes setup |
 | [`support`](support/README.md) | Support manifests: Sūveryn Labs' signed statement of an appliance's support agreement, checked on the appliance |
-| [`provision`](provision/README.md) | `suveryn-provision`: installs and wires up PostgreSQL/pgvector, Keycloak (theme and production realm), llama-server and its models, suveryn-core and the reader sandbox on Ubuntu 26.04 (or 24.04 until #60), then verifies them end to end |
+| [`provision`](provision/README.md) | `suveryn-provision`: installs and wires up PostgreSQL/pgvector, Keycloak (theme and production realm), llama-server and its models, suveryn-core and the reader sandbox on Ubuntu 26.04 (or 24.04 until #57), then verifies them end to end |
 | [`backup`](backup/README.md) | `suveryn-backup`: the nightly backups, encrypted for the office's recovery key, onto a USB disk or a share; the administrator's key test and requests; restoring onto a replacement machine |
 | [`docs/design`](docs/design/appliance-architecture.md) | Design notes: the appliance's architecture (read-only system, data partition, updates, decisions) and the [first-boot setup](docs/design/first-boot-setup/README.md) |
 

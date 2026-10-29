@@ -14,8 +14,9 @@ nothing):
    and a GeForce card with ``--site datacenter`` stops the run.
 2. **Network mode** (``network-mode/``): ``/etc/suveryn/network-mode.env``, connected (approved
    destinations only, or all outgoing traffic) or air-gapped. On the appliance the mode is enforced:
-   ufw lets in only the web ports, and ``suveryn-egress`` (nftables) with the appliance's own
-   resolver ``suveryn-dns`` (dnsmasq) decides what goes out.
+   only the web ports come in (the image's nftables rules, ``suveryn-inbound``, on the read-only system;
+   ufw on the Packer image), and ``suveryn-egress`` (nftables) with the appliance's own resolver
+   ``suveryn-dns`` (dnsmasq) decides what goes out.
 3. **Packages** from Ubuntu 26.04 (PostgreSQL 18) or 24.04 (PostgreSQL 16): PostgreSQL with pgvector,
    Java 21 (Keycloak), Tesseract and Ghostscript (OCR), python3-seccomp (reader sandbox), and the tools
    to build llama.cpp.
