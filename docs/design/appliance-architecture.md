@@ -72,12 +72,11 @@ in it are links into the data partition, because they belong to this office:
 | `/etc/localtime` | `/var/lib/suveryn/host/localtime` | The time zone (set in the installer, C1) |
 | `/etc/default/keyboard` | `/var/lib/suveryn/host/keyboard` | The console keyboard layout (set in the installer, C1) |
 | `/etc/machine-id` | `/var/lib/suveryn/host/machine-id`, mounted over it in the initrd (systemd won't follow a link for this one) | Unique per appliance |
-| `/etc/systemd/network/` office part | `/var/lib/suveryn/network` | Fixed address or DHCP (#37, C4) |
+| `/etc/systemd/network` | `/var/lib/suveryn/network` (the whole folder is a link) | Fixed address or DHCP (#37, C4) |
 | `/etc/postgresql` | `/var/lib/suveryn/postgresql-etc` | PostgreSQL's cluster configuration, made with the cluster at first boot (#47) |
 
-Everything else stays where the image puts it. Today's provisioning writes in a few more places;
-those move into the image itself (below). A test checks that nothing outside this list is written
-at first boot.
+Everything else stays where the image puts it. A test that nothing outside this list is written at
+first boot is still to do (stage 4, below).
 
 ## The boot, and what "verified" means
 
@@ -186,21 +185,23 @@ used where the installer put their bundles (`/var/lib/suveryn/bundles/model/…`
 suveryn-core's manifest, never copied; media or a download only when no bundle has them), and the
 outgoing rules and resolver are enabled in the image and start once first boot has set a mode, with
 `/etc/resolv.conf` linking to `/run/suveryn/resolv.conf` (systemd-resolved's stub until
-`suveryn-dns` runs). Still to do in stage 4: removing Keycloak's temporary administrator once the
-office's exists, and first boot on real hardware (#48), where the read-only system itself refuses
-any write outside the data partition. In stage 2,
+`suveryn-dns` runs). Keycloak's temporary administrator is removed once the office's exists and
+`verify` has passed (#55). Still to do in stage 4: the test that first boot writes nothing outside the
+listed paths, and first boot on real hardware (#48), where the read-only system itself refuses any
+write outside the data partition. In stage 2,
 everything that isn't from Ubuntu's archive is built beforehand on a Pod by `image/mkosi/prebuild-services`
 into `image/mkosi/prebuilt/`, which the image build copies in and checks against the pins
 (`suveryn-provision check-prebuilt`): no network, git or compiler inside the image build.
 `/opt/suveryn/core` carries no git history; the realm builder reads the realm file there and checks
 it against `realm-lock.json`'s sha256.
 
-Built and inspected on a virtual machine (22 and 23 October 2026): slot A holds 14.5 GiB of its 32,
-13 GB of it the services; the prebuild takes about 7 minutes on 32 cores. mkosi needs a host where it
-may create namespaces (a virtual or real machine, not a container like a RunPod pod); the prebuild runs
-in an Ubuntu 26.04 + CUDA 13.4 container or machine, with no GPU. Those figures are from the 24.04
-image; the image is built on 26.04 since #57. The
-Packer build stays for developing and testing suveryn-core on a Pod.
+Built and inspected on a virtual machine (22 and 23 October 2026): slot A holds 14.5 GiB of its 32.
+The services come to about 13 GB (12 GiB as slot A's uncompressed EROFS), and the prebuild takes about
+25 minutes on 32 cores ([`image/mkosi/README.md`](../../image/mkosi/README.md)). mkosi needs a host
+where it may create namespaces (a virtual or real machine, not a container like a RunPod pod); the
+prebuild runs in an Ubuntu 26.04 + CUDA 13.4 container or machine, with no GPU. Those figures are from
+the 24.04 image; the image is built on 26.04 since #57. The Packer build stays for developing and
+testing suveryn-core on a Pod.
 
 ### Backups (#33)
 
@@ -253,7 +254,7 @@ Limits, stated plainly:
 - **Going back is automatic only during the update.** Once people have worked on a new version,
   going back would mean restoring the pre-update backup and losing that work. Problems found later
   are fixed by a new update, not by going back.
-- **A new PostgreSQL major version** (16 to 17, every few years) changes the database's files
+- **A new PostgreSQL major version** (18 to 19, every few years) changes the database's files
   themselves (`pg_upgrade`). That is its own, planned update step, with a backup first and the
   same closed sign-in, never part of a routine update.
 
@@ -277,17 +278,19 @@ Decided 14 October 2026: remote support is possible, but never on an air-gapped 
   versions, logs without content) for the partner or Sūveryn Labs.
 
 Building it needs a relay service on sūveryn's side, next to the portal. The appliance part (the
-tunnel client and the support account) is in the image from the start, inert until a session runs.
-Details are #43's.
+tunnel client and the support account) isn't in the image yet. It is planned (decision D6, #43):
+connected mode only, inert until a session runs.
 
 ## How it's built
 
-**Proposal: build the image with mkosi** (systemd's image builder, in Ubuntu's archive) instead of
-installing Ubuntu inside a Packer/QEMU machine. mkosi builds the read-only system, its verity, the
-boot file and the partition definitions directly from Ubuntu's packages, reproducibly, without
-running an installer. The current provisioning steps run inside it unchanged (`suveryn-provision
-image`), and the heavy parts that `prebuild.sh` builds beforehand (llama-server with CUDA, Keycloak,
-the chat UI) are copied in as they are now. Packer can then go (decision D1).
+**The image is built with mkosi** (systemd's image builder, in Ubuntu's archive; decision D1)
+instead of installing Ubuntu inside a Packer/QEMU machine. mkosi builds the read-only system, its
+verity, the boot file and the partition definitions directly from Ubuntu's packages, without running
+an installer ([`image/mkosi`](../../image/mkosi/README.md)). The sūveryn services are built beforehand
+by `image/mkosi/prebuild-services` into `image/mkosi/prebuilt/` (suveryn-core compiled, llama-server
+with CUDA and its libraries, Keycloak, the chat UI); the image build copies them in and checks them
+against the pins (`suveryn-provision check-prebuilt`). The Packer build stays only for developing and
+testing suveryn-core on a Pod, until it is retired.
 
 ## Testing
 
