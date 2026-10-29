@@ -295,6 +295,16 @@ def test_keycloak_runs_on_java_21_wherever_it_starts():
         assert '"JAVA_HOME"' in line, call
 
 
+def test_keycloak_outlives_a_stopped_database():
+    """Round 2, finding 2: Requires=postgresql.service stopped Keycloak with PostgreSQL, and nothing
+    started it again. Wants= keeps it running; Restart=always brings it back if it stops on its own."""
+    unit = (HERE / "systemd" / "keycloak.service").read_text()
+    lines = [line.strip() for line in unit.splitlines() if line.strip() and not line.startswith("#")]
+    assert "Wants=postgresql.service" in lines and not any(line.startswith(("Requires=", "BindsTo=")) for line in lines)
+    assert "Restart=always" in lines and "RestartSec=5" in lines and "StartLimitIntervalSec=0" in lines
+    assert lines.index("StartLimitIntervalSec=0") < lines.index("[Service]")  # a [Unit] setting
+
+
 def test_the_readers_sudo_rule_has_no_requiretty():
     """26.04's sudo-rs refuses `!requiretty` (#57); Ubuntu's sudo never asked for a terminal anyway."""
     assert "requiretty" not in p.reader_sudoers()
@@ -375,6 +385,19 @@ def test_the_read_only_images_python_is_uvs_own_and_the_build_host_has_java():
     assert "openjdk-21-jre-headless" in p.BUILD_HOST_PACKAGES
     main = src[src.index('if a.command == "prebuild":'):]
     assert main.index("build_host_packages()") < main.index("keycloak_software()")
+
+
+def test_installing_core_says_what_it_was_built_from(tmp_path, monkeypatch):
+    """Round 2, finding 4: Status reads the version from /opt/suveryn/core/.suveryn-built, which only the
+    image's prebuild wrote; an install with the provisioning left it out and Status showed none."""
+    core = tmp_path / "core"
+    core.mkdir()
+    monkeypatch.setattr(p, "CORE", core)
+    monkeypatch.setattr(p, "install_uv", lambda: None)
+    commit = p.VERSIONS["suveryn_core"]["commit"]
+    monkeypatch.setattr(p, "run", lambda *a, **k: commit + "\n" if "rev-parse" in a else "")
+    p.suveryn_core(hf=tmp_path / "hf")
+    assert (core / ".suveryn-built").read_text() == p.core_built_as() == f"suveryn-core@{commit}\n"
 
 
 def test_llama_server_needing_a_library_the_image_lacks_stops_the_prebuild(tmp_path, monkeypatch):
