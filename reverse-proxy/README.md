@@ -16,7 +16,9 @@ UI is served on the same origin as the API):
 [`provision/suveryn-provision`](../provision/README.md) installs it: it writes
 `suveryn.conf.template` (with the public host name) to `/etc/nginx/sites-available/suveryn`, the two
 snippets to `/etc/nginx/snippets/`, checks the configuration with `nginx -t`, and verifies the
-running proxy.
+running proxy. On the read-only system the snippets are built into the image, and the site goes to
+`/var/lib/suveryn/nginx/suveryn` on the data partition, where `/etc/nginx/sites-enabled/suveryn`
+links.
 
 ## Why nginx
 
@@ -33,10 +35,12 @@ The certificate is either:
 
 - **the office's own**: `suveryn-provision install --tls-cert <full chain> --tls-key <key>`; or
 - **one from a local certificate authority** made on the machine: its key never leaves
-  `/etc/suveryn/tls` (0600). The office's workstations trust `/etc/suveryn/tls/ca.crt` once; the
-  machine trusts it too (`update-ca-certificates`), so the gateway can reach Keycloak at the
-  public https URL (`SSL_CERT_FILE` in `gateway.env` points at the system bundle). Server
-  certificates are valid 397 days.
+  `/etc/suveryn/tls` (0600). The office's workstations trust `/etc/suveryn/tls/ca.crt` once. The
+  machine trusts it too, so the gateway can reach Keycloak at the public https URL. On an ordinary
+  Ubuntu it joins the system's store (`update-ca-certificates`), and `SSL_CERT_FILE` in `gateway.env`
+  points at the system bundle. On the read-only system `/etc/ssl` can't be written: the system's CAs
+  and the local one go into `/etc/suveryn/tls/ca-bundle.crt` on the data partition, and
+  `SSL_CERT_FILE` points there. Server certificates are valid 397 days.
 
 `/etc/hosts` maps the public name to `127.0.0.1` on the machine itself, so the gateway's calls to
 Keycloak stay on the box.
@@ -61,7 +65,8 @@ made to fit the policy, never the other way round: no `'unsafe-inline'`, nonce o
 The rules for that code, how a library is checked before it is added, and the two places React Aria
 (the UI's component library) would write a `<style>` and how each is handled:
 [suveryn-core `docs/content-security-policy.md`](https://github.com/suveryn/suveryn-core/blob/main/docs/content-security-policy.md).
-The first-boot web setup (#37) must get this same policy. `server_tokens off` hides nginx's version.
+The web setup (#37) has the same policy: its locations in [`setup/nginx-setup.conf`](../setup/nginx-setup.conf)
+include the same two snippets. `server_tokens off` hides nginx's version.
 
 ## Confidential data
 
@@ -86,4 +91,6 @@ ones; the UI and API get the strict CSP and Keycloak doesn't; the CSP `verify` e
 nginx sends; API docs are never routed; nothing confidential reaches disk or the log; forwarded
 headers are set; TLS is modern only; the admin console is for the office network. The running
 proxy is checked by `suveryn-provision verify`: TLS versions and certificate, the redirect, the
-headers on real answers, `/docs`, and a sign-in and an upload end to end over https.
+headers on real answers, `/docs`, and a sign-in and an upload end to end over https. That last check
+needs Keycloak's temporary administrator to make a test user. On an office's appliance it is removed
+after setup (#55), so a later `verify` reports the sign-in check as not checked.

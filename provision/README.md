@@ -1,8 +1,11 @@
 # Provisioning
 
 `suveryn-provision` installs and wires up every runtime service [suveryn-core](https://github.com/suveryn/suveryn-core)
-needs on a fresh Ubuntu 26.04 or 24.04 machine with an NVIDIA GPU, then checks them end to end. It is the
-step before an OS image: run it directly on a test box; the image will run it at build or first boot.
+needs on a fresh Ubuntu 26.04 or 24.04 machine with an NVIDIA GPU, then checks them end to end. It
+runs directly on a test machine, inside the Packer test image's build, and on the appliance at first
+boot. The read-only system ([`image/mkosi`](../image/mkosi/README.md)) doesn't run `image`: its build
+takes the services `image/mkosi/prebuild-services` built beforehand (`prebuild --read-only-image`) from
+`image/mkosi/prebuilt/` and checks them with `check-prebuilt`.
 
 ```bash
 sudo provision/suveryn-provision install --public-url https://suveryn.office.example \
@@ -10,6 +13,17 @@ sudo provision/suveryn-provision install --public-url https://suveryn.office.exa
 sudo provision/suveryn-provision verify            # again later, any time
 sudo provision/suveryn-provision services start    # start | stop | restart | status
 ```
+
+| Subcommand | What it does |
+|---|---|
+| `install` | `image` and `first-boot` in one go, without the web setup: a test or staging machine, answered on the command line. No firewall of its own |
+| `image` | Everything the same for every office (needs network): users, packages, suveryn-core, llama-server, Keycloak, the reader sandbox, the chat UI, the nginx snippets, the backup units and the web setup's units |
+| `first-boot` | Everything unique to this machine and office: the GPU licence check, the network mode and its enforcement, PostgreSQL, Keycloak and the realm, the models' settings, TLS, the site, the services, `verify`. The web setup runs it with `--administrator`; `--config first-boot.env` reads the settings from a file; `--test-machine` (with `--site test`) leaves the firewall out. Runs once (`/var/lib/suveryn/.first-boot-done`) |
+| `restore` | A replacement machine becomes the office's appliance again from a backup (the web setup's restore, #56): PostgreSQL, `suveryn-backup restore`, then this machine's models, the network mode, the old name, the trust bundle, the services and `verify` |
+| `prebuild` | Builds llama-server, Keycloak and the chat UI as an image needs them (`image/prebuild.sh`); with `--read-only-image` also suveryn-core compiled, its models in `/opt/suveryn/hf` and the CUDA libraries (`image/mkosi/prebuild-services`) |
+| `check-prebuilt` | The read-only system's build: the services in `--root` (`image/mkosi/prebuilt`) are the pinned ones, or the build stops |
+| `services` | `start`, `stop`, `restart` or `status` of the services: systemd, or the test runner without it (below) |
+| `verify` | Checks every service end to end (below) |
 
 Every step is idempotent: running `install` again continues where it stopped or changes nothing.
 It ends by restarting the services, so after an update they run the new code (a start alone left a
@@ -21,22 +35,23 @@ Secrets are generated on the machine and never printed.
 | Service | How | Where |
 |---|---|---|
 | PostgreSQL + pgvector | Ubuntu's packages: PostgreSQL 18 on 26.04, 16 on 24.04 (24.04 goes once the image is built on 26.04, #57); databases `suveryn` and `keycloak`, each with its own role and a random password; extension `vector`. suveryn-core creates its own tables when the gateway starts (`CREATE TABLE IF NOT EXISTS`), so there are no migrations | `127.0.0.1:5432` |
-| suveryn-core | At the commit in [`versions.json`](versions.json), `uv sync --locked --all-packages --no-dev`; its embedding and Docling models with `suveryn-fetch-models` | `/opt/suveryn/core`, models in `/var/lib/suveryn/hf` |
-| llama-server | Built from llama.cpp at the pinned commit with CUDA; the LLM files from suveryn-core's `models/manifest.json`, each checked against its size and sha256; router presets written from the manifest | `127.0.0.1:8080`, files in `/var/lib/suveryn/models`, `/etc/suveryn/llama-presets.ini` |
+| suveryn-core | At the commit in [`versions.json`](versions.json), `uv sync --locked --all-packages --no-dev`; its embedding and Docling models with `suveryn-fetch-models` | `/opt/suveryn/core`; models in `/var/lib/suveryn/hf`, or in the read-only system's image at `/opt/suveryn/hf` |
+| llama-server | Built from llama.cpp at the pinned commit with CUDA; the LLM files from suveryn-core's `models/manifest.json`, each checked against its size and sha256: from an installed signed model bundle when one has them (used where they are), else downloaded or copied from `--models-from`; router presets written from the manifest | `127.0.0.1:8080`; files in `/var/lib/suveryn/bundles/model/…` (bundles) or `/var/lib/suveryn/models`; `/etc/suveryn/llama-presets.ini` |
 | Keycloak 26.8 | The pinned release (sha256 checked), on Java 21 (`JAVA_HOME` in its unit, also where Ubuntu has newer Java); the sūveryn theme ([`keycloak/theme`](../keycloak/theme/README.md)); the production realm ([`keycloak/realm`](../keycloak/realm/README.md): sslRequired all, 180-day events, exact redirect URLs, a new client secret, passwords of 15 characters, and with `first-boot --administrator FILE` the office's administrator from the web setup), imported once and the realm file deleted | `127.0.0.1:8180/idp`, management `127.0.0.1:9000` |
 | The reader sandbox | [`reader-sandbox`](../reader-sandbox/README.md): user `suveryn-reader`, its inbox and work folder, the wrapper, and sudo for the gateway to start it as the reader. The gateway's `SUVERYN_EXTRACT_WRAPPER` points at it; `SUVERYN_EXTRACT_UNSANDBOXED` is never set | `/opt/suveryn/bin/suveryn-reader-sandbox`, `/var/lib/suveryn/{inbox,reader}` |
 | suveryn-core's gateway | systemd unit, user `suveryn` | `127.0.0.1:8000` |
-| Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` and `--outbound` (asked on a console when omitted). On the appliance (not on a test pod) also its enforcement: ufw for what comes in, the `suveryn-egress` rules and the `suveryn-dns` resolver for what goes out, and `/etc/resolv.conf` pointing at that resolver | `/etc/suveryn/network-mode.env`, `approved-destinations`, `dnsmasq.conf` |
+| Network mode | [`network-mode`](../network-mode/README.md), from `--network-mode` and `--outbound` (asked on a console when omitted). On the appliance (not on a test machine: `install` or `first-boot --test-machine`) also its enforcement. What comes in: on the read-only system the image's nftables table `suveryn_inbound` (`suveryn-inbound.service`), on an ordinary Ubuntu ufw; 80 and 443 only. What goes out: the `suveryn-egress` rules and the `suveryn-dns` resolver, and `/etc/resolv.conf` pointing at that resolver | `/etc/suveryn/network-mode.env`, `approved-destinations`, `dnsmasq.conf` |
 | Cases | `SUVERYN_CASES_DEFAULT_ACCESS` in `gateway.env`, from `--cases-access` (or `CASES_ACCESS` in `first-boot.env`): `members` (the default, fail closed: a new case is its members' only) or `office` (everyone signed in reads a new case; for a notary office, where all staff share the same secrecy). Its manager can restrict a case either way. `SUVERYN_CASES_KEEP`, from `--cases-keep` (or `CASES_KEEP`): how long a closed case is kept before the gateway deletes it with its documents and conversations: `6m`, `1y`, `5y` or `manual` (the default: nothing is chosen for the office; a closed case stays until someone deletes it). `SUVERYN_CONVERSATIONS_KEEP`, from `--conversations-keep` (or `CONVERSATIONS_KEEP`): how long saved conversations are kept, counted from their last change, in cases too: `6m`, `1y`, `5y` or `manual` (the default: until their owner deletes them). See suveryn-core's `docs/design/cases.md` (suveryn-tracker#10) and the [data lifecycle](https://github.com/suveryn/suveryn-docs/blob/main/administration/data-lifecycle.md) (#31). All three are initial values: the web setup asks none of them (it throws as few hurdles as possible, and the defaults fail safe), and an administrator changes them in the dashboard's office settings | `/etc/suveryn/gateway.env` |
 | The chat UI | Built from suveryn-core with a pinned Node (`npm ci`, every package by hash) | `/opt/suveryn/ui` |
 | The web setup | [`setup`](../setup/README.md) (`image`): the `suveryn-setup` user and units, so that the first start opens `https://<name>.local/` for the office's answers; they run `first-boot` with them | `suveryn-setup.service`, `suveryn-setup-provision.path` |
+| Backups | [`backup`](../backup/README.md) (`image`): `suveryn-backup.timer` (hourly; it backs up at the office's hour once a target is set), `suveryn-backup-key-test.path` and `suveryn-backup-request.path` (the administrator's key test and requests), their `.service` units, and the folders in `/run/suveryn` for the gateway's requests (`tmpfiles.d/suveryn-backup.conf`). The read-only system has them built in | `/etc/systemd/system/suveryn-backup*`, `/etc/suveryn/backups.json` |
 | TLS and the reverse proxy | [`reverse-proxy`](../reverse-proxy/README.md): nginx on one https origin for the UI, the gateway and Keycloak, strict security headers; the office's certificate (`--tls-cert`, `--tls-key`) or one from a local CA made on the machine | `:443` (and `:80`, redirecting), `/etc/suveryn/tls` |
 
 Configuration lives in `/etc/suveryn`: `gateway.env`, `keycloak.env` and `gateway-oidc.env` (each
 0600, owned by the service that reads it), `llama-presets.ini`, `network-mode.env`,
 `approved-destinations` and `dnsmasq.conf`. The systemd units are in [`systemd/`](systemd):
 `suveryn-llm`, `keycloak`, `suveryn-gateway`, and on the appliance `suveryn-egress` and `suveryn-dns`
-(the network mode).
+(the network mode). On the read-only system they are in the image, in `/usr/lib/systemd/system`.
 
 ## The GPU licence check
 
@@ -53,10 +68,12 @@ say where the machine runs, and the answer is printed at the top of the output:
 ## Network access while provisioning
 
 Provisioning fetches Ubuntu packages and the pinned downloads, so it runs with network access while
-the appliance is staged; `--network-mode` describes the installation once it is in use. For an
-air-gapped installation the LLM files can come from physical media with `--models-from <folder>`,
-checked against the manifest's sha256 like a download (how models reach an air-gapped office is
-still open decision 3 in the development context).
+the appliance is staged; `--network-mode` describes the installation once it is in use. An
+air-gapped appliance gets its LLM files from the signed model bundles on the installer stick (#36),
+which the installer copies to `/var/lib/suveryn/bundles`. Provisioning uses them where they are once
+their size and sha256 match the manifest. Without a bundle, the files can come from physical media
+with `--models-from <folder>` (a `SUVERYN-MODELS` disk in the web setup), checked the same way. On
+the read-only system an air-gapped appliance with neither stops.
 
 ## Verification
 
@@ -68,9 +85,12 @@ still open decision 3 in the development context).
   `suveryn` and 180-day events; its discovery, asked as the reverse proxy will ask it (`https` in
   `X-Forwarded-Proto`), gives exactly the issuer the gateway is configured with.
 - **The directory**: the gateway's `suveryn-directory` client gets a token and lists the accounts and
-  the holders of `suveryn-admin`, as adding a member to a case does. `install` first adds
-  `view-users` and `view-realm` to that client's scope on a realm imported before the realm file had
-  them (the Pod check of 5e9a539 found members couldn't be added on a fresh install).
+  the holders of `suveryn-admin`, as adding a member to a case does. Before `verify`, `first-boot`
+  (and so `install`) and `restore` add what a realm imported from an older realm file lacks, while
+  Keycloak's temporary administrator exists: `view-users` and `view-realm` in that client's scope
+  (the Pod check of 5e9a539 found members couldn't be added on a fresh install), and the
+  `suveryn-admin` role's composites (`manage-users`, `view-users`, `view-realm`, `view-events`;
+  `admin_role_composites`), never more.
 - **The reader sandbox**: the wrapper is set and the bypass is not; then a fictional one-page PDF is
   uploaded as the gateway's user, through the gateway's own document service, its inbox and the
   sandboxed reader, and must come back read (one page), after which it is deleted. It runs on the
@@ -82,10 +102,15 @@ still open decision 3 in the development context).
   API and Keycloak; `/docs`, `/redoc` and `/openapi.json` answer 404.
 - **Sign-in and an upload end to end over https**: a temporary Keycloak user signs in through the
   login page as a browser would, uploads the fictional PDF to `/v1/documents`, sees it read, deletes
-  it and signs out; the user is then removed.
-- **The network mode** is set, and on the appliance the **outgoing-traffic check** passes
-  (`suveryn-network-mode check`: the appliance's own rules are loaded, and addresses that are never
-  approved can't be reached).
+  it and signs out; the user is then removed. Making that user needs Keycloak's temporary
+  administrator (`KC_BOOTSTRAP_ADMIN_PASSWORD` in `keycloak.env`). On an office's appliance
+  `first-boot` deletes it once `verify` has passed and the office has its own administrator (#55);
+  from then on `verify` reports this check as not checked. A test machine keeps it.
+- **The network mode** is set. Where systemd has the `suveryn-egress` unit (`/etc/systemd/system` on
+  an ordinary Ubuntu, `/usr/lib/systemd/system` on the read-only system), the **outgoing-traffic
+  check** must pass (`suveryn-network-mode check`: the appliance's own rules are loaded, and addresses
+  that are never approved can't be reached). A test machine without the unit, or without systemd,
+  reports it as not checked.
 
 ## Without systemd
 

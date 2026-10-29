@@ -18,9 +18,21 @@ the web setup saved there, encrypted for the office's recovery key.
 sudo suveryn-backup run                                   # now (the timer runs run --scheduled)
 suveryn-backup status                                     # the last success and failure
 sudo suveryn-backup list                                  # what is on the target
-suveryn-backup check FILE --identity recovery.key         # decrypt and check every part, restore nothing
+sudo suveryn-backup find --identity recovery.key          # the backups on the target this key opens, newest first
+sudo suveryn-backup check FILE --identity recovery.key    # decrypt and check every part, restore nothing
 sudo suveryn-backup restore FILE --identity recovery.key --yes   # onto this appliance
+sudo suveryn-backup key-test                              # the administrator's key test (started by its path unit)
+sudo suveryn-backup request                               # the administrator's request (started by its path unit)
 ```
+
+`check` and `restore` take `--on-target` to read FILE as a backup's name on the target, or `newest`.
+`check` needs root: it unpacks into `/var/lib/suveryn/backup`, which is root's, and mounts the target.
+
+| Unit | What it does |
+|---|---|
+| `suveryn-backup.timer` | Hourly: `suveryn-backup run --scheduled`, which backs up only at the office's hour |
+| `suveryn-backup-key-test.path` | The administrator's key test. The gateway leaves the recovery key and a request in `/run/suveryn/backup-key-test` (in memory). The path unit starts `key-test`: the key must open this appliance's newest backup, and every part of it must be there. Nothing is restored. The key is deleted whatever happens. The result goes to `/var/lib/suveryn/backup/key-test.json`, with no secrets, and the gateway shows it |
+| `suveryn-backup-request.path` | The administrator's other requests from Administration › Backups: back up now, the USB disks connected, a share's test, new settings. The gateway leaves `request.json` in `/run/suveryn/backup-requests`. The path unit starts `request`, which deletes it at once and answers in `request-result.json`, never with a password |
 
 (On the appliance the tool is `/opt/suveryn/appliance/backup/suveryn-backup`.)
 
@@ -32,9 +44,10 @@ choose **Restore from a backup** on the first screen.
 1. Choose where the backups are (the USB disk, or the share with its user name and password) and the
    recovery key file the office stored offline. The appliance keeps the key on its encrypted data
    partition, readable by root only, until the restore has run.
-2. The appliance finds the newest backup there and checks it with the key
-   (`suveryn-backup --settings … check newest --on-target --json`). The screen shows when it was made
-   and by which appliance, and asks before anything is replaced.
+2. The appliance finds the backups there that the key opens (`suveryn-backup --settings … find --json`)
+   and checks the newest of them with the key (`suveryn-backup --settings … check <newest> --on-target
+   --json`). The screen shows when it was made and by which appliance, offers the older ones to choose
+   from, and asks before anything is replaced.
 3. `suveryn-provision restore` restores it: the databases and the office's settings, secrets and
    certificates (as below), the language models' settings for this machine, the old appliance's network
    mode and name, then starts the services and closes setup. The key and the share's password are
