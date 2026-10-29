@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Shellcheck + config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shellcheck all scripts
+        # -S warning: fail on real problems (warning/error), not on info/style notes like SC1091
+        # ("can't follow `. /etc/os-release`") — that's an intentional, unresolvable-by-shellcheck
+        # source of a standard system file in image/prebuild.sh, not a bug.
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          find . -name "*.sh" -not -path "./node_modules/*" -print0 | xargs -0 -r shellcheck -S warning
+
+      - name: Validate pinned-version and lock files
+        run: |
+          for f in provision/versions.json \
+                   keycloak/realm/realm-lock.json \
+                   keycloak/theme/brand-lock.json; do
+            python3 -m json.tool "$f" > /dev/null && echo "OK: $f"
+          done
+
+  mkosi-config-check:
+    name: mkosi config sanity check (no build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mkosi
+        # mkosi isn't published on PyPI (pipx install mkosi fails with "No matching distribution");
+        # install it straight from its git repo, as the project's own README does.
+        run: pipx install git+https://github.com/systemd/mkosi.git
+      - name: Summarize config (fails on invalid config, builds nothing)
+        run: mkosi --directory image/mkosi summary
+
+  # Full mkosi/Packer image builds are deliberately NOT run on every push:
+  # they're slow, need near-bare-metal resources, and touch dm-verity/TPM/
+  # LUKS setup that isn't meaningful to exercise on a generic GitHub-hosted
+  # runner. Trigger by hand (workflow_dispatch) or wire to release tags once
+  # the appliance work is far enough along to need CI coverage for it.
+  build-image:
+    name: Full image build (manual trigger only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "Wire up the real mkosi/Packer build here when it's worth the time/cost."
