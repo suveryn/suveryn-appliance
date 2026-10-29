@@ -118,6 +118,7 @@ KEY_TEST = Path(ENV("SUVERYN_BACKUP_KEY_TEST", "/run/suveryn/backup-key-test"))
 # in it) and answers in STATE/request-result.json, with no secret.
 REQUESTS = Path(ENV("SUVERYN_BACKUP_REQUESTS", "/run/suveryn/backup-requests"))
 TEST_MOUNT = Path(ENV("SUVERYN_BACKUP_TEST_MOUNT", "/run/suveryn/backup-share-test"))
+CREDENTIALS = Path(ENV("SUVERYN_BACKUP_CREDENTIALS", "/run"))  # where a share's credentials file lives, for its mount
 RETENTION = (14, 30, 90, 365)
 DEFAULT_HOUR = 2  # the nightly backup's hour, local time, until the administrator chooses another
 SHARE_TIMEOUT = 5
@@ -328,7 +329,7 @@ class Target:
                 self.disk = self._usb(opts)
             elif s["protocol"] == "smb":
                 address = s["address"].replace("\\", "/")
-                fd, creds = tempfile.mkstemp(prefix="suveryn-backup-", dir="/run")
+                fd, creds = tempfile.mkstemp(prefix="suveryn-backup-", dir=CREDENTIALS)
                 self.creds = Path(creds)
                 with os.fdopen(fd, "w") as f:
                     password = self.password if self.password is not None else \
@@ -592,7 +593,7 @@ def due(s: dict | None, status: dict, at: dt.datetime | None = None) -> bool:
     was off at that hour backs up when it is on again (the timer is Persistent), once."""
     if (STATE / RUN_NOW).exists():
         return True
-    at = (at or dt.datetime.now().astimezone()).astimezone()
+    at = at or dt.datetime.now().astimezone()  # the machine's own time; a given time keeps its zone (tests)
     hour = (s or {}).get("hour", DEFAULT_HOUR)
     slot = at.replace(hour=hour, minute=0, second=0, microsecond=0)
     if slot > at:

@@ -35,8 +35,13 @@ def load():
     return module
 
 
+# On a stock PostgreSQL, root reaches it over the socket only as postgres (peer authentication): as the tool does,
+# through runuser (VM check of 28 October, finding 8). Over TCP (a test server), as is.
+AS_POSTGRES = ["runuser", "-u", "postgres", "--"] if os.geteuid() == 0 and PG_HOST and PG_HOST.startswith("/") else []
+
+
 def psql(sql: str, db: str = "postgres") -> str:
-    r = subprocess.run(["psql", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", PG_HOST, "-p", PG_PORT, "-U", "postgres", "-d", db,
+    r = subprocess.run([*AS_POSTGRES, "psql", "-qAt", "-v", "ON_ERROR_STOP=1", "-h", PG_HOST, "-p", PG_PORT, "-U", "postgres", "-d", db,
                         "-c", sql], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r.stdout.strip()
@@ -57,7 +62,10 @@ def appliance(tmp_path):
          "INSERT INTO chunks VALUES (1, 'Fictional passage one', '[1,2,3]'), (2, 'Fictional passage two', '[4,5,6]')", gw_db)
     psql(f"CREATE TABLE user_entity (id text, username text); ALTER TABLE user_entity OWNER TO {kc_role};"
          "INSERT INTO user_entity VALUES ('a', 'test-alice')", kc_db)
-    var = tmp_path / "var"
+    # As root through runuser, PostgreSQL's user must reach the dumps: not inside pytest's folders, which are root's 0700.
+    var = Path(tempfile.mkdtemp(prefix="suveryn-backup-test-", dir="/var/tmp")) / "var" if AS_POSTGRES else tmp_path / "var"
+    if AS_POSTGRES:
+        os.chmod(var.parent, 0o755)
     (var / "etc" / "tls").mkdir(parents=True)
     (var / "etc" / "gateway.env").write_text(f"SUVERYN_DATABASE_URL=postgresql://{gw_role}:gw-pass@127.0.0.1:5432/{gw_db}\n")
     (var / "etc" / "keycloak.env").write_text("KC_DB_PASSWORD=kc-pass\n")
@@ -76,10 +84,12 @@ def appliance(tmp_path):
     env = {**os.environ, "SUVERYN_BACKUP_TEST": "1", "SUVERYN_BACKUP_ALLOW_FOLDER": "1", "SUVERYN_BACKUP_CONFIG": str(config),
            "SUVERYN_BACKUP_VAR": str(var), "SUVERYN_BACKUP_STATE": str(var / "backup"), "SUVERYN_BACKUP_NO_SERVICES": "1",
            "SUVERYN_BACKUP_DATABASES": f"{gw_db}:{gw_role},{kc_db}:{kc_role}", "SUVERYN_BACKUP_KEYCLOAK_ROLE": kc_role,
-           "SUVERYN_BACKUP_PG_USER": "root" if os.geteuid() == 0 else "postgres",
+           "SUVERYN_BACKUP_PG_USER": "root" if os.geteuid() == 0 and not AS_POSTGRES else "postgres",
            "PGHOST": PG_HOST, "PGPORT": PG_PORT, "PGUSER": "postgres"}
     yield {"env": env, "var": var, "key": key, "target": target, "config": config, "dbs": (gw_db, kc_db),
            "roles": (gw_role, kc_role), "tmp": tmp_path}
+    if AS_POSTGRES:
+        shutil.rmtree(var.parent, ignore_errors=True)
     for db in (gw_db, kc_db):
         psql(f"DROP DATABASE IF EXISTS {db} WITH (FORCE)")
     for role in (gw_role, kc_role):
@@ -834,6 +844,7 @@ def test_a_share_is_tested_by_signing_in_and_writing(admin, tmp_path, monkeypatc
         raise b.Failed(step, "mount failed: mount error(13): Permission denied")
     monkeypatch.setattr(b, "run", refused)
     monkeypatch.setattr(b, "TEST_MOUNT", tmp_path / "mnt")
+    monkeypatch.setattr(b, "CREDENTIALS", tmp_path)  # /run is root's: the test runs as anyone (VM check, finding 7)
     assert request(b, tmp_path, smb)["error"] == "login"
 
 
