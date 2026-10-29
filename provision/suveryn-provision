@@ -515,6 +515,9 @@ def suveryn_core(hf: Path = HF_HOME, compiled: bool = False) -> None:
     if compiled:  # uv compiles the installed packages; this compiles suveryn-core's own and the Python it runs on
         run(OPT / "python" / next(p.name for p in (OPT / "python").iterdir() if p.name.startswith("cpython")) / "bin" / "python3",
             "-m", "compileall", "-q", "-j", "0", CORE / "packages", OPT / "python", capture=True, check=False)
+    # What it was built from, for Status's version and the backups' manifest; the image's prebuild wrote it,
+    # an install with the provisioning didn't (round 2, finding 4: Status showed no version).
+    (CORE / ".suveryn-built").write_text(core_built_as())
     note(f"suveryn-core@{c['commit'][:7]} in {CORE}")
     # It loads each model once as a check, always on the CPU: an image is built without a GPU, and on an
     # update the running services hold the card (llama-server and the gateway left no room for the check:
