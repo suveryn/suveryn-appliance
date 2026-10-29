@@ -83,7 +83,7 @@ def test_no_white_text_on_the_accent():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     primary = re.search(r"\.suv-card \.pf-v5-c-button\.pf-m-primary \{(.*?)\}", login, re.S).group(1)
     assert "--pf-v5-c-button--m-primary--Color: var(--suv-on-accent)" in primary
-    ink = "oklch(0.0900 0.0140 258.00)"  # #020205, the brand's ink, as tokens v3 writes it
+    ink = "oklch(0.0900 0.0140 258.00)"  # the brand's ink, as tokens v3 writes it
     assert f"--suv-on-accent: {ink}" in login
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
     assert f"--pf-v5-c-button--m-primary--Color: {ink}" in account
@@ -93,7 +93,7 @@ def test_teal_focus_on_inputs():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     focus = re.search(r"\.pf-v5-c-form-control:focus-within::before \{(.*?)\}", css, re.S).group(1)
     assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15)" in focus
-    assert "--suv-teal-focus: oklch(0.5720 0.0970 188.40)" in css  # #0F8A82
+    assert "--suv-teal-focus: oklch(0.5720 0.0970 188.40)" in css  # the brand's focus token
 
 
 def test_nothing_is_loaded_from_the_internet():
@@ -191,9 +191,11 @@ def test_no_text_in_the_plain_accent_or_tertiary_colour():
     login = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     assert not re.search(r"(?<![-\w])color:\s*var\(--suv-(accent|accent-hover)\)", login)
     account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
-    assert "--pf-v5-global--link--Color: oklch(0.5270 0.1867 34.60)" in account  # #C42F00
-    # the email keeps hex: email clients don't draw oklch()
-    assert ".suv-body a { color: #C42F00" in (SRC / "email" / "html" / "template.ftl").read_text()
+    assert "--pf-v5-global--link--Color: oklch(0.5270 0.1867 34.60)" in account  # accent-ink
+    # the email keeps hex, as tokens v3.4 give it in sRGB: email clients don't draw oklch()
+    email = (SRC / "email" / "html" / "template.ftl").read_text()
+    assert ".suv-body a { color: #BE2E00" in email
+    assert "#C42F00" not in email and "#020205" not in email and "#FAFAFA" not in email  # tokens version 2's
 
 
 MOJIBAKE = re.compile("Ã|Å|â€|Â")  # UTF-8 read as Latin-1/Windows-1252, e.g. "SÅ«veryn" for "Sūveryn"
@@ -228,29 +230,56 @@ def test_product_name_is_lower_case_mid_sentence():
                 assert before == "" or before[-1] in ".!?:", (path.name, key, value)
 
 
-def test_notices_are_neutral_with_a_brand_signal():
-    """suveryn-tracker#2: no PatternFly amber/red/blue/green banners; warnings and errors use accent-ink."""
+def test_notices_are_the_brands_one_notice_box():
+    """suveryn-tracker#2 and tokens v3.4: no PatternFly amber/red/blue/green banners and no orange; the
+    icon carries the meaning: ink for warnings and errors, a teal-ink check for a success."""
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     alert = re.search(r"\.suv-card \.pf-v5-c-alert \{(.*?)\}", css, re.S).group(1)
-    assert "var(--suv-surface-alt)" in alert and "color: var(--suv-text)" in alert
-    signal = re.search(r"\.pf-m-warning, \.suv-card \.pf-v5-c-alert\.pf-m-danger \{(.*?)\}", css, re.S).group(1)
-    assert "var(--suv-accent-ink)" in signal
+    assert "var(--suv-surface-alt)" in alert and "color: var(--suv-text)" in alert and "border-radius: 10px" in alert
+    assert "border-left" not in alert
+    signal = re.search(r"\.pf-m-warning \.pf-v5-c-alert__icon,\s*\.suv-card \.pf-v5-c-alert\.pf-m-danger \.pf-v5-c-alert__icon \{(.*?)\}", css, re.S).group(1)
+    assert "var(--suv-text)" in signal
+    assert ".pf-v5-c-alert.pf-m-success .pf-v5-c-alert__icon { color: var(--suv-teal-ink); }" in css
+    assert not re.search(r"pf-v5-c-alert[^{]*\{[^}]*accent", css)
     props_ = props(SRC / "login" / "theme.properties")
     for kind in ("Error", "Warning", "Success", "Info"):
         assert props_[f"kcFeedback{kind}Icon"].startswith("suv-icon suv-icon-")  # Lucide, not Font Awesome
     v = css_vars(SRC / "login" / "resources" / "css" / "suveryn.css")
     assert ratio(v["--suv-text"], v["--suv-surface-alt"], vars=v) >= 4.5
-    assert ratio(v["--suv-accent-ink"], v["--suv-surface-alt"], vars=v) >= 4.5  # icon and bar
-    assert ratio(v["--suv-accent"], v["--suv-surface-alt"], vars=v) < 3  # why the plain accent isn't used here
+    assert ratio(v["--suv-teal-ink"], v["--suv-surface-alt"], vars=v) >= 4.5  # a success's check
 
 
-def test_field_errors_use_the_brand_not_a_red():
-    """No colour outside the brand: field errors use accent-ink, with an icon and message as the signal."""
+def test_field_errors_are_ink_not_a_red_or_orange():
+    """No colour outside the brand, and orange means "act": field errors are ink, with a heavier border,
+    an icon and a message as the signal (tokens v3.4; as the chat UI)."""
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     assert "#C9190B" not in css and not re.search(r"#[cC][0-9a-fA-F]19|danger--Color", css)
-    assert ".pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }" in css
-    assert "pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }" in css
+    assert ".pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-text); border-width: 1.5px; }" in css
+    assert "pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-text); }" in css
+    account = (SRC / "account" / "resources" / "css" / "account.css").read_text()
+    assert ".pf-v5-c-form-control.pf-m-error::before { border-color: oklch(0.0900 0.0140 258.00); border-width: 1.5px; }" in account
     assert props(SRC / "login" / "theme.properties")["kcInputErrorIconClass"] == "suv-icon suv-icon-alert-circle"
+
+
+def test_account_console_keeps_orange_for_acting():
+    """Tokens v3.4: navigation is never orange (the current item has an ink bar and bold text), a
+    required mark is ink, a destructive button acts and is orange with ink text, and a notice is the
+    brand's one box with the meaning in its icon."""
+    css = (SRC / "account" / "resources" / "css" / "account.css").read_text()
+    accent, ink = "oklch(0.6770 0.2010 34.60)", "oklch(0.0900 0.0140 258.00)"
+    assert f"--pf-v5-c-nav__link--m-current--after--BorderColor: {ink}" in css
+    assert f".pf-v5-c-nav__link.pf-m-current::after {{ border-color: {ink}; }}" in css
+    assert f"--pf-v5-c-nav__subnav__link--m-current--after--BorderColor: {ink}" in css
+    assert f".pf-v5-c-form__label-required {{ color: {ink}; }}" in css
+    danger = re.search(r"\.pf-v5-c-button\.pf-m-danger \{(.*?)\}", css, re.S).group(1)
+    assert f"--pf-v5-c-button--m-danger--BackgroundColor: {accent}" in danger and f"--pf-v5-c-button--m-danger--Color: {ink}" in danger
+    alert = re.search(r"\.pf-v5-c-alert \{(.*?)\}", css, re.S).group(1)
+    assert "--pf-v5-c-alert--m-success__icon--Color: oklch(0.5200 0.0903 188.40)" in alert  # teal-ink
+    assert f"--pf-v5-c-alert--m-danger__icon--Color: {ink}" in alert and "border-radius: 10px" in alert
+    cancel = re.search(r"#cancel-btn\.pf-v5-c-button\.pf-m-link, [^{]*\{(.*?)\}", css, re.S).group(1)
+    assert f"color: {ink}" in cancel  # Cancel is quiet: ink, as a secondary button
+    assert f".pf-v5-c-jump-links__item.pf-m-current .pf-v5-c-jump-links__link::before {{ border-color: {ink}; }}" in css
+    assert ".pf-v5-c-form__group:has(.pf-v5-c-helper-text__item.pf-m-error) .pf-v5-c-form-control::before" in css
 
 
 @pytest.mark.parametrize("lang, link", [("nl", "Terug naar de applicatie"), ("fr", "Retour à l''application")])

@@ -1,12 +1,17 @@
 /*
  * Sūveryn login theme (light only), on top of Keycloak's keycloak.v2 styles (PatternFly 5).
  * Values from the reviewed login mockup and the Sūveryn Design System. Contrast rule: text on the
- * accent orange is always ink (#020205), never white. All text meets 4.5:1 measured the Design
+ * accent orange is always ink, never white. All text meets 4.5:1 measured the Design
  * System's way, from OKLCH lightness (tests/oklch_contrast.py); the colours are suveryn-brand's
- * tokens (version 3.2, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
+ * tokens (version 3.4, written in OKLCH from the palette's rules): links use accent-ink, the accent's hue at a lower
  * lightness. A wash, a glow or a dimmed line is the token's own hue with an alpha
  * (oklch(from var(--suv-…) l c h / alpha)), never a hex or rgba of its own. Text sizes are the brand's
  * type scale (tokens v3.2): body 15, control 14.5, body-sm 13.5, ui-sm 13, label 11, title 22; no others.
+ *
+ * What each colour means (brand guidelines, tokens v3.4; suveryn-core docs/design/chat-ui.md section 1):
+ * orange is for acting only (the sign-in button, links); teal is a system status only (the "Air-gapped"
+ * badge, the focus ring, a success notice's check); everything else is ink, warnings and errors included,
+ * told apart by their icon and words.
  *
  * Fonts are bundled with the theme (fonts/, copied from suveryn-brand by build_theme.py), so the
  * login page loads nothing from the internet and works air-gapped. The wordmark is drawn as
@@ -75,8 +80,8 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-logo { height: 48px; width: auto; display: block; }
 .suv-tagline { margin: 0; color: var(--suv-text-dim); font-size: 15px; font-weight: 400; max-width: 34ch; }
 
-/* The website's hero "Air-gapped" badge (suveryn-website index.html), with the brand's teal-ink
-   (version 2 of the tokens: #007F78, which holds 4.5:1 on the badge's own wash). */
+/* The website's hero "Air-gapped" badge (suveryn-website index.html), with the brand's teal-ink,
+   which holds 4.5:1 on the badge's own wash. A system fact, so teal. */
 .suv-badge-airgapped {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: var(--suv-font-body); font-size: 11px; font-weight: 600; line-height: 1.2;  /* brand label */
@@ -149,17 +154,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-card .pf-v5-c-form-control:focus-within::before { border-color: var(--suv-teal-focus); box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15); }
 .suv-card .pf-v5-c-form-control > input:focus,
 .suv-card .pf-v5-c-form-control > input:focus-visible { outline: none; box-shadow: none; }
-/* Field errors use the brand, not PatternFly's red: the brand has no separate error colour (a red
-   that passes 4.5:1 is either indistinguishable from the accent or reads pink). The error is told
+/* Field errors are ink, as in the chat UI and the web setup: the brand has no red, and orange means
+   "act", not "wrong" (tokens v3.4). The field's border is ink and heavier (1.5px); the error is told
    apart by its icon and message, never by colour alone. */
 .suv-card .pf-v5-c-form-control.pf-m-error {
-  --pf-v5-c-form-control--m-error--after--BorderBottomColor: var(--suv-accent-ink);
-  --pf-v5-c-form-control--m-error__icon--Color: var(--suv-accent-ink);
+  --pf-v5-c-form-control--m-error--after--BorderBottomColor: var(--suv-text);
+  --pf-v5-c-form-control--m-error__icon--Color: var(--suv-text);
 }
-.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-accent-ink); }
-.suv-card .pf-v5-c-form-control__icon.pf-m-status { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-form-control.pf-m-error::before { border-color: var(--suv-text); border-width: 1.5px; }
+.suv-card .pf-v5-c-form-control__icon.pf-m-status { color: var(--suv-text); }
 .suv-card .pf-v5-c-helper-text__item-text.pf-m-error,
-.suv-card .pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-helper-text__item.pf-m-error .pf-v5-c-helper-text__item-text { color: var(--suv-text); }
 
 /* password show/hide: the button sits inside the field's border, Lucide icons */
 .suv-card .pf-v5-c-input-group__item .pf-v5-c-button.pf-m-control {
@@ -222,11 +227,12 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 .suv-body a, .suv-card .pf-v5-c-button.pf-m-link { color: var(--suv-accent-ink); text-decoration: underline; text-underline-offset: 2px; }
 .suv-body a:hover, .suv-card .pf-v5-c-button.pf-m-link:hover { color: var(--suv-accent-ink-hover); }
 
-/* Notices (wrong password, "you need to change your password", expired page, ...): one neutral
-   style instead of PatternFly's amber/red/blue/green banners, which aren't brand colours
-   (suveryn-tracker#2). Warnings and errors carry the brand signal: an accent-ink left bar and icon
-   (accent-ink, not the accent: the accent measures 2.6:1 on this surface, accent-ink 4.5:1). Info
-   and success get a quiet icon. Text is always ink. Icons are Lucide (see theme.properties). */
+/* Notices (wrong password, "you need to change your password", expired page, ...): the brand's one
+   notice box, as the chat UI's (surface-alt, a line border, 10px corners, the icon on the left,
+   body-sm), instead of PatternFly's amber/red/blue/green banners (suveryn-tracker#2). The icon carries
+   the meaning, never the box: warnings and errors an ink triangle or circle, info a quiet icon, a
+   success a teal-ink check (a good system status). Text is always ink. Icons are Lucide (see
+   theme.properties). */
 .suv-card .pf-v5-c-alert {
   --pf-v5-c-alert--BackgroundColor: var(--suv-surface-alt);
   --pf-v5-c-alert--BoxShadow: none;
@@ -234,15 +240,15 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-alert__title--Color: var(--suv-text);
   --pf-v5-c-alert__icon--Color: var(--suv-text-dim);
   background: var(--suv-surface-alt); color: var(--suv-text); box-shadow: none;
-  border: 1px solid var(--suv-line); border-left: 3px solid var(--suv-line); border-radius: 6px;
-  font-family: var(--suv-font-body); font-size: 13.5px; padding: 10px 12px;
+  border: 1px solid var(--suv-line); border-radius: 10px;
+  font-family: var(--suv-font-body); font-size: 13.5px; padding: 14px 16px;
 }
 .suv-card .pf-v5-c-alert::before { display: none; }
 .suv-card .pf-v5-c-alert .pf-v5-c-alert__title { color: var(--suv-text); font-weight: 500; }
 .suv-card .pf-v5-c-alert .pf-v5-c-alert__icon { color: var(--suv-text-dim); }
-.suv-card .pf-v5-c-alert.pf-m-warning, .suv-card .pf-v5-c-alert.pf-m-danger { border-left-color: var(--suv-accent-ink); }
 .suv-card .pf-v5-c-alert.pf-m-warning .pf-v5-c-alert__icon,
-.suv-card .pf-v5-c-alert.pf-m-danger .pf-v5-c-alert__icon { color: var(--suv-accent-ink); }
+.suv-card .pf-v5-c-alert.pf-m-danger .pf-v5-c-alert__icon { color: var(--suv-text); }
+.suv-card .pf-v5-c-alert.pf-m-success .pf-v5-c-alert__icon { color: var(--suv-teal-ink); }
 .suv-card .pf-v5-c-alert .suv-icon { width: 16px; height: 16px; vertical-align: -3px; }
 /* Lucide 1.54 triangle-alert, circle-alert, info, circle-check (ISC licence) */
 .suv-icon-alert-triangle { --suv-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E"); }
