@@ -22,6 +22,10 @@ EnvironmentFile=/etc/suveryn/keycloak.env
 Environment=JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 # The network mode: the login page shows its "Air-gapped" badge only when it is true (keycloak/theme).
 EnvironmentFile=-/etc/suveryn/network-mode.env
+# Keycloak keeps gzip copies of the theme's files under data/tmp/kc-gzip-cache/<its own resource version>,
+# which doesn't change with the theme: after a new theme every browser got the old stylesheet (VM check of
+# 29 October, round 3, finding 1). Emptied at each start; Keycloak makes the copies again on first request.
+ExecStartPre=/usr/bin/rm -rf /opt/keycloak/data/tmp/kc-gzip-cache
 ExecStart=/opt/keycloak/bin/kc.sh start --optimized
 Restart=always
 RestartSec=5
