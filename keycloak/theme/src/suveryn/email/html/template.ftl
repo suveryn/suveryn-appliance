@@ -14,10 +14,10 @@
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
   <style>
-    .suv-body a { color: #C42F00; text-decoration: underline; } /* brand accent-ink: 4.5:1 */
+    .suv-body a { color: #BE2E00; text-decoration: underline; } /* brand accent-ink (tokens v3.4 sRGB): 4.5:1 */
   </style>
 </head>
-<body style="margin:0; padding:0; background:#FFFFFF; color:#020205;">
+<body style="margin:0; padding:0; background:#FFFFFF; color:#010205;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FFFFFF;">
     <tr>
       <td align="center" style="padding:32px 16px;">
@@ -28,18 +28,18 @@
               <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                 <tr>
                   <td style="padding:0 12px 0 0; vertical-align:middle;"><#include "suveryn-icon.ftl"></td>
-                  <td style="vertical-align:middle; font-family:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; font-weight:500; font-size:22px; line-height:1; color:#020205;">s&#363;veryn</td>
+                  <td style="vertical-align:middle; font-family:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace; font-weight:500; font-size:22px; line-height:1; color:#010205;">s&#363;veryn</td>
                 </tr>
               </table>
             </td>
           </tr>
           <tr>
-            <td class="suv-body" style="background:#FAFAFA; border:1px solid rgba(2,2,5,0.12); border-radius:14px; padding:24px 28px; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:15px; line-height:1.6; color:#020205;">
+            <td class="suv-body" style="background:#F8F8FA; border:1px solid rgba(1,2,5,0.12); border-radius:14px; padding:24px 28px; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:15px; line-height:1.6; color:#010205;">
               <#nested>
             </td>
           </tr>
           <tr>
-            <td style="padding:16px 4px 0; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; line-height:1.5; color:rgba(2,2,5,0.62);">
+            <td style="padding:16px 4px 0; font-family:Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; line-height:1.5; color:rgba(1,2,5,0.62);">
               ${msg("suverynTagline")}<br>
               ${msg("suverynEmailFooter")}
             </td>
