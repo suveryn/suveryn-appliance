@@ -54,9 +54,9 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - Linux VT text UI, 16 colours set with `setvtrgb` from the dark brand theme. Font: Terminus (needs `ū`). The mock-ups use Source Code Pro as a stand-in.
 - Network name is set in the installer and announced over mDNS (`<name>.local`). DHCP first; after 30 s without a lease, offer a fixed address (C4b).
 - Model bundles come from the stick's exFAT partition `suveryn-bundles` (file system label `SUVBUNDLES`: exFAT labels hold 11 characters), which fills the rest of the stick; C3 names it by its partition name. Each bundle's signed manifest is checked against the bundle public key built into the image, then every file's SHA-256 (tracker #36). Several models can be installed if the hardware allows.
-- Disk: LUKS2 with a new key per machine, unlocked by TPM 2.0 (PCR 7). Recovery key in modhex (systemd recovery key format), shown once (C7) and confirmed by typing the first group. Unlock prompt allows 5 attempts (`crypttab tries=5`). Tracker #34.
+- Disk: LUKS2 with a new key per machine, unlocked by TPM 2.0 (PCR 7). Recovery key in modhex (systemd recovery key format), shown once (C7) and confirmed by typing the first group. The initrd's unlock screen (C8b, `unlock-screen`) allows 5 attempts; there is no crypttab entry for it. Tracker #34.
 - Secure Boot is not required (customer hardware).
-- Installation creates the appliance identity: UUID and Ed25519 key pair (tracker #35).
+- The installed system's first start creates the appliance identity: UUID and Ed25519 key pair, sealed by the TPM (`suveryn-identity.service`; tracker #35). The installer doesn't make it.
 - C8 shows addresses, the certificate fingerprint, appliance ID and support status. Menu option 3 shows the registration QR code in text mode (block characters, inverted colours, e.g. `qrencode -t ANSIUTF8`).
 
 **Web setup**

@@ -272,6 +272,17 @@ def systemd_running() -> bool:
     return Path("/run/systemd/system").is_dir()
 
 
+def unit_installed(unit: str) -> bool:
+    """systemd has this unit, wherever it is: /etc/systemd/system on an ordinary Ubuntu, /usr/lib/systemd/system
+    in the read-only system's image. A test machine without systemd, or without the unit, has not."""
+    if not systemd_running():
+        return False
+    try:
+        return subprocess.run(["systemctl", "cat", unit], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def ensure_user(name: str, home: Path | None = None) -> None:
     try:
         pwd.getpwnam(name)
@@ -1370,7 +1381,7 @@ def verify(public_url: str | None) -> bool:
         result(name, passed, detail)
     mode = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
     result("Network mode", mode != "unknown", mode)
-    if systemd_running() and Path("/etc/systemd/system/suveryn-egress.service").exists():
+    if unit_installed("suveryn-egress.service"):
         r = subprocess.run([NETWORK_MODE_TOOL, "check", "--json"], capture_output=True, text=True)
         try:
             c = json.loads(r.stdout)

@@ -205,16 +205,17 @@ installation. The menu:
    fingerprint. The portal's address in it is a placeholder (`PORTAL_REGISTER`) until the portal exists;
 4. **restart** and 5. **shut down**, each confirmed first.
 
-The certificate fingerprint and "setup complete" come from files the web setup will write
-(`/var/lib/suveryn/etc/tls/setup-cert.pem`, `/var/lib/suveryn/etc/setup-complete`); until the web setup
-exists, the console shows the waiting state without a fingerprint.
+The certificate fingerprint and "setup complete" come from files the web setup writes
+(`/var/lib/suveryn/etc/tls/setup-cert.pem` while setup is open, `/var/lib/suveryn/etc/setup-complete`
+when it closes). Without the first, the console shows the waiting state without a fingerprint.
 
 ### `<name>.local`
 
 systemd-resolved answers for the appliance's name over mDNS on the office's network
 (`resolved.conf.d/50-suveryn-mdns.conf`, `MulticastDNS=yes` in each port's network file, the installer's
 too). The network mode's outgoing rules let mDNS out on the office's link (224.0.0.251 and ff02::fb,
-port 5353). The inbound rules, when they come to the image, must let UDP 5353 in.
+port 5353). The image's inbound rules (`/usr/lib/suveryn/inbound.nft`, `suveryn-inbound.service`) let
+UDP 5353 in.
 
 The web setup (screens 0 to 8, in the browser) is suveryn-core's `setup.html` with
 [`setup`](../../setup/README.md) on the appliance's side, in this image (`mkosi.conf.d/20-web-setup.conf`):
@@ -248,8 +249,9 @@ of the chat UI (`test/make-test-ui`).
   identity. The portal compares the root hash with the one Sūveryn Labs published for that release
   ("system intact"). Exit code 0 when verity is active and matches the root hash.
 
-Still to come: the check-in that signs and sends this (with the portal), and the manifest check
-(`valid_until`) once the manifest format is agreed (#36).
+Still to come: the check-in that signs and sends this, with the portal (#35). The support manifest's
+format and its check exist ([`support/`](../../support/README.md), `suveryn-manifest verify`): the web
+setup refuses an expired manifest. The console doesn't read the manifest yet.
 
 ## Signed bundles (#36)
 
