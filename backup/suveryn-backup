@@ -462,6 +462,11 @@ def make(s: dict) -> dict:
                     "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions(),
                     "postgresql": postgres_major()}
         (work / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+        # A link a restore would refuse is refused now, before anything is written: every backup with it was
+        # written without complaint and then couldn't be read (VM regression of 29 October, finding 12).
+        for f in manifest["files"]:
+            if (bad := unsafe_link(VAR / f)) is not None:
+                raise Failed("files", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
         target = Target(s)
         with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
@@ -490,6 +495,35 @@ def make(s: dict) -> dict:
             "on_target": len(kept), "oldest": kept[-1]["at"] if kept else None, "sha256": digest,
             **({"disk": target.disk} if target.disk else {}),
             "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds())}
+
+
+ZONE_LINK = re.compile(r"/usr/share/zoneinfo/[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+){0,2}")
+
+
+def is_zone_link(member: tarfile.TarInfo) -> bool:
+    """The read-only system's time zone: ``host/localtime`` links to ``/usr/share/zoneinfo/<zone>``, an absolute
+    path that tar's "data" filter refuses, so every backup of that system would have been unreadable. That link,
+    with a target of exactly that shape, is restored by hand; any other absolute link still is not."""
+    return (member.issym() and member.name == "files/host/localtime"
+            and ZONE_LINK.fullmatch(member.linkname) is not None and ".." not in member.linkname)
+
+
+def unsafe_link(folder: Path) -> str | None:
+    """The first link in ``folder`` that tar's "data" filter would refuse on restore (an absolute target, or one
+    leading out of the folder), as a path inside it; None when there is none."""
+    root = folder.resolve()
+    for d, dirs, files in os.walk(folder, followlinks=False):
+        for name in [*dirs, *files]:
+            path = Path(d) / name
+            if not path.is_symlink():
+                continue
+            target = os.readlink(path)
+            if folder.name == "host" and path == folder / "localtime" and ZONE_LINK.fullmatch(target):
+                continue  # restored by hand (is_zone_link)
+            inside = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), target))
+            if os.path.isabs(target) or not (inside == str(root) or inside.startswith(str(root) + os.sep)):
+                return str(path.relative_to(folder))
+    return None
 
 
 def room_needed(folder: Path, parts: list[Path]) -> int:
@@ -735,6 +769,11 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
                     raise Failed("read", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
                 if total > budget:
                     raise Failed("read", "the backup unpacks to more than this appliance has room for")
+                if is_zone_link(member):  # the one absolute link a backup holds: made here, not by tar
+                    link = dest / member.name
+                    link.parent.mkdir(parents=True, exist_ok=True)
+                    link.symlink_to(member.linkname)
+                    continue
                 tar.extract(member, dest, filter="data")
     except (tarfile.TarError, OSError) as e:
         problem = str(e)
@@ -1191,6 +1230,12 @@ def cmd_check(a) -> int:
 SERVICES = ["suveryn-gateway", "keycloak"]
 
 
+def existing(units: list[str]) -> list[str]:
+    """Those of ``units`` systemd has: a machine that has only run ``image`` may lack some, and a restore stops
+    and starts only what is there (VM regression of 29 October, finding 2)."""
+    return [u for u in units if subprocess.run(["systemctl", "cat", u], capture_output=True).returncode == 0]
+
+
 def env_values(path: Path) -> dict[str, str]:
     out = {}
     try:
@@ -1230,8 +1275,8 @@ def restore_file(a, file: Path) -> int:
         try:
             manifest = unpack(file, a.identity, dest)
             check_dumps(dest, manifest)
-            if systemd:
-                run("services", ["systemctl", "stop", *SERVICES])
+            if systemd and (running := existing(SERVICES)):
+                run("services", ["systemctl", "stop", *running])
             # Everything is restored beside what is live first (the module's notes); nothing live changes
             # until all of it has worked.
             try:
@@ -1272,17 +1317,23 @@ def restore_file(a, file: Path) -> int:
                 shutil.rmtree(folder_beside(f, "replaced"), ignore_errors=True)
             for db in manifest["databases"]:
                 subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]), capture_output=True)
-            if systemd:
-                run("services", ["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"])
         except Exception as e:  # noqa: BLE001 - whatever failed, the services run again and the reason is said
             if systemd:  # the office's services run again on what is there
-                subprocess.run(["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"], check=False)
+                subprocess.run(["systemctl", "restart", *existing(["suveryn-llm", *reversed(SERVICES), "nginx"])], check=False)
             if not isinstance(e, Failed):  # its message could name a path; the type says enough
                 e = Failed("restore", f"unexpected {type(e).__name__}")
             say(f"restore failed ({e.step}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
         f"{', '.join(manifest['databases'])} and {', '.join(manifest['files'])}")
+    # The restore is done and stays done. A service that doesn't start again is said apart from it, not as a
+    # failed restore: the office's data is in place, and what follows (provisioning's after_restore: the site,
+    # the name, the services, verify) usually brings it up (VM regression of 29 October, finding 3).
+    if systemd:
+        units = existing(["suveryn-llm", *reversed(SERVICES), "nginx"])
+        if units and subprocess.run(["systemctl", "restart", *units], capture_output=True).returncode != 0:
+            down = [u for u in units if subprocess.run(["systemctl", "is-active", "--quiet", u]).returncode != 0]
+            say(f"restored; these services didn't start again yet: {', '.join(down) or 'one of them'}")
     return 0
 
 
