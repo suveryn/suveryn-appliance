@@ -498,6 +498,8 @@ def test_a_step_after_the_restore_that_fails_says_the_backup_itself_is_back(monk
     and exit 1 read as if nothing had been restored."""
     monkeypatch.setattr(p, "postgres", lambda: None)
     monkeypatch.setattr(p, "step", lambda text: None)
+    monkeypatch.setattr(p, "install_service_units", lambda: None)
+    monkeypatch.setattr(p, "install_network_mode_tool", lambda: None)
     monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "restored the backup\n", ""))
     monkeypatch.setattr(p, "after_restore", lambda: p.fail("suveryn-network-mode: nft -f - failed (1)"))
     args = type("A", (), {"settings": tmp_path / "backups.json", "share_secret": None, "backup": "newest",
@@ -506,6 +508,40 @@ def test_a_step_after_the_restore_that_fails_says_the_backup_itself_is_back(monk
         p.restore(args)
     err = capsys.readouterr().err
     assert e.value.code == 1 and "nft -f - failed" in err and "the backup itself is restored" in err
+
+
+def test_a_machine_that_has_only_run_image_can_be_restored(monkeypatch, tmp_path):
+    """VM regression of 29 October, finding 2: the restore needed the services' units and the network-mode tool,
+    which only first boot installed. image installs both now, and restore makes sure of them first (a machine
+    imaged earlier); after the restore the site is written again where this machine keeps it."""
+    src = (HERE / "suveryn-provision").read_text()
+    image = src[src.index("def image("):src.index("BACKUP_UNITS =")]
+    assert "install_service_units()" in image and "install_network_mode_tool()" in image
+    calls = []
+    monkeypatch.setattr(p, "postgres", lambda: calls.append("postgres"))
+    monkeypatch.setattr(p, "step", lambda text: None)
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    monkeypatch.setattr(p, "install_service_units", lambda: calls.append("units"))
+    monkeypatch.setattr(p, "install_network_mode_tool", lambda: calls.append("tool"))
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: calls.append("restore") or subprocess.CompletedProcess(a, 0, "restored\n", ""))
+    monkeypatch.setattr(p, "after_restore", lambda: calls.append("after"))
+    args = type("A", (), {"settings": tmp_path / "backups.json", "share_secret": None, "backup": "newest",
+                          "identity": tmp_path / "key"})()
+    p.restore(args)
+    assert calls == ["postgres", "units", "tool", "restore", "after"]
+    after = src[src.index("def after_restore("):src.index("def first_boot_config(")]
+    assert after.index("reverse_proxy(") < after.index('services("restart")')
+
+
+def test_cloud_init_is_told_to_leave_the_hosts_file_alone(monkeypatch, tmp_path):
+    """VM regression of 29 October, finding 6: cloud-init rewrote /etc/hosts at reboot and dropped the
+    appliance's own name; sign-in stayed down. Where cloud-init is, it is told not to manage /etc/hosts."""
+    monkeypatch.setattr(p, "CLOUD_CFG", tmp_path / "cloud.cfg.d")
+    p.keep_hosts_from_cloud_init()
+    assert not (tmp_path / "cloud.cfg.d").exists()  # no cloud-init: nothing written
+    (tmp_path / "cloud.cfg.d").mkdir()
+    p.keep_hosts_from_cloud_init()
+    assert "manage_etc_hosts: false" in (tmp_path / "cloud.cfg.d" / "99-suveryn-hosts.cfg").read_text()
 
 
 def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_more(monkeypatch, capsys):
