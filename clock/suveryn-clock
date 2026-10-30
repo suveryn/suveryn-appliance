@@ -51,7 +51,12 @@ SET_MAX_MS = 366 * 24 * 3600 * 1000
 
 
 class Refused(Exception):
-    """Why a request isn't acted on: a short code the gateway turns into a sentence."""
+    """Why a request isn't acted on: a short code the page turns into a sentence (``invalid``, ``synced``,
+    ``out_of_range``, ``too_soon``, ``not_allowed``), and for ``not_allowed`` what the system said, for the log."""
+
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(code)
+        self.code, self.detail = code, detail
 
 
 def say(text: str) -> None:
@@ -83,7 +88,7 @@ def slew(by_ms: int) -> None:
     delta = Timeval(sign * sec, sign * ms * 1000)
     libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     if libc.adjtime(ctypes.byref(delta), None) != 0:
-        raise Refused(f"adjtime: {os.strerror(ctypes.get_errno())}")
+        raise Refused("not_allowed", f"adjtime: {os.strerror(ctypes.get_errno())}")
 
 
 def set_to(by_ms: int) -> None:
@@ -94,7 +99,7 @@ def set_to(by_ms: int) -> None:
     try:
         time.clock_settime(time.CLOCK_REALTIME, time.clock_gettime(time.CLOCK_REALTIME) + by_ms / 1000)
     except OSError as e:  # not allowed here (a container): an answer, not a crash that leaves the page waiting
-        raise Refused(f"clock_settime: {e.strerror or e}") from None
+        raise Refused("not_allowed", f"clock_settime: {e.strerror or e}") from None
 
 
 def to_hardware_clock() -> bool:
@@ -154,16 +159,18 @@ def cmd_request(_a) -> int:
         say("request: not one the gateway makes; ignored")
         return 1
     STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    os.chmod(STATE, 0o755)  # whatever the umask: the gateway reads the answer here (round 4b, finding 1)
     result = {"id": r["id"], "kind": r.get("kind"), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     try:
         result.update(act(r))
     except Refused as e:
-        result.update(ok=False, error=str(e)[:80])
+        result.update(ok=False, error=e.code, **({"detail": e.detail[:120]} if e.detail else {}))
     tmp = STATE / ".result.json.tmp"
     tmp.write_text(json.dumps(result) + "\n")
     os.chmod(tmp, 0o644)
     os.replace(tmp, STATE / "result.json")
-    say(f"{result['kind']}: " + (f"moved by {result['moved_ms'] / 1000:+.1f} s" if result.get("ok") else str(result.get("error"))))
+    say(f"{result['kind']}: " + (f"moved by {result['moved_ms'] / 1000:+.1f} s" if result.get("ok")
+                                 else result.get("detail") or str(result.get("error"))))
     return 0 if result.get("ok") else 1
 
 
