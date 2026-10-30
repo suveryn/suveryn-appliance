@@ -91,15 +91,22 @@ def set_to(by_ms: int) -> None:
     if ENV("SUVERYN_CLOCK_TEST") == "1":
         (STATE / "test-set").write_text(f"{by_ms}\n")
         return
-    time.clock_settime(time.CLOCK_REALTIME, time.clock_gettime(time.CLOCK_REALTIME) + by_ms / 1000)
+    try:
+        time.clock_settime(time.CLOCK_REALTIME, time.clock_gettime(time.CLOCK_REALTIME) + by_ms / 1000)
+    except OSError as e:  # not allowed here (a container): an answer, not a crash that leaves the page waiting
+        raise Refused(f"clock_settime: {e.strerror or e}") from None
 
 
-def to_hardware_clock() -> None:
-    """The system's time into the hardware clock, so a restart keeps it. Without the adjustment file: /etc may be
-    read-only. A virtual machine may have none: then nothing."""
+def to_hardware_clock() -> bool:
+    """The system's time into the hardware clock, so a restart keeps it (``util-linux-extra``'s hwclock). Without the
+    adjustment file: /etc may be read-only. False where that didn't work (no hardware clock, or no hwclock): the
+    correction holds until the next restart, and the answer says so rather than the tool stopping."""
     if ENV("SUVERYN_CLOCK_TEST") == "1":
-        return
-    subprocess.run(["hwclock", "--systohc", "--utc", "--noadjfile"], capture_output=True, timeout=30)
+        return True
+    try:
+        return subprocess.run(["hwclock", "--systohc", "--utc", "--noadjfile"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def act(r: dict) -> dict:
@@ -125,8 +132,7 @@ def act(r: dict) -> dict:
         if abs(offset) > SET_MAX_MS:
             raise Refused("out_of_range")
         set_to(-offset)
-    to_hardware_clock()
-    return {"ok": True, "moved_ms": -offset}
+    return {"ok": True, "moved_ms": -offset, "hardware_clock": to_hardware_clock()}
 
 
 def cmd_request(_a) -> int:

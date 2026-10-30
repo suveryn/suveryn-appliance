@@ -31,7 +31,7 @@ def read(state: Path, name: str):
 
 def test_a_nudge_slews_the_clock_back_by_what_it_is_ahead(tmp_path):
     code, result, state = ask(tmp_path, {"id": "0123456789abcdef", "kind": "nudge", "offset_ms": 4200})
-    assert code == 0 and result["ok"] and result["moved_ms"] == -4200
+    assert code == 0 and result["ok"] and result["moved_ms"] == -4200 and result["hardware_clock"] is True
     assert read(state, "test-slewed") == -4200 and read(state, "test-set") is None
     assert (state / "result.json").stat().st_mode & 0o777 == 0o644
 
@@ -70,3 +70,33 @@ def test_a_request_the_gateway_doesnt_make_is_ignored(tmp_path):
         if result is not None:
             assert not result["ok"] and result["error"] == "invalid"
         (state / "result.json").unlink(missing_ok=True)
+
+
+def test_a_clock_this_machine_may_not_set_is_an_answer_not_a_crash(monkeypatch):
+    """Where setting the clock is refused (a container without CAP_SYS_TIME), the answer says so; before, the tool
+    stopped with an exception and the page waited for an answer that never came (round 4b's brief)."""
+    import importlib.machinery
+    import importlib.util
+
+    import pytest
+    loader = importlib.machinery.SourceFileLoader("suveryn_clock", str(TOOL))
+    clock = importlib.util.module_from_spec(importlib.util.spec_from_loader("suveryn_clock", loader))
+    loader.exec_module(clock)
+    monkeypatch.delenv("SUVERYN_CLOCK_TEST", raising=False)
+
+    def refused(*_a):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(clock.time, "clock_settime", refused)
+    with pytest.raises(clock.Refused, match="clock_settime: Operation not permitted"):
+        clock.set_to(1000)
+
+
+def test_without_hwclock_the_correction_is_answered_and_said_to_last_until_a_restart(monkeypatch):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("suveryn_clock", str(TOOL))
+    clock = importlib.util.module_from_spec(importlib.util.spec_from_loader("suveryn_clock", loader))
+    loader.exec_module(clock)
+    monkeypatch.delenv("SUVERYN_CLOCK_TEST", raising=False)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    assert clock.to_hardware_clock() is False

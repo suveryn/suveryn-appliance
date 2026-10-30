@@ -141,6 +141,7 @@ RUNTIME_PACKAGES = [
     "python3-seccomp", "nginx", "openssl", "sudo", "ca-certificates",
     # backups (backup/suveryn-backup, #33)
     "age", "zstd", "cifs-utils", "nfs-common",
+    "util-linux-extra",  # hwclock: a corrected clock kept over a restart (clock/)
     # Libraries suveryn-core's Python packages load (OpenCV in Docling) that Ubuntu's minimal installation
     # lacks: found by comparing every library they link against with the minimal image's package list.
     "libgl1", "libsm6", "libice6", "libglib2.0-0t64", "libxext6", "libxrender1", "libxcb1",
