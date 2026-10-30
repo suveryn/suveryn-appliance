@@ -1,0 +1,13 @@
+# One request from the gateway (clock/suveryn-clock request): only the clock, within the bounds there.
+[Unit]
+Description=sūveryn clock request
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/clock/suveryn-clock request
+PrivateTmp=yes
+ProtectHome=yes
+NoNewPrivileges=yes
+# Setting the clock and the hardware clock; reading and deleting the gateway's request in its own folder.
+CapabilityBoundingSet=CAP_SYS_TIME CAP_DAC_OVERRIDE
+TimeoutStartSec=1min

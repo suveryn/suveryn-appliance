@@ -1610,6 +1610,7 @@ def image(with_web_setup: bool = True) -> None:
     chat_ui()
     snippets()
     backup_service()
+    clock_service()
     # What a restore needs before any first boot: the services' units and the network-mode tool (VM
     # regression of 29 October, finding 2: a machine that had only run image couldn't be restored).
     install_service_units()
@@ -1643,6 +1644,28 @@ def backup_service() -> None:
             "suveryn-backup-request.path")  # started, not only at the next boot
     note("suveryn-backup.timer: at the office's hour, once a backup target is set; the key test and the "
          "administrator's requests when asked")
+
+
+CLOCK_UNITS = ["suveryn-clock-request.path", "suveryn-clock-request.service"]
+
+
+def clock_service() -> None:
+    """The clock's corrections from the people's browsers (clock/, Filip, 30 October): its units and the folder
+    the gateway leaves its requests in. The read-only system has them built in."""
+    step("Clock")
+    if read_only_system():
+        return note("built into the system (suveryn-clock-request.path)")
+    for unit in CLOCK_UNITS:  # the tool from this checkout (the read-only system's is in /opt/suveryn/appliance)
+        text = (REPO / "clock" / "systemd" / unit).read_text().replace("/opt/suveryn/appliance", str(REPO))
+        if str(REPO).startswith(("/root/", "/home/")):
+            text = text.replace("ProtectHome=yes", "ProtectHome=read-only")
+        Path(f"/etc/systemd/system/{unit}").write_text(text)
+    Path("/etc/tmpfiles.d/suveryn-clock.conf").write_text((REPO / "clock" / "tmpfiles" / "suveryn-clock.conf").read_text())
+    run("systemd-tmpfiles", "--create", "/etc/tmpfiles.d/suveryn-clock.conf", check=False)
+    if systemd_running():
+        run("systemctl", "daemon-reload")
+        run("systemctl", "enable", "--now", "suveryn-clock-request.path")
+    note("suveryn-clock-request.path: the clock nudged when people's browsers agree it is off, or set by an administrator")
 
 
 SETUP_UNITS = ["suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"]

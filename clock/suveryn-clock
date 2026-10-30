@@ -1,0 +1,173 @@
+#!/usr/bin/python3
+"""The appliance's clock, kept right by the browsers of the people signed in (Filip, 30 October 2026).
+
+    suveryn-clock request    the gateway's request: nudge the clock, or set it to an administrator's PC
+
+**Why.** Two-step sign-in compares the code on a person's phone with the one the appliance computes from its
+own clock, and accepts a difference of one 30-second step. A phone keeps its time from the mobile network; an
+appliance keeps it with a time server: ``ntp.ubuntu.com`` in connected mode, the office's own when its network
+hands one out. Without one (air-gapped, no time server on the office's network) the clock drifts a few seconds a
+day, and after weeks or months every code is refused, the administrators' included.
+
+**How.** The gateway measures the difference between the appliance's clock and the browser of each person
+signed in (as NTP does: the round trip doesn't count as the difference), and asks here, through a request it
+leaves in ``/run/suveryn/clock-requests`` (the gateway runs as its own user and can't change the clock):
+
+- ``nudge``: when people's browsers agree that the clock is off by half a second to a minute. The clock is
+  slewed (``adjtime``): the kernel runs it faster or slower by at most half a millisecond a second, so it never
+  jumps and can move at most about 43 seconds a day, whatever is asked. At most once an hour.
+- ``set``: an administrator's choice in Administration › Status, after a confirmation that shows both times,
+  for a difference too large to nudge. The clock is set at once, at most a year either way.
+
+Both are refused while a time server keeps the clock (``timedatectl``'s ``NTPSynchronized``): it knows better.
+The hardware clock is written afterwards (``hwclock --systohc``), so a restart keeps the correction. The request
+is deleted before anything else; the answer is in ``/var/lib/suveryn/clock/result.json`` (0644, no secret).
+
+Moving the clock is not harmless: forward, the hourly sweep deletes closed cases whose keep period has
+passed, and old backups; back, an old two-step code is valid again. Hence the bounds here, whatever the gateway
+asks.
+"""
+
+import argparse
+import ctypes
+import ctypes.util
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+ENV = os.environ.get
+REQUESTS = Path(ENV("SUVERYN_CLOCK_REQUESTS", "/run/suveryn/clock-requests"))
+STATE = Path(ENV("SUVERYN_CLOCK_STATE", "/var/lib/suveryn/clock"))
+REQUEST_ID = re.compile(r"[0-9a-f]{16}")
+MAX_REQUEST = 1024
+NUDGE_MIN_MS = 500
+NUDGE_MAX_MS = 60_000
+NUDGE_EVERY_S = 3500  # once an hour, with a little room for the gateway's own hourly timing
+SET_MAX_MS = 366 * 24 * 3600 * 1000
+
+
+class Refused(Exception):
+    """Why a request isn't acted on: a short code the gateway turns into a sentence."""
+
+
+def say(text: str) -> None:
+    print(f"suveryn-clock: {text}", flush=True)
+
+
+def synced() -> bool:
+    """Whether a time server keeps the clock now."""
+    if ENV("SUVERYN_CLOCK_TEST") == "1":
+        return ENV("SUVERYN_CLOCK_TEST_SYNCED") == "1"
+    try:
+        r = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.stdout.strip() == "yes"
+
+
+class Timeval(ctypes.Structure):
+    _fields_ = [("tv_sec", ctypes.c_long), ("tv_usec", ctypes.c_long)]
+
+
+def slew(by_ms: int) -> None:
+    """Move the clock by ``by_ms`` gradually (adjtime): it replaces any slew still under way."""
+    if ENV("SUVERYN_CLOCK_TEST") == "1":
+        (STATE / "test-slewed").write_text(f"{by_ms}\n")
+        return
+    sec, ms = divmod(abs(by_ms), 1000)
+    sign = -1 if by_ms < 0 else 1
+    delta = Timeval(sign * sec, sign * ms * 1000)
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    if libc.adjtime(ctypes.byref(delta), None) != 0:
+        raise Refused(f"adjtime: {os.strerror(ctypes.get_errno())}")
+
+
+def set_to(by_ms: int) -> None:
+    """Move the clock by ``by_ms`` at once."""
+    if ENV("SUVERYN_CLOCK_TEST") == "1":
+        (STATE / "test-set").write_text(f"{by_ms}\n")
+        return
+    time.clock_settime(time.CLOCK_REALTIME, time.clock_gettime(time.CLOCK_REALTIME) + by_ms / 1000)
+
+
+def to_hardware_clock() -> None:
+    """The system's time into the hardware clock, so a restart keeps it. Without the adjustment file: /etc may be
+    read-only. A virtual machine may have none: then nothing."""
+    if ENV("SUVERYN_CLOCK_TEST") == "1":
+        return
+    subprocess.run(["hwclock", "--systohc", "--utc", "--noadjfile"], capture_output=True, timeout=30)
+
+
+def act(r: dict) -> dict:
+    """The request checked and done; the answer without the id."""
+    kind, offset = r.get("kind"), r.get("offset_ms")
+    if kind not in ("nudge", "set") or type(offset) is not int:
+        raise Refused("invalid")
+    if synced():
+        raise Refused("synced")
+    # offset_ms is the appliance's clock minus the PCs': positive, the appliance is ahead and goes back
+    if kind == "nudge":
+        if not NUDGE_MIN_MS <= abs(offset) <= NUDGE_MAX_MS:
+            raise Refused("out_of_range")
+        last = STATE / "last-nudge"
+        try:
+            if time.time() - float(last.read_text().strip()) < NUDGE_EVERY_S:
+                raise Refused("too_soon")
+        except (OSError, ValueError):
+            pass
+        slew(-offset)
+        last.write_text(f"{time.time():.0f}\n")
+    else:
+        if abs(offset) > SET_MAX_MS:
+            raise Refused("out_of_range")
+        set_to(-offset)
+    to_hardware_clock()
+    return {"ok": True, "moved_ms": -offset}
+
+
+def cmd_request(_a) -> int:
+    path = REQUESTS / "request.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return 0
+    try:
+        raw = os.read(fd, MAX_REQUEST + 1)
+    finally:
+        os.close(fd)
+        path.unlink(missing_ok=True)
+    try:
+        r = json.loads(raw) if len(raw) <= MAX_REQUEST else None
+    except ValueError:
+        r = None
+    if not isinstance(r, dict) or not REQUEST_ID.fullmatch(str(r.get("id", ""))):
+        say("request: not one the gateway makes; ignored")
+        return 1
+    STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
+    result = {"id": r["id"], "kind": r.get("kind"), "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        result.update(act(r))
+    except Refused as e:
+        result.update(ok=False, error=str(e)[:80])
+    tmp = STATE / ".result.json.tmp"
+    tmp.write_text(json.dumps(result) + "\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATE / "result.json")
+    say(f"{result['kind']}: " + (f"moved by {result['moved_ms'] / 1000:+.1f} s" if result.get("ok") else str(result.get("error"))))
+    return 0 if result.get("ok") else 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="suveryn-clock", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("request", help=f"the gateway's request left in {REQUESTS}")
+    a = ap.parse_args()
+    return cmd_request(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

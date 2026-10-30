@@ -212,6 +212,14 @@ with the newest always kept, and checked by a restore test. What, how and how to
 the administrator sees the last success and failure (suveryn-core). A replacement machine restores the
 newest backup from its web setup (Restore from a backup) and takes the old appliance's name.
 
+### The clock
+
+Two-step codes need the appliance's clock within about 30 seconds. A time server keeps it where there is one
+(`ntp.ubuntu.com` in connected mode, the office's own from DHCP); where there is none, the browsers of the people
+signed in do: the gateway nudges the clock slowly when they agree it is off, and an administrator can set it to
+their PC's time from Status. The appliance's side, as root and within its own bounds:
+[`clock/README.md`](../../clock/README.md). Built into the read-only system (`suveryn-clock-request.path`).
+
 ## Updates (#40)
 
 - An update is one signed bundle: a new system, its verity and its boot file, signed and checked

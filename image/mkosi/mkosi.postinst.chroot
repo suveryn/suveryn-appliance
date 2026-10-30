@@ -54,6 +54,8 @@ if [ -e /usr/lib/sysusers.d/suveryn.conf ]; then
   # Backups (#33): nightly, once the web setup has saved where to, and the administrator's key test and requests
   # from Administration › Backups. NFS needs no rpcbind for v4: none runs.
   systemctl enable suveryn-backup.timer suveryn-backup-key-test.path suveryn-backup-request.path
+  # The clock's corrections from the people's browsers, or an administrator (clock/)
+  systemctl enable suveryn-clock-request.path
   systemctl mask rpcbind.service rpcbind.socket 2>/dev/null || true
 fi
 link /var/lib/suveryn/postgresql-etc   /etc/postgresql
