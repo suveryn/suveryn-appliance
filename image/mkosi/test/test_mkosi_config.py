@@ -558,6 +558,10 @@ def test_backups_are_in_the_image_nightly_and_without_rpcbind():
     # Administration › Backups: back up now, the disks, a share's test, the settings
     assert "PathExists=/run/suveryn/backup-requests/request.json" in (REPO / "backup" / "systemd" / "suveryn-backup-request.path").read_text()
     assert re.search(r"^d /run/suveryn/backup-requests\s+0700 suveryn\s+suveryn", (REPO / "backup" / "tmpfiles" / "suveryn-backup.conf").read_text(), re.M)
+    # the clock's corrections (clock/): the gateway's requests, as root, within suveryn-clock's bounds
+    assert "../../clock:/opt/suveryn/appliance/clock" in conf and "../../clock/systemd:/usr/lib/systemd/system" in conf
+    assert "../../clock/tmpfiles:/usr/lib/tmpfiles.d" in conf and "systemctl enable suveryn-clock-request.path" in POSTINST
+    assert re.search(r"^d /run/suveryn/clock-requests\s+0700 suveryn\s+suveryn", (REPO / "clock" / "tmpfiles" / "suveryn-clock.conf").read_text(), re.M)
     unit = (REPO / "backup" / "systemd" / "suveryn-backup.service").read_text()
     assert "ExecStart=/usr/bin/python3 -I /opt/suveryn/appliance/backup/suveryn-backup run --scheduled" in unit
     assert "ConditionPathExists=/etc/suveryn/backups.json" in unit
