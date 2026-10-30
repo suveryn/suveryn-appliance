@@ -339,6 +339,11 @@ for title in ["GPU licence check", "Network mode", "PostgreSQL 16 + pgvector", "
     print("\\n== " + title, flush=True)
     print("   working", flush=True)
     if "%s" and title.startswith("%s"):
+        if title == "Verify":  # a check fails, then an unrelated note is the last line (VM regression, finding 8)
+            print("   FAIL Reader sandbox: the test PDF wasn't read", flush=True)
+            print("   OK   Gateway: ready", flush=True)
+            print("   Outgoing traffic: not checked (no appliance firewall here: a test machine)", flush=True)
+            sys.exit(1)
         print("suveryn-provision: Keycloak didn't start", flush=True)
         sys.exit(1)
 """
@@ -593,3 +598,15 @@ def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, 
         assert api("GET", "restore")[1] == {"state": "failed", "error": code}
         assert not (s.ANSWERS / "recovery-key").exists()  # asked for again, not kept
     assert api("POST", "restore/start") == (422, {"error": "not_checked"})
+
+
+def test_a_failed_verify_names_the_check_that_failed_not_the_last_line(s, api, fake_tools):
+    """VM regression of 29 October, finding 8: the screen showed provisioning's last line ("Outgoing traffic: not
+    checked"), not what failed."""
+    fake_tools(fail_at="Verify")
+    answer_everything(api)
+    api("POST", "provision", {})
+    assert s.provision() == 1
+    p = api("GET", "provision")[1]
+    errors = [st.get("error") for st in p["steps"] if st["state"] == "failed"]
+    assert errors == ["Reader sandbox: the test PDF wasn't read"]

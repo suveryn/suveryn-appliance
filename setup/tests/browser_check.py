@@ -134,8 +134,14 @@ def machine() -> dict:
     time.sleep(0.5)
     if REAL:
         for path in ("/var/lib/suveryn/setup", "/etc/suveryn/nginx-setup.conf", "/etc/suveryn/tls/setup-cert.pem",
-                     "/etc/nginx/sites-available/suveryn", "/etc/nginx/sites-enabled/suveryn", "/run/suveryn"):
-            shutil.rmtree(path, ignore_errors=True) if Path(path).is_dir() else Path(path).unlink(missing_ok=True)
+                     "/etc/nginx/sites-available/suveryn", "/run/suveryn/setup"):
+            # Only setup's own: not all of /run/suveryn (the backup service's request folders are there), and not
+            # a sites-enabled link that points to the data partition, as the stick lays it out (VM regression of
+            # 29 October, finding 16).
+            shutil.rmtree(path, ignore_errors=True) if Path(path).is_dir() and not Path(path).is_symlink() else Path(path).unlink(missing_ok=True)
+        enabled = Path("/etc/nginx/sites-enabled/suveryn")
+        if enabled.is_symlink() and not os.readlink(enabled).startswith("/var/"):
+            enabled.unlink()
     for path in () if REAL else ("/etc/suveryn", "/var/lib/suveryn/setup", "/etc/nginx/sites-available/suveryn",
                  "/etc/nginx/sites-enabled/suveryn", "/run/suveryn"):
         shutil.rmtree(path, ignore_errors=True) if Path(path).is_dir() and not Path(path).is_symlink() else Path(path).unlink(missing_ok=True)

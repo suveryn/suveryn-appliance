@@ -50,8 +50,10 @@ choose **Restore from a backup** on the first screen.
    from, and asks before anything is replaced.
 3. `suveryn-provision restore` restores it: the databases and the office's settings, secrets and
    certificates (as below), the language models' settings for this machine, the old appliance's network
-   mode and name, then starts the services and closes setup. The key and the share's password are
-   deleted, whether the restore worked or not.
+   mode and name, the office's site written again where this machine keeps it, then starts the services
+   and closes setup. A machine that has only run `suveryn-provision image` can be restored: `image`
+   installs the services' units and the network-mode tool, and the restore stops and starts only the
+   units there are. The key and the share's password are deleted, whether the restore worked or not.
 4. The appliance now answers at the old name (`https://<old name>.local`): sign in with the office's
    usual accounts. The new machine has its own identity: register it with the support portal.
 
@@ -63,8 +65,17 @@ By hand, as root:
    and the four folders are restored beside the live ones first; only once all of that has worked are
    the databases swapped in one transaction and the folders renamed into place, so a failed restore
    leaves the appliance as it was and says so. The database roles get the passwords the restored
-   settings use, and the services start again.
+   settings use, and the services start again. A service that doesn't start again after that is said
+   apart ("restored; these services didn't start again yet: …"): the restore itself is done and stays
+   done, and provisioning's next steps usually bring the service up.
 3. Delete the key file. Register the new machine with the support portal.
+
+**Links in the folders.** A restore unpacks with tar's "data" filter, which refuses a link to an absolute
+path or out of its folder. A backup with such a link is refused when it is made, before anything is
+written, naming the link. There is no exception: the read-only system's time zone, `host/localtime`, a
+link to `/usr/share/zoneinfo/<zone>`, isn't in the backup. Its name in the IANA time zone database
+(`Europe/Brussels`, `America/New_York`) is, in the manifest (`time_zone`), and the restore makes the link
+again from it once the folders are in place: the backup's zone when this appliance has it, else its own.
 
 ## A backup is checked before it is trusted
 
