@@ -906,7 +906,10 @@ def provision() -> int:
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                                 stdin=subprocess.DEVNULL)
-        lines = {"last": ""}
+        # What failed, for the screen: the first verify line that failed, else provisioning's own reason
+        # ("suveryn-provision: …"), else the last line; the last line alone was often an unrelated note
+        # (VM regression of 29 October, finding 8: "Outgoing traffic: not checked").
+        lines = {"last": "", "failed": "", "reason": ""}
 
         def follow():
             for line in proc.stdout:
@@ -919,13 +922,17 @@ def provision() -> int:
                         prog.step(ui, "running")
                 elif line.strip():
                     lines["last"] = line.strip()
+                    if line.strip().startswith("FAIL ") and not lines["failed"]:
+                        lines["failed"] = line.strip()[5:].strip()
+                    elif line.startswith("suveryn-provision: "):
+                        lines["reason"] = line.strip()
         # Until provisioning ends, not until its output closes: a service it starts without systemd (a
         # test container) can keep that output open for as long as the service runs.
         reader = threading.Thread(target=follow, daemon=True)
         reader.start()
         code = proc.wait()
         reader.join(5)
-        last = lines["last"]
+        last = lines["failed"] or lines["reason"] or lines["last"]
     finally:
         remove(admin_file)
         if models:

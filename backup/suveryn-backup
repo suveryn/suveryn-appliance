@@ -460,8 +460,13 @@ def make(s: dict) -> dict:
             dumps.append(out)
         manifest = {"format": FORMAT, "created": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "appliance": name,
                     "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions(),
-                    "postgresql": postgres_major()}
+                    "postgresql": postgres_major(), **({"time_zone": z} if (z := time_zone()) else {})}
         (work / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+        # A link a restore would refuse is refused now, before anything is written: every backup with it was
+        # written without complaint and then couldn't be read (VM regression of 29 October, finding 12).
+        for f in manifest["files"]:
+            if (bad := unsafe_link(VAR / f)) is not None:
+                raise Failed("files", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
         target = Target(s)
         with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
@@ -490,6 +495,57 @@ def make(s: dict) -> dict:
             "on_target": len(kept), "oldest": kept[-1]["at"] if kept else None, "sha256": digest,
             **({"disk": target.disk} if target.disk else {}),
             "seconds": round((dt.datetime.now(dt.timezone.utc) - started).total_seconds())}
+
+
+# The time zone travels as its name in the IANA time zone database ("Europe/Brussels", "America/New_York"), in
+# the manifest, not as the link the read-only system keeps for it (host/localtime, to /usr/share/zoneinfo/<zone>):
+# an absolute link, which a restore refuses like any other. The restore makes the link again from the name.
+ZONEINFO = Path("/usr/share/zoneinfo")
+ZONE_FILE = "host/localtime"
+ZONE_NAME = re.compile(r"[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+){0,2}")
+
+
+def time_zone() -> str | None:
+    """This appliance's time zone by its IANA name, from the read-only system's link; None where it has none."""
+    link = VAR / ZONE_FILE
+    if not link.is_symlink():
+        return None
+    target = PurePosixPath(os.readlink(link))
+    try:
+        name = str(target.relative_to(ZONEINFO))
+    except ValueError:
+        return None
+    return name if ZONE_NAME.fullmatch(name) else None
+
+
+def set_time_zone(name: str | None) -> None:
+    """The time zone's link again, after the folders are in place: the backup's zone when this appliance knows
+    it, else the one it had. Nothing where neither is known (a machine without the read-only system's link)."""
+    if not name or not ZONE_NAME.fullmatch(name) or not (ZONEINFO / name).is_file():
+        return
+    link = VAR / ZONE_FILE
+    if not link.parent.is_dir() or link.parent.is_symlink():
+        return
+    link.unlink(missing_ok=True)
+    link.symlink_to(ZONEINFO / name)
+
+
+def unsafe_link(folder: Path) -> str | None:
+    """The first link in ``folder`` that tar's "data" filter would refuse on restore (an absolute target, or one
+    leading out of the folder), as a path inside it; None when there is none."""
+    root = folder.resolve()
+    for d, dirs, files in os.walk(folder, followlinks=False):
+        for name in [*dirs, *files]:
+            path = Path(d) / name
+            if not path.is_symlink():
+                continue
+            target = os.readlink(path)
+            if path == VAR / ZONE_FILE:
+                continue  # not in the backup: its name is (time_zone)
+            inside = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(path)), target))
+            if os.path.isabs(target) or not (inside == str(root) or inside.startswith(str(root) + os.sep)):
+                return str(path.relative_to(folder))
+    return None
 
 
 def room_needed(folder: Path, parts: list[Path]) -> int:
@@ -537,8 +593,9 @@ def write_backup(partial: Path, recipient: str, manifest: Path, dumps: list[Path
                 tar.add(manifest, arcname="manifest.json")
                 for d in dumps:
                     tar.add(d, arcname=f"db/{d.name}")
-                for f in files:
-                    tar.add(VAR / f, arcname=f"files/{f}")
+                for f in files:  # the time zone's link stays out: the manifest has its name
+                    tar.add(VAR / f, arcname=f"files/{f}",
+                            filter=lambda m: None if m.name == f"files/{ZONE_FILE}" else m)
             zstd.stdin.close()
         except (OSError, tarfile.TarError) as e:
             zstd.kill()
@@ -803,9 +860,12 @@ def checked_manifest(m) -> dict:
     pg = m.get("postgresql")  # absent in backups made before #57: those were all PostgreSQL 16
     if pg is not None and (type(pg) is not int or not 9 <= pg <= 99):
         raise Failed("read", "the backup's PostgreSQL version isn't one")
+    zone = m.get("time_zone")  # absent where the appliance had none (no read-only system's link)
+    if zone is not None and (not isinstance(zone, str) or not ZONE_NAME.fullmatch(zone)):
+        raise Failed("read", "the backup's time zone isn't one")
     return {"format": FORMAT, "created": created, "appliance": name, "databases": dict(DATABASES),
             "files": [f for f in FILES if f in files], "versions": m.get("versions") if isinstance(m.get("versions"), dict) else {},
-            "postgresql": pg or 16}
+            "postgresql": pg or 16, "time_zone": zone}
 
 
 def age_error(stderr: bytes | None) -> str:
@@ -1191,6 +1251,12 @@ def cmd_check(a) -> int:
 SERVICES = ["suveryn-gateway", "keycloak"]
 
 
+def existing(units: list[str]) -> list[str]:
+    """Those of ``units`` systemd has: a machine that has only run ``image`` may lack some, and a restore stops
+    and starts only what is there (VM regression of 29 October, finding 2)."""
+    return [u for u in units if subprocess.run(["systemctl", "cat", u], capture_output=True).returncode == 0]
+
+
 def env_values(path: Path) -> dict[str, str]:
     out = {}
     try:
@@ -1230,8 +1296,8 @@ def restore_file(a, file: Path) -> int:
         try:
             manifest = unpack(file, a.identity, dest)
             check_dumps(dest, manifest)
-            if systemd:
-                run("services", ["systemctl", "stop", *SERVICES])
+            if systemd and (running := existing(SERVICES)):
+                run("services", ["systemctl", "stop", *running])
             # Everything is restored beside what is live first (the module's notes); nothing live changes
             # until all of it has worked.
             try:
@@ -1262,27 +1328,35 @@ def restore_file(a, file: Path) -> int:
             # passwords are set, the old folders (<f>.replaced) and databases (<db>_replaced) are kept, and
             # a failure puts them back (audit of 25 October 2026, finding 2).
             moved: list[tuple[str, bool]] = []
+            zone_here = time_zone()  # before the host folder is replaced
             try:
                 swap_folders(manifest["files"], moved)
                 set_role_passwords(manifest)
             except Failed as e:
                 put_back(manifest, moved)
                 raise Failed(e.step, f"{e}; the appliance was put back as it was") from None
+            set_time_zone(manifest["time_zone"] if manifest["time_zone"] and (ZONEINFO / manifest["time_zone"]).is_file() else zone_here)
             for f in manifest["files"]:  # done: what was replaced goes
                 shutil.rmtree(folder_beside(f, "replaced"), ignore_errors=True)
             for db in manifest["databases"]:
                 subprocess.run(as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]), capture_output=True)
-            if systemd:
-                run("services", ["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"])
         except Exception as e:  # noqa: BLE001 - whatever failed, the services run again and the reason is said
             if systemd:  # the office's services run again on what is there
-                subprocess.run(["systemctl", "restart", "suveryn-llm", *reversed(SERVICES), "nginx"], check=False)
+                subprocess.run(["systemctl", "restart", *existing(["suveryn-llm", *reversed(SERVICES), "nginx"])], check=False)
             if not isinstance(e, Failed):  # its message could name a path; the type says enough
                 e = Failed("restore", f"unexpected {type(e).__name__}")
             say(f"restore failed ({e.step}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
         f"{', '.join(manifest['databases'])} and {', '.join(manifest['files'])}")
+    # The restore is done and stays done. A service that doesn't start again is said apart from it, not as a
+    # failed restore: the office's data is in place, and what follows (provisioning's after_restore: the site,
+    # the name, the services, verify) usually brings it up (VM regression of 29 October, finding 3).
+    if systemd:
+        units = existing(["suveryn-llm", *reversed(SERVICES), "nginx"])
+        if units and subprocess.run(["systemctl", "restart", *units], capture_output=True).returncode != 0:
+            down = [u for u in units if subprocess.run(["systemctl", "is-active", "--quiet", u]).returncode != 0]
+            say(f"restored; these services didn't start again yet: {', '.join(down) or 'one of them'}")
     return 0
 
 
