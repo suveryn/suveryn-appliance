@@ -284,17 +284,12 @@ def usb_candidates(listing: dict) -> list[tuple[Path, str]]:
 
 
 def usb_partition(chosen: str) -> Path:
-    """The USB disk the office chose: its first partition with a file system, or the disk. By the web setup's
-    id (``disk_id``); a /dev/disk/by-id name, as an older settings file may hold, is found too."""
+    """The USB disk the office chose, by the web setup's id (``disk_id``): its first partition with a file system,
+    or the disk."""
     for dev, label in usb_candidates(lsblk_usb()):
         if label == chosen:
             return dev
-    by_id = Path("/dev/disk/by-id")
-    disk = by_id / chosen
-    if "/" in chosen or not disk.exists():
-        raise Failed("target", "the backup disk isn't connected")
-    parts = sorted(by_id.glob(f"{chosen}-part*"), key=lambda p: int(re.sub(r"\D", "", p.name.rsplit("-part", 1)[1]) or 0))
-    return parts[0] if parts else disk
+    raise Failed("target", "the backup disk isn't connected")
 
 
 class Target:

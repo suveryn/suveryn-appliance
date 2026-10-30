@@ -34,8 +34,8 @@ def dev():
 
 
 def build(dev, chat_secret="test-secret-not-real"):
-    """The production realm, with a directory secret when the realm has that client (cases, stage 2)."""
-    return build_realm.production_realm(dev, URL, chat_secret, "directory-secret" if build_realm.has_directory_client(dev) else "")
+    """The production realm, with the directory client's secret."""
+    return build_realm.production_realm(dev, URL, chat_secret, "directory-secret")
 
 
 def chat_client(realm):
@@ -77,8 +77,7 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     """suveryn-tracker#10, stage 2: suveryn-core's realm carries a second client, suveryn-directory,
     whose service account reads the office's accounts for a case's members. Shaped here as that
     realm has it, so the test holds whatever commit realm-lock.json points at."""
-    with_dir = dev if build_realm.has_directory_client(dev) else {**dev, "clients": [*dev["clients"], DIRECTORY], "users": [SERVICE_ACCOUNT],
-                                                                  "clientScopeMappings": SCOPE}
+    with_dir = dev
     without = {**dev, "clients": [chat_client(dev)], "users": []}
     prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret")
     chat, directory = prod["clients"]
@@ -86,7 +85,7 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     assert directory["redirectUris"] == [] and not directory["standardFlowEnabled"]
     assert not chat["serviceAccountsEnabled"]
     with pytest.raises(SystemExit):
-        build_realm.production_realm(with_dir, URL, "chat-secret")  # the client without a secret: refused
+        build_realm.production_realm(with_dir, URL, "chat-secret", "")  # the client without a secret: refused
     # a service account with more rights, on the chat client, or a directory client that could sign in: refused
     for bad in ({"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["manage-users"]}}]},
                 {"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["view-users", "view-realm", "manage-realm"]}}]},
@@ -96,8 +95,8 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
                 {"clients": [chat_client(dev), {**DIRECTORY, "standardFlowEnabled": True}]}):
         with pytest.raises(SystemExit):
             build_realm.production_realm({**with_dir, **bad}, URL, "chat-secret", "directory-secret")
-    assert not build_realm.has_directory_client(without) and build_realm.has_directory_client(with_dir)
-    assert "secret" not in json.dumps(build_realm.production_realm(without, URL, "chat-secret")["clients"][1:])  # builds without it
+    with pytest.raises(SystemExit, match="no suveryn-directory client"):
+        build_realm.production_realm(without, URL, "chat-secret", "directory-secret")  # suveryn-core's realm always has it
 
 
 def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash_in_the_file():
@@ -192,10 +191,10 @@ def test_only_the_administrator_role_carries_account_management_and_no_more(dev)
     suveryn-admin is a composite of the five realm-management roles it needs.
     More than those, a realm role inside it, or another composite role is refused."""
     realm = build_realm.production_realm({**dev, "roles": {"realm": [ADMIN_COMPOSITE]}}, URL, "c",
-                                         "d" if build_realm.has_directory_client(dev) else "")
+                                         "d")
     assert realm["roles"]["realm"] == [ADMIN_COMPOSITE]
     build_realm.production_realm({**dev, "roles": {"realm": [{"name": "suveryn-admin"}]}}, URL, "c",
-                                 "d" if build_realm.has_directory_client(dev) else "")  # a plain role, as before
+                                 "d")  # a plain role, as before
     more = {"realm-management": ["manage-users", "manage-clients"]}
     for bad in ({**ADMIN_COMPOSITE, "composites": {"client": more}},
                 {**ADMIN_COMPOSITE, "composites": {"realm": ["offline_access"]}},
@@ -203,7 +202,7 @@ def test_only_the_administrator_role_carries_account_management_and_no_more(dev)
                 {**ADMIN_COMPOSITE, "name": "office-staff"}):
         with pytest.raises(SystemExit, match="carries more than"):
             build_realm.production_realm({**dev, "roles": {"realm": [bad]}}, URL, "c",
-                                         "d" if build_realm.has_directory_client(dev) else "")
+                                         "d")
 
 
 def test_the_realm_comes_from_a_checkout_without_git_when_its_hash_is_the_locks(tmp_path, dev):
