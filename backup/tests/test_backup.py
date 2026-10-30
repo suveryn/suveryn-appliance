@@ -861,11 +861,12 @@ def test_the_web_setups_disk_id_finds_the_disk_whatever_udev_calls_it(monkeypatc
 
 
 @needs
-def test_the_read_only_systems_time_zone_link_is_backed_up_and_restored(appliance):
-    """host/localtime on the read-only system links to /usr/share/zoneinfo/<zone>, an absolute path tar's "data"
-    filter refuses: every backup of that system would have been unreadable. That one link is restored by hand."""
+def test_the_time_zone_travels_by_its_name(appliance):
+    """The read-only system keeps its time zone as host/localtime, a link to /usr/share/zoneinfo/<zone>: an absolute
+    link, which a restore refuses. The backup holds the zone's IANA name in its manifest instead, never the link,
+    and the restore makes the link again from the name: any zone, not one in particular."""
     env, var = appliance["env"], appliance["var"]
-    (var / "host" / "localtime").symlink_to("/usr/share/zoneinfo/Europe/Brussels")
+    (var / "host" / "localtime").symlink_to("/usr/share/zoneinfo/America/New_York")
     r = tool(env, "run")
     assert r.returncode == 0, r.stdout + r.stderr
     [backup] = (appliance["target"] / "suveryn-backups" / "test-appliance").glob("*.age")
@@ -874,7 +875,22 @@ def test_the_read_only_systems_time_zone_link_is_backed_up_and_restored(applianc
     (var / "host" / "localtime").symlink_to("/usr/share/zoneinfo/Etc/UTC")
     r = tool(env, "restore", backup, "--identity", appliance["key"], "--yes")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert os.readlink(var / "host" / "localtime") == "/usr/share/zoneinfo/Europe/Brussels"
+    assert os.readlink(var / "host" / "localtime") == "/usr/share/zoneinfo/America/New_York"
+
+
+def test_a_time_zone_this_appliance_doesnt_know_keeps_its_own(tmp_path, monkeypatch):
+    """The name is checked before a link is made from it: an IANA name this appliance has, or nothing changes."""
+    b = load()
+    monkeypatch.setattr(b, "VAR", tmp_path)
+    (tmp_path / "host").mkdir()
+    b.set_time_zone("Europe/Brussels")
+    assert b.time_zone() == "Europe/Brussels"
+    for bad in ("Mars/Olympus_Mons", "../../etc/passwd", "/etc/passwd", "", None):
+        b.set_time_zone(bad)
+        assert b.time_zone() == "Europe/Brussels"
+    with pytest.raises(b.Failed, match="time zone"):
+        b.checked_manifest({"format": b.FORMAT, "databases": dict(b.DATABASES), "files": [], "appliance": "a",
+                            "created": "2026-10-30T00:00:00Z", "time_zone": "../x"})
 
 
 @needs

@@ -72,8 +72,10 @@ By hand, as root:
 
 **Links in the folders.** A restore unpacks with tar's "data" filter, which refuses a link to an absolute
 path or out of its folder. A backup with such a link is refused when it is made, before anything is
-written, naming the link. The one exception is the read-only system's time zone, `host/localtime`, a link
-to `/usr/share/zoneinfo/<zone>`: that link, with a target of exactly that shape, is restored by hand.
+written, naming the link. There is no exception: the read-only system's time zone, `host/localtime`, a
+link to `/usr/share/zoneinfo/<zone>`, isn't in the backup. Its name in the IANA time zone database
+(`Europe/Brussels`, `America/New_York`) is, in the manifest (`time_zone`), and the restore makes the link
+again from it once the folders are in place: the backup's zone when this appliance has it, else its own.
 
 ## A backup is checked before it is trusted
 
