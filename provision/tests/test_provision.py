@@ -449,6 +449,25 @@ def test_on_systemd_the_site_is_reloaded_and_the_backup_timer_runs_at_once(monke
     assert "suveryn-backup-key-test.service" in "".join(written) and "/run/suveryn/backup-key-test" in written["/etc/tmpfiles.d/suveryn-backup.conf"]
 
 
+def test_the_clock_requests_are_installed_from_this_checkout(monkeypatch):
+    """The clock's corrections (clock/): its units from this checkout, readable in /root, the path unit started at
+    once, and the folder the gateway leaves its requests in."""
+    ran = []
+    monkeypatch.setattr(p, "systemd_running", lambda: True)
+    monkeypatch.setattr(p, "run", lambda *a, **k: ran.append(a))
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    monkeypatch.setattr(p, "REPO", Path("/root/suveryn-appliance"))
+    written = {}
+    monkeypatch.setattr(p.Path, "write_text", lambda self, text: written.__setitem__(str(self), text))
+    monkeypatch.setattr(p.Path, "read_text", lambda self: (HERE.parent / "clock" / self.parent.name / self.name).read_bytes().decode())
+    p.clock_service()
+    unit = written["/etc/systemd/system/suveryn-clock-request.service"]
+    assert "/root/suveryn-appliance/clock/suveryn-clock request" in unit and "ProtectHome=read-only" in unit
+    assert "CapabilityBoundingSet=CAP_SYS_TIME CAP_DAC_OVERRIDE" in unit
+    assert ("systemctl", "enable", "--now", "suveryn-clock-request.path") in ran
+    assert "/run/suveryn/clock-requests" in written["/etc/tmpfiles.d/suveryn-clock.conf"]
+
+
 def test_the_temporary_keycloak_administrator_goes_once_the_office_has_its_own(monkeypatch, tmp_path):
     """#55: suveryn-setup (master realm) deleted after setup, and its password out of keycloak.env."""
     deleted, written = [], {}

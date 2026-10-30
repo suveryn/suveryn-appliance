@@ -1,0 +1,11 @@
+# The gateway's request to correct the clock (clock/suveryn-clock): a nudge when people's browsers agree it is
+# off, or an administrator's "set to this PC's time". The gateway leaves request.json in
+# /run/suveryn/clock-requests (clock/tmpfiles); this starts suveryn-clock request, which deletes it at once.
+[Unit]
+Description=sūveryn clock request
+
+[Path]
+PathExists=/run/suveryn/clock-requests/request.json
+
+[Install]
+WantedBy=paths.target
