@@ -546,9 +546,10 @@ def test_cloud_init_is_told_to_leave_the_hosts_file_alone(monkeypatch, tmp_path)
 
 def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_more(monkeypatch, capsys):
     """The realm is imported once: an appliance installed before suveryn-core's Users gets the suveryn-admin
-    role's composites added (checked against Keycloak 26.8 on 28 October 2026); never a role beyond the four."""
+    role's composites added (checked against Keycloak 26.8 on 28 October 2026), and one installed before the
+    two-step setting gets manage-realm (30 October); never a role beyond the five."""
     api, posted = "http://kc/admin/realms/suveryn", []
-    roles = {n: {"id": f"id-{n}", "name": n} for n in ("manage-users", "view-users", "view-realm", "view-events", "manage-realm")}
+    roles = {n: {"id": f"id-{n}", "name": n} for n in ("manage-users", "view-users", "view-realm", "view-events", "manage-realm", "manage-clients")}
 
     def http(url, headers=None, data=None, timeout=10):
         if data is not None:
@@ -563,8 +564,8 @@ def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_m
 
     monkeypatch.setattr(p, "http", http)
     p.admin_role_composites({}, api)
-    assert posted == [(f"{api}/roles/suveryn-admin/composites", [roles["manage-users"], roles["view-events"]])]
-    assert "added manage-users, view-events" in capsys.readouterr().out
+    assert posted == [(f"{api}/roles/suveryn-admin/composites", [roles["manage-users"], roles["view-events"], roles["manage-realm"]])]
+    assert "added manage-users, view-events, manage-realm" in capsys.readouterr().out
 
 
 def test_verify_finds_the_egress_unit_wherever_systemd_has_it(monkeypatch):

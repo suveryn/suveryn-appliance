@@ -89,7 +89,7 @@ the read-only system an air-gapped appliance with neither stops.
   (and so `install`) and `restore` add what a realm imported from an older realm file lacks, while
   Keycloak's temporary administrator exists: `view-users` and `view-realm` in that client's scope
   (the Pod check of 5e9a539 found members couldn't be added on a fresh install), and the
-  `suveryn-admin` role's composites (`manage-users`, `view-users`, `view-realm`, `view-events`;
+  `suveryn-admin` role's composites (`manage-users`, `view-users`, `view-realm`, `view-events`, `manage-realm`;
   `admin_role_composites`), never more.
 - **The reader sandbox**: the wrapper is set and the bypass is not; then a fictional one-page PDF is
   uploaded as the gateway's user, through the gateway's own document service, its inbox and the

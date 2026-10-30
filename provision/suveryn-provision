@@ -1272,8 +1272,9 @@ def keycloak_admin() -> dict[str, str] | None:
 DIRECTORY_SCOPE = ("view-users", "view-realm")
 KC_API = "http://127.0.0.1:8180/idp/admin/realms/suveryn"
 # What the suveryn-admin role carries, as in suveryn-core's realm file: Administration › Users manages the
-# accounts with the administrator's own token (build_realm.ADMIN_ROLE_COMPOSITES checks the same four).
-ADMIN_ROLE_COMPOSITES = ("manage-users", "view-users", "view-realm", "view-events")
+# accounts with the administrator's own token, and changes the browser flow for the office's two-step setting
+# (build_realm.ADMIN_ROLE_COMPOSITES checks the same five).
+ADMIN_ROLE_COMPOSITES = ("manage-users", "view-users", "view-realm", "view-events", "manage-realm")
 
 
 def admin_role_composites(auth: dict[str, str], api: str = KC_API) -> None:
