@@ -11,7 +11,7 @@ jobs:
     name: Shellcheck + config validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Shellcheck all scripts
         # -S warning: fail on real problems (warning/error), not on info/style notes like SC1091
@@ -33,7 +33,7 @@ jobs:
     name: mkosi config sanity check (no build)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install mkosi
         # mkosi isn't published on PyPI (pipx install mkosi fails with "No matching distribution");
         # install it straight from its git repo, as the project's own README does.
@@ -51,6 +51,6 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Placeholder
         run: echo "Wire up the real mkosi/Packer build here when it's worth the time/cost."
