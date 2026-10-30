@@ -87,8 +87,9 @@ def test_a_clock_this_machine_may_not_set_is_an_answer_not_a_crash(monkeypatch):
     def refused(*_a):
         raise PermissionError(1, "Operation not permitted")
     monkeypatch.setattr(clock.time, "clock_settime", refused)
-    with pytest.raises(clock.Refused, match="clock_settime: Operation not permitted"):
+    with pytest.raises(clock.Refused) as e:
         clock.set_to(1000)
+    assert e.value.code == "not_allowed" and e.value.detail == "clock_settime: Operation not permitted"  # a code the page words
 
 
 def test_without_hwclock_the_correction_is_answered_and_said_to_last_until_a_restart(monkeypatch):
@@ -100,3 +101,15 @@ def test_without_hwclock_the_correction_is_answered_and_said_to_last_until_a_res
     monkeypatch.delenv("SUVERYN_CLOCK_TEST", raising=False)
     monkeypatch.setenv("PATH", "/nonexistent")
     assert clock.to_hardware_clock() is False
+
+
+def test_the_answer_is_readable_by_the_gateway_whatever_the_umask(tmp_path):
+    """Round 4b, finding 1: run by hand from a shell with umask 077, the state folder was made 0700 and the gateway
+    couldn't read the answer; the page then said a set clock wasn't set."""
+    requests, state = tmp_path / "requests", tmp_path / "state"
+    requests.mkdir()
+    (requests / "request.json").write_text(json.dumps({"id": "0123456789abcdef", "kind": "set", "offset_ms": 1000}))
+    env = {**os.environ, "SUVERYN_CLOCK_TEST": "1", "SUVERYN_CLOCK_REQUESTS": str(requests), "SUVERYN_CLOCK_STATE": str(state)}
+    r = subprocess.run(["sh", "-c", f"umask 077 && exec {sys.executable} -I {TOOL} request"], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert state.stat().st_mode & 0o777 == 0o755 and (state / "result.json").stat().st_mode & 0o777 == 0o644

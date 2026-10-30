@@ -22,7 +22,8 @@ and answers in `/var/lib/suveryn/clock/result.json` (0644, no secret).
 Both are refused while a time server keeps the clock (`timedatectl`'s `NTPSynchronized`). Afterwards the hardware
 clock is written (`hwclock --systohc --noadjfile`, from `util-linux-extra`, in the image), so a restart keeps the
 correction; the answer's `hardware_clock` says whether that worked. Where the system may not set the clock at all
-(a container), the answer is a refusal (`adjtime: …`, `clock_settime: …`), never a stopped tool.
+(a container), the answer is the refusal `not_allowed`, with what the system said in `detail` for the log,
+never a stopped tool. The answer's folder is made 0755 whatever the umask, so the gateway can read it.
 
 **Why the bounds.** Moved forward, the gateway's hourly sweep deletes closed cases whose keep period has then
 passed, and backups past their retention; moved back, an old two-step code is valid again. The gateway has its
