@@ -20,7 +20,9 @@ and answers in `/var/lib/suveryn/clock/result.json` (0644, no secret).
 | `set` | An administrator's *Set to this PC's time* on Status, after a confirmation that shows both times | At once, at most a year either way |
 
 Both are refused while a time server keeps the clock (`timedatectl`'s `NTPSynchronized`). Afterwards the hardware
-clock is written (`hwclock --systohc --noadjfile`), so a restart keeps the correction.
+clock is written (`hwclock --systohc --noadjfile`, from `util-linux-extra`, in the image), so a restart keeps the
+correction; the answer's `hardware_clock` says whether that worked. Where the system may not set the clock at all
+(a container), the answer is a refusal (`adjtime: …`, `clock_settime: …`), never a stopped tool.
 
 **Why the bounds.** Moved forward, the gateway's hourly sweep deletes closed cases whose keep period has then
 passed, and backups past their retention; moved back, an old two-step code is valid again. The gateway has its
