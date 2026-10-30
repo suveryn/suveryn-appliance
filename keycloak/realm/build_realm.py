@@ -65,8 +65,9 @@ MIN_PASSWORD = 15
 ADMIN_CLIENT_ROLES = ["manage-users", "view-users", "query-users", "query-groups"]
 # What the suveryn-admin realm role itself may carry (suveryn-core's realm): the gateway manages the
 # office's accounts for Administration › Users with the administrator's own token, so the role is a
-# composite of these and no more (users, the role list, sign-in and admin events).
-ADMIN_ROLE_COMPOSITES = {"manage-users", "view-users", "view-realm", "view-events"}
+# composite of these and no more (users, the role list, sign-in and admin events, and manage-realm for the
+# office's two-step setting, which changes the realm's browser flow: Filip, 30 October 2026).
+ADMIN_ROLE_COMPOSITES = {"manage-users", "view-users", "view-realm", "view-events", "manage-realm"}
 DIRECTORY_ROLES = {"view-users", "view-realm"}  # the directory service account: read-only, nothing else (avatars: view-realm lists who administers)
 # Keycloak's pbkdf2-sha512 credential (its default before Keycloak 24, still read by 26): the
 # password never appears in the realm file, only its hash.

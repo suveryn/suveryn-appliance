@@ -183,19 +183,20 @@ def test_the_directory_client_must_carry_view_users_in_its_scope_and_nothing_mor
 
 
 ADMIN_COMPOSITE = {"name": "suveryn-admin", "composite": True,
-                   "composites": {"client": {"realm-management": ["manage-users", "view-users", "view-realm", "view-events"]}}}
+                   "composites": {"client": {"realm-management": ["manage-users", "view-users", "view-realm", "view-events", "manage-realm"]}}}
 
 
 def test_only_the_administrator_role_carries_account_management_and_no_more(dev):
     """Administration › Users manages the accounts with the administrator's own token (suveryn-core,
-    Filip, 28 October), so suveryn-admin is a composite of the four realm-management roles it needs.
+    Filip, 28 October) and sets the office's two-step sign-in in the browser flow (manage-realm, 30 October), so
+    suveryn-admin is a composite of the five realm-management roles it needs.
     More than those, a realm role inside it, or another composite role is refused."""
     realm = build_realm.production_realm({**dev, "roles": {"realm": [ADMIN_COMPOSITE]}}, URL, "c",
                                          "d" if build_realm.has_directory_client(dev) else "")
     assert realm["roles"]["realm"] == [ADMIN_COMPOSITE]
     build_realm.production_realm({**dev, "roles": {"realm": [{"name": "suveryn-admin"}]}}, URL, "c",
                                  "d" if build_realm.has_directory_client(dev) else "")  # a plain role, as before
-    more = {"realm-management": ["manage-users", "manage-realm"]}
+    more = {"realm-management": ["manage-users", "manage-clients"]}
     for bad in ({**ADMIN_COMPOSITE, "composites": {"client": more}},
                 {**ADMIN_COMPOSITE, "composites": {"realm": ["offline_access"]}},
                 {**ADMIN_COMPOSITE, "composites": {"client": {"account": ["manage-account"]}}},
