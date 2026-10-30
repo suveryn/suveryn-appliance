@@ -121,11 +121,12 @@ def check_public_url(url: str) -> str:
 DIRECTORY_CLIENT = "suveryn-directory"  # the gateway's read-only view of the office's accounts (suveryn-tracker#10)
 
 
-def production_realm(dev: dict, public_url: str, client_secret: str, directory_secret: str = "") -> dict:
+def production_realm(dev: dict, public_url: str, client_secret: str, directory_secret: str) -> dict:
     """The development realm with the production settings laid over it. Pure: no I/O.
 
-    ``directory_secret`` is the ``suveryn-directory`` client's, when the development realm has that
-    client (suveryn-core with cases, stage 2); its service account may only view users."""
+    ``directory_secret`` is the ``suveryn-directory`` client's; its service account may only view users."""
+    if not any(c["clientId"] == DIRECTORY_CLIENT for c in dev["clients"]):
+        fail(f"suveryn-core's realm has no {DIRECTORY_CLIENT} client")
     realm = {**dev, **PRODUCTION}
     realm["attributes"] = {**dev.get("attributes", {}), "adminEventsExpiration": str(EVENT_RETENTION_S)}
     [client] = [c for c in dev["clients"] if c["clientId"] == "suveryn-chat"]
@@ -146,10 +147,6 @@ def production_realm(dev: dict, public_url: str, client_secret: str, directory_s
     realm["clients"] = clients
     verify(realm, public_url)
     return realm
-
-
-def has_directory_client(dev: dict) -> bool:
-    return any(c["clientId"] == DIRECTORY_CLIENT for c in dev["clients"])
 
 
 def administrator_user(name: str, email: str, password: str, salt: bytes | None = None) -> dict:
@@ -265,7 +262,7 @@ def main() -> None:
         fail("suveryn-core's realm differs from realm-lock.json")
     secret = secrets.token_urlsafe(32)
     dev = json.loads(data)
-    directory_secret = secrets.token_urlsafe(32) if has_directory_client(dev) else ""
+    directory_secret = secrets.token_urlsafe(32)
     realm = production_realm(dev, public_url, secret, directory_secret)
     if a.administrator:
         admin = json.loads(a.administrator.read_text())
@@ -275,8 +272,7 @@ def main() -> None:
     write_private(a.out / "gateway-oidc.env", "".join(f"{k}={v}\n" for k, v in {
         "SUVERYN_OIDC_ISSUER": f"{issuer_base}/realms/{realm['realm']}", "SUVERYN_OIDC_CLIENT_ID": "suveryn-chat",
         "SUVERYN_OIDC_CLIENT_SECRET": secret, "SUVERYN_PUBLIC_URL": public_url,
-        **({"SUVERYN_DIRECTORY_CLIENT_ID": DIRECTORY_CLIENT, "SUVERYN_DIRECTORY_CLIENT_SECRET": directory_secret}
-           if directory_secret else {})}.items()))
+        "SUVERYN_DIRECTORY_CLIENT_ID": DIRECTORY_CLIENT, "SUVERYN_DIRECTORY_CLIENT_SECRET": directory_secret}.items()))
     print(f"production realm from suveryn-core@{commit[:7]} written to {a.out} (0600). Import suveryn-realm.json, "
           "then delete it: it holds the client secret.", file=sys.stderr)
 
