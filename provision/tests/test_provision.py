@@ -544,30 +544,6 @@ def test_cloud_init_is_told_to_leave_the_hosts_file_alone(monkeypatch, tmp_path)
     assert "manage_etc_hosts: false" in (tmp_path / "cloud.cfg.d" / "99-suveryn-hosts.cfg").read_text()
 
 
-def test_an_older_realm_gets_the_administrator_roles_account_management_and_no_more(monkeypatch, capsys):
-    """The realm is imported once: an appliance installed before suveryn-core's Users gets the suveryn-admin
-    role's composites added (checked against Keycloak 26.8 on 28 October 2026), and one installed before the
-    two-step setting gets manage-realm (30 October); never a role beyond the five."""
-    api, posted = "http://kc/admin/realms/suveryn", []
-    roles = {n: {"id": f"id-{n}", "name": n} for n in ("manage-users", "view-users", "view-realm", "view-events", "manage-realm", "manage-clients")}
-
-    def http(url, headers=None, data=None, timeout=10):
-        if data is not None:
-            posted.append((url, json.loads(data)))
-            return 204, b""
-        answers = {f"{api}/clients?clientId=realm-management": [{"id": "rm"}], f"{api}/roles/suveryn-admin": {"name": "suveryn-admin"},
-                   f"{api}/roles/suveryn-admin/composites/clients/rm": [roles["view-users"], roles["view-realm"]]}
-        if url in answers:
-            return 200, json.dumps(answers[url]).encode()
-        name = url.rsplit("/", 1)[1]
-        return (200, json.dumps(roles[name]).encode()) if url.startswith(f"{api}/clients/rm/roles/") else (404, b"")
-
-    monkeypatch.setattr(p, "http", http)
-    p.admin_role_composites({}, api)
-    assert posted == [(f"{api}/roles/suveryn-admin/composites", [roles["manage-users"], roles["view-events"], roles["manage-realm"]])]
-    assert "added manage-users, view-events, manage-realm" in capsys.readouterr().out
-
-
 def test_verify_finds_the_egress_unit_wherever_systemd_has_it(monkeypatch):
     """The read-only system's suveryn-egress.service is in /usr/lib/systemd/system, not /etc: verify asks
     systemd, so the outgoing-traffic check runs there too. A test machine without it: not checked."""

@@ -1269,71 +1269,6 @@ def keycloak_admin() -> dict[str, str] | None:
     return {"Authorization": f"Bearer {json.loads(body)['access_token']}", "Content-Type": "application/json"}
 
 
-DIRECTORY_SCOPE = ("view-users", "view-realm")
-KC_API = "http://127.0.0.1:8180/idp/admin/realms/suveryn"
-# What the suveryn-admin role carries, as in suveryn-core's realm file: Administration › Users manages the
-# accounts with the administrator's own token, and changes the browser flow for the office's two-step setting
-# (build_realm.ADMIN_ROLE_COMPOSITES checks the same five).
-ADMIN_ROLE_COMPOSITES = ("manage-users", "view-users", "view-realm", "view-events", "manage-realm")
-
-
-def admin_role_composites(auth: dict[str, str], api: str = KC_API) -> None:
-    """The suveryn-admin role's composites, on a realm imported before the realm file had them: the realm is
-    imported once, so an appliance installed earlier would never get them, and Users would answer that
-    Keycloak refused the administrator's rights. Adds what is missing, never more. Idempotent."""
-    def get(url: str):
-        status, body = http(url, auth)
-        return json.loads(body) if status == 200 else None
-    found = get(f"{api}/clients?clientId=realm-management") or []
-    role = get(f"{api}/roles/suveryn-admin")
-    if not found or role is None:
-        return note("administrator role: not in this realm, nothing to do")
-    management = found[0]["id"]
-    have = {r["name"] for r in get(f"{api}/roles/suveryn-admin/composites/clients/{management}") or []}
-    missing = [r for r in ADMIN_ROLE_COMPOSITES if r not in have]
-    if not missing:
-        return note("administrator role: manages the office's accounts")
-    roles = [r for name in missing if (r := get(f"{api}/clients/{management}/roles/{name}")) is not None]
-    status, _ = http(f"{api}/roles/suveryn-admin/composites", auth, json.dumps(roles).encode())
-    note(f"administrator role: added {', '.join(missing)} ({status})")
-
-
-def directory_scope() -> None:
-    """The directory client's scope mapping, on a realm imported before the realm file had it (Pod check
-    of 5e9a539: without it its token carries no roles and adding members fails), and the administrator
-    role's composites (``admin_role_composites``). Idempotent; a realm imported from a current realm file
-    already has both."""
-    # Part of "Starting the services": a "Keycloak" step here would send the web setup's screen back a step.
-    if not wait_for(lambda: 200 in (http("http://127.0.0.1:9000/idp/health/ready")[0], http("http://127.0.0.1:9000/health/ready")[0]),
-                    "Keycloak", 180):
-        return note("directory client: Keycloak isn't ready, not checked (verify reports the directory)")
-    auth = keycloak_admin()
-    if auth is None:
-        return note("directory client: no bootstrap administrator any more, not checked (verify reports the directory)")
-    api = KC_API
-    admin_role_composites(auth, api)
-    def client_uuid(client_id: str) -> str | None:
-        status, body = http(f"{api}/clients?clientId={client_id}", auth)
-        found = json.loads(body) if status == 200 else []
-        return found[0]["id"] if found else None
-    directory, management = client_uuid("suveryn-directory"), client_uuid("realm-management")
-    if not directory or not management:
-        return note("directory client: none in this realm, nothing to do")
-    mapping = f"{api}/clients/{directory}/scope-mappings/clients/{management}"
-    status, body = http(mapping, auth)
-    have = {r["name"] for r in json.loads(body)} if status == 200 else set()
-    missing = [r for r in DIRECTORY_SCOPE if r not in have]
-    if not missing:
-        return note("directory client: view-users and view-realm in its scope")
-    roles = []
-    for name in missing:
-        status, body = http(f"{api}/clients/{management}/roles/{name}", auth)
-        if status == 200:
-            roles.append(json.loads(body))
-    status, _ = http(mapping, auth, json.dumps(roles).encode())
-    note(f"directory client: added {', '.join(missing)} to its scope ({status})")
-
-
 def verify(public_url: str | None) -> bool:
     ok = True
 
@@ -1751,7 +1686,6 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
               a.conversations_keep or "manual")
     step("Starting the services")
     services("restart")  # an update installs new code under services that may be running
-    directory_scope()
     ok = verify(a.public_url)
     if ok and not staging:
         retire_bootstrap_admin(read_env(ETC / "gateway.env"))
@@ -1823,7 +1757,6 @@ def after_restore() -> None:
         reverse_proxy(public_url.split("://", 1)[1].rstrip("/"))
     step("Starting the services")
     services("restart")
-    directory_scope()
     ok = verify(public_url)
     if ok:
         FIRST_BOOT_DONE.write_text(time.strftime("%Y-%m-%dT%H:%M:%SZ\n", time.gmtime()))
