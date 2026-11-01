@@ -556,11 +556,17 @@ def test_cloud_init_is_told_to_leave_the_hosts_file_alone(monkeypatch, tmp_path)
     """VM regression of 29 October, finding 6: cloud-init rewrote /etc/hosts at reboot and dropped the
     appliance's own name; sign-in stayed down. Where cloud-init is, it is told not to manage /etc/hosts."""
     monkeypatch.setattr(p, "CLOUD_CFG", tmp_path / "cloud.cfg.d")
-    p.keep_hosts_from_cloud_init()
+    monkeypatch.setattr(p, "CLOUD_TEMPLATES", tmp_path / "templates")
+    p.keep_hosts_from_cloud_init("office.local")
     assert not (tmp_path / "cloud.cfg.d").exists()  # no cloud-init: nothing written
     (tmp_path / "cloud.cfg.d").mkdir()
-    p.keep_hosts_from_cloud_init()
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "hosts.debian.tmpl").write_text("127.0.0.1 localhost\n")
+    p.keep_hosts_from_cloud_init("office.local")
+    p.keep_hosts_from_cloud_init("office.local")  # once only
     assert "manage_etc_hosts: false" in (tmp_path / "cloud.cfg.d" / "99-suveryn-hosts.cfg").read_text()
+    # VM regression e0f2e26, finding 1: a provider's instance data won over that file; the template carries the line
+    assert (tmp_path / "templates" / "hosts.debian.tmpl").read_text().count("127.0.0.1 office.local") == 1
 
 
 def test_verify_finds_the_egress_unit_wherever_systemd_has_it(monkeypatch):

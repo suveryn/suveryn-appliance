@@ -1153,6 +1153,7 @@ def finish(answers: dict, files: dict) -> None:
     remove(NGINX_SETUP)
     if not ENV("SUVERYN_SETUP_TEST"):
         provision_module().start_nginx()
+        setup_gone_from_nginx()
     summary = {"completed": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                "network": answers["network"],
                "administrator": {k: answers["administrator"][k] for k in ("name", "email")},
@@ -1167,6 +1168,36 @@ def finish(answers: dict, files: dict) -> None:
         if run("systemctl", "disable", "suveryn-setup.service", "suveryn-setup-provision.path")[0] != 0:
             print("suveryn-setup: units not disabled (read-only system); setup-complete keeps them stopped", flush=True)
         run("systemctl", "stop", "--no-block", "suveryn-setup.service", "suveryn-setup-provision.path")
+
+
+def setup_gone_from_nginx(timeout_s: float = 15.0) -> bool:
+    """Wait until nginx serves without the setup locations: a reload returns before its workers switch, and
+    ``/`` still showed the setup for a few seconds after setup-complete (VM regression e0f2e26, finding 17).
+    True once ``/setup/`` answers 404 on this machine; False after ``timeout_s`` (setup closes regardless)."""
+    import ssl
+    import urllib.error
+    import urllib.request
+    host = ""
+    try:
+        for line in (ETC / "gateway.env").read_text().splitlines():
+            if line.startswith("SUVERYN_PUBLIC_URL="):
+                host = line.split("=", 1)[1].strip().strip('"').split("://", 1)[-1].rstrip("/")
+    except OSError:
+        pass
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE  # this machine asking itself, by address
+    end = time.monotonic() + timeout_s
+    while time.monotonic() < end:
+        req = urllib.request.Request("https://127.0.0.1/setup/", headers={"Host": host} if host else {})
+        try:
+            urllib.request.urlopen(req, context=ctx, timeout=2)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return True
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.3)
+    return False
 
 
 def trust_office_ca(pem: bytes) -> None:
