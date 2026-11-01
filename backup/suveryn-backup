@@ -461,7 +461,8 @@ def make(s: dict) -> dict:
         # written without complaint and then couldn't be read (VM regression of 29 October, finding 12).
         for f in manifest["files"]:
             if (bad := unsafe_link(VAR / f)) is not None:
-                raise Failed("files", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
+                # its own step, so the page says what it is (VM regression e0f2e26, finding 5: "an unexpected error")
+                raise Failed("link", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
         target = Target(s)
         with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"

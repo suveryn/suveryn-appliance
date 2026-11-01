@@ -902,6 +902,8 @@ def test_a_link_a_restore_would_refuse_stops_the_backup_before_it_is_written(app
     r = tool(env, "run")
     assert r.returncode != 0 and "a link a restore would refuse (etc)" in (r.stdout + r.stderr)
     assert not list((appliance["target"]).rglob("*.age"))
+    # its own step, which the page words (VM regression e0f2e26, finding 5)
+    assert json.loads((var / "backup" / "status.json").read_text())["last_error"]["step"] == "link"
 
 
 def test_a_restore_stops_and_starts_only_the_units_systemd_has(monkeypatch):
