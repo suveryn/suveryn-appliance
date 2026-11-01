@@ -950,7 +950,7 @@ def reverse_proxy(host: str) -> None:
     hosts = Path("/etc/hosts").read_text()
     if not re.search(rf"^127\.0\.0\.1\s.*\b{re.escape(host)}\b", hosts, re.M):
         Path("/etc/hosts").write_text(hosts.rstrip("\n") + f"\n127.0.0.1 {host}  # suveryn-provision\n")
-    keep_hosts_from_cloud_init()
+    keep_hosts_from_cloud_init(host)
     run("nginx", "-t", capture=True)
     # Ubuntu's nginx.conf loads sites-enabled/; an image with its own nginx.conf may not (RunPod's
     # doesn't), and the site would then silently not be served.
@@ -959,15 +959,31 @@ def reverse_proxy(host: str) -> None:
 
 
 CLOUD_CFG = Path("/etc/cloud/cloud.cfg.d")
+CLOUD_TEMPLATES = Path("/etc/cloud/templates")
 
 
-def keep_hosts_from_cloud_init() -> None:
+def keep_hosts_from_cloud_init(host: str) -> None:
     """A machine with cloud-init (a cloud VM; the stick has none) rewrites /etc/hosts at every boot and drops the line
-    above, and sign-in stays down (VM regression of 29 October, finding 6): it is told to leave /etc/hosts alone."""
+    above, and sign-in stays down (VM regression of 29 October, finding 6): it is told to leave /etc/hosts alone.
+    A provider's own instance data can say otherwise and win (Verda's does: VM regression e0f2e26, finding 1), so the
+    line also goes into the template cloud-init writes /etc/hosts from; ``verify`` says when it is missing."""
     if CLOUD_CFG.is_dir():
         (CLOUD_CFG / "99-suveryn-hosts.cfg").write_text(
             "# suveryn-provision: /etc/hosts holds the appliance's own name (the gateway reaches Keycloak through it)\n"
             "manage_etc_hosts: false\n")
+    line = f"127.0.0.1 {host}  # suveryn-provision"
+    for template in sorted(CLOUD_TEMPLATES.glob("hosts.*.tmpl")) if CLOUD_TEMPLATES.is_dir() else []:
+        text = template.read_text()
+        if not re.search(rf"^127\.0\.0\.1\s.*\b{re.escape(host)}\b", text, re.M):
+            template.write_text(text.rstrip("\n") + "\n" + line + "\n")
+
+
+def hosts_has(host: str) -> bool:
+    """Whether /etc/hosts sends the appliance's own name to this machine."""
+    try:
+        return re.search(rf"^127\.0\.0\.1\s.*\b{re.escape(host)}\b", Path("/etc/hosts").read_text(), re.M) is not None
+    except OSError:
+        return False
 
 
 def sites_loaded(marker: str) -> None:
@@ -1307,6 +1323,10 @@ def verify(public_url: str | None) -> bool:
         s, b = http("http://127.0.0.1:8180/idp/admin/realms/suveryn", auth)
         realm = json.loads(b) if s == 200 else {}
     host = (public_url or gw.get("SUVERYN_PUBLIC_URL", "")).split("://", 1)[-1].rstrip("/")
+    # The machine's own name to itself: lost after a reboot, sign-in stays down (VM regression e0f2e26, finding 1).
+    name = host.split(":", 1)[0]
+    result("Own name", hosts_has(name), f"/etc/hosts sends {name} to 127.0.0.1" if hosts_has(name)
+           else f"/etc/hosts has no 127.0.0.1 line for {name}: sign-in can't reach Keycloak")
     s, b = http("http://127.0.0.1:8180/idp/realms/suveryn/.well-known/openid-configuration",
                 {"X-Forwarded-Proto": "https", "X-Forwarded-Host": host})
     issuer = json.loads(b).get("issuer") if s == 200 else None

@@ -29,6 +29,10 @@ db-username=keycloak
 
 # Health checks on the management port (loopback); no metrics endpoint.
 health-enabled=true
+# One node: the local cache, no cluster. With the default (a cluster found through the database), a node
+# killed and started again found its own old entry and logged "Split-brain detected … should not be serving
+# requests" (VM regression e0f2e26, finding 7). A build option: kc.sh build picks it up.
+cache=local
 metrics-enabled=false
 http-management-port=9000
 
