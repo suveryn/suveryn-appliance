@@ -476,9 +476,17 @@ SELECT format('CREATE DATABASE %I OWNER %I', d, d) FROM unnest(ARRAY['suveryn','
  WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = d) \\gexec
 \\c suveryn
 CREATE EXTENSION IF NOT EXISTS vector;
+GRANT pg_checkpoint TO suveryn;
+GRANT EXECUTE ON FUNCTION pg_switch_wal() TO suveryn;
+ALTER SYSTEM SET wal_recycle = off;
+SELECT pg_reload_conf() \\g /dev/null
 """
+    # After a deletion suveryn-core flushes the WAL that still holds the deleted text (suveryn_rag.journal;
+    # VM regression 03c8f74, finding 3): it may checkpoint and switch the WAL file, and a WAL file let go
+    # is deleted, not renamed and kept for reuse with its old content.
     run("psql", "-q", "-v", "ON_ERROR_STOP=1", user="postgres", input=sql)
-    note("databases suveryn and keycloak, their roles, extension vector (listening on localhost only)")
+    note("databases suveryn and keycloak, their roles, extension vector (listening on localhost only); "
+         "the WAL let go right after a deletion")
     return f"postgresql://suveryn:{suveryn_pw}@127.0.0.1:5432/suveryn", keycloak_pw
 
 

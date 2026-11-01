@@ -970,8 +970,17 @@ def cmd_key_test(_a) -> int:
     key still open this appliance's newest backup, and is every part of it there? The appliance can't read
     its own backups, so without this a lost key or a damaged backup shows only on the day of a restore.
     Restores nothing. The key is deleted at the end whatever happened; the result goes to key-test.json
-    (no secrets), which the gateway shows."""
+    (no secrets), which the gateway shows.
+
+    A wrong file (step ``key``: another appliance's key, an old one) says nothing about the office's key:
+    the last test that passed is kept in ``last_ok``, so one wrong file doesn't mark the key as failing on
+    Status (VM regression 03c8f74, finding 4)."""
     key, result = KEY_TEST / "key", {"at": now()}
+    try:
+        before = json.loads((STATE / "key-test.json").read_text())
+        last_ok = {k: before[k] for k in ("at", "created") if k in before} if before.get("ok") is True else before.get("last_ok")
+    except (OSError, ValueError, AttributeError):
+        last_ok = None
     try:
         (KEY_TEST / "request").unlink(missing_ok=True)
         if not key.is_file() or key.is_symlink():
@@ -980,7 +989,7 @@ def cmd_key_test(_a) -> int:
         if s is None:
             raise Failed("settings", "backups aren't set up")
         if recipient_of(key) != s["recipient"]:
-            raise Failed("decrypt", "this isn't this appliance's recovery key: it opens none of its backups")
+            raise Failed("key", "this isn't this appliance's recovery key: it opens none of its backups")
         with Target(s) as folder:
             found = backups_in(folder)
             if not found:
@@ -992,6 +1001,8 @@ def cmd_key_test(_a) -> int:
         result.update(ok=True, file=found[0]["file"], created=manifest["created"])
     except Failed as e:
         result.update(ok=False, step=e.step, message=str(e)[:300])
+        if isinstance(last_ok, dict) and isinstance(last_ok.get("at"), str):
+            result["last_ok"] = {k: str(last_ok[k])[:40] for k in ("at", "created") if k in last_ok}
     finally:
         key.unlink(missing_ok=True)
         STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
