@@ -673,7 +673,11 @@ def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key
     other = tmp_path / "other.key"
     subprocess.run(["age-keygen", "-o", str(other)], capture_output=True, check=True)
     r, out = test_with(other.read_text())  # another appliance's key, or an old one
-    assert r.returncode == 1 and out["ok"] is False and out["step"] == "decrypt" and "isn't this appliance's recovery key" in out["message"]
+    assert r.returncode == 1 and out["ok"] is False and out["step"] == "key" and "isn't this appliance's recovery key" in out["message"]
+    passed = out["last_ok"]  # a wrong file keeps the last test that passed (VM regression 03c8f74, finding 4)
+    assert passed["at"] and passed["created"]
+    r, out = test_with(other.read_text())
+    assert out["last_ok"] == passed  # and keeps it through the next wrong file
     assert tool(env, "key-test").returncode == 1 and json.loads(result.read_text())["step"] == "settings"  # no key given
 
 
