@@ -10,7 +10,7 @@ and keeps the office's answers, runs provisioning with them, and closes setup on
 |---|---|
 | [`suveryn-setup`](suveryn-setup) | `prepare`, `serve`, `provision` (and `watch` for a machine without systemd) |
 | [`systemd/`](systemd) | `suveryn-setup.service` (prepare, then serve), `suveryn-setup-provision.path` and `.service` |
-| [`nginx-setup.conf`](nginx-setup.conf) | The setup locations: the page at `/` and the API at `/setup/v1/`, from private addresses only |
+| [`nginx-setup.conf`](nginx-setup.conf) | The setup locations: the page at `/` and the API at `/setup/v1/`, from private addresses only, each response closing its connection so the chat is at `/` the moment setup closes (VM regression 9c97d76, finding 6) |
 | [`nginx-setup-site.conf.template`](nginx-setup-site.conf.template) | The site before provisioning: only those locations and the page's files |
 | [`tests/`](tests) | Unit tests, and a browser check from Welcome to Complete |
 

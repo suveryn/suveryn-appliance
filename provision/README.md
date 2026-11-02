@@ -96,8 +96,10 @@ the read-only system an air-gapped appliance with neither stops.
 - **The proxy** ([`reverse-proxy`](../reverse-proxy/README.md)): TLS 1.2/1.3 with a certificate valid
   for the name and TLS 1.1 refused; http redirects to https; the security headers on the UI, the
   API and Keycloak; `/docs`, `/redoc` and `/openapi.json` answer 404.
-- **Sign-in and an upload end to end over https**: a temporary Keycloak user signs in through the
-  login page as a browser would, uploads the fictional PDF to `/v1/documents`, sees it read, deletes
+- **Sign-in and an upload end to end over https**: a temporary Keycloak user with an authenticator
+  app of its own (an OTP credential) signs in through the login page as a browser would, giving the app's
+  code when Keycloak asks, so the check passes with two-step required for everyone too (VM regression
+  9c97d76, finding 2), uploads the fictional PDF to `/v1/documents`, sees it read, deletes
   it and signs out; the user is then removed. Making that user needs Keycloak's temporary
   administrator (`KC_BOOTSTRAP_ADMIN_PASSWORD` in `keycloak.env`). On an office's appliance
   `first-boot` deletes it once `verify` has passed and the office has its own administrator (#55);
