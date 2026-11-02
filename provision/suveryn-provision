@@ -1569,18 +1569,42 @@ def verify_proxy(host: str, admin_password: str) -> list[tuple[str, bool, str]]:
     return out
 
 
+def totp(secret: str, at: float | None = None) -> str:
+    """The six-digit code of an authenticator app for ``secret`` (RFC 6238, SHA-1, 30 s), as Keycloak checks it:
+    its OTP credential's secret is the key as text."""
+    import hashlib
+    import hmac
+    import struct
+    digest = hmac.new(secret.encode(), struct.pack(">Q", int((time.time() if at is None else at) // 30)), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    return f"{(struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1_000_000:06d}"
+
+
+def otp_form(page: str):
+    """The action of Keycloak's two-step code page, if this is it."""
+    return re.search(r'<form[^>]*id="kc-otp-login-form"[^>]*action="([^"]+)"', page) or \
+        re.search(r'<form[^>]*action="([^"]+)"[^>]*id="kc-otp-login-form"', page)
+
+
 def verify_sign_in(base: str, ctx: ssl.SSLContext, admin_password: str) -> tuple[str, bool, str]:
-    """Sign in through the proxy as a temporary user, upload a fictional PDF over HTTPS, read it, delete it."""
+    """Sign in through the proxy as a temporary user, upload a fictional PDF over HTTPS, read it, delete it.
+
+    The user has an authenticator app (an OTP credential made with it) and gives its code when asked, so the check
+    passes whether the office requires two-step or not; before, with two-step required for everyone, the user was
+    sent to set up an app and the check failed though nothing was wrong (VM regression 9c97d76, finding 2)."""
     status, body = http("http://127.0.0.1:8180/idp/realms/master/protocol/openid-connect/token", data=(
         "grant_type=password&client_id=admin-cli&username=suveryn-setup&password=" + urllib.parse.quote(admin_password)).encode())
     if status != 200:
         return "Sign-in and upload over HTTPS", False, f"no admin token ({status})"
     auth = {"Authorization": f"Bearer {json.loads(body)['access_token']}", "Content-Type": "application/json"}
     users = "http://127.0.0.1:8180/idp/admin/realms/suveryn/users"
-    name, password = f"verify-{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(18)
+    name, password, otp_secret = f"verify-{uuid.uuid4().hex[:8]}", secrets.token_urlsafe(18), secrets.token_hex(10)
+    app = {"type": "otp", "userLabel": "provisioning check",
+           "secretData": json.dumps({"value": otp_secret}),
+           "credentialData": json.dumps({"subType": "totp", "digits": 6, "counter": 0, "period": 30, "algorithm": "HmacSHA1"})}
     http(users, auth, json.dumps({"username": name, "enabled": True, "email": f"{name}@provision.invalid",
                                   "emailVerified": True, "firstName": "Provisioning", "lastName": "Check",
-                                  "credentials": [{"type": "password", "value": password, "temporary": False}]}).encode())
+                                  "credentials": [{"type": "password", "value": password, "temporary": False}, app]}).encode())
     status, body = http(f"{users}?username={name}&exact=true", auth)
     user_id = (json.loads(body) or [{}])[0].get("id") if status == 200 else None
     jar = CookieJar()
@@ -1594,6 +1618,15 @@ def verify_sign_in(base: str, ctx: ssl.SSLContext, admin_password: str) -> tuple
         steps.append(f"login page {'found' if action else 'not found'}")
         landed = browser.open(unescape(action.group(1)), data=urllib.parse.urlencode(
             {"username": name, "password": password, "credentialId": ""}).encode(), timeout=30)
+        code_page = otp_form(landed.read().decode(errors="replace"))
+        for attempt in range(2):  # the user has an app, so Keycloak asks for its code (two-step required or not)
+            if not code_page:
+                break
+            if attempt:  # the code fell at a step's edge: the next step's
+                time.sleep(30 - time.time() % 30 + 1)
+            landed = browser.open(unescape(code_page.group(1)), data=urllib.parse.urlencode({"otp": totp(otp_secret)}).encode(), timeout=30)
+            code_page = otp_form(landed.read().decode(errors="replace"))
+            steps.append("two-step code given" if not code_page else "two-step code refused")
         me = json.loads(browser.open(f"{base}/auth/me", timeout=30).read())
         steps.append(f"signed in as {me.get('username')}, back at {urllib.parse.urlsplit(landed.url).path}")
         boundary = uuid.uuid4().hex

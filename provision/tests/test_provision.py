@@ -590,3 +590,16 @@ def test_verify_finds_the_egress_unit_wherever_systemd_has_it(monkeypatch):
     src = (HERE / "suveryn-provision").read_text()
     part = src[src.index("def verify("):src.index("def directory_auth(")]
     assert 'if unit_installed("suveryn-egress.service"):' in part and "/etc/systemd/system/suveryn-egress" not in part
+
+
+def test_verify_answers_keycloaks_two_step_page_with_its_own_app():
+    """VM regression 9c97d76, finding 2: with two-step required for everyone, verify's test user was sent to set up
+    an app and the check failed. The user now has an app (an OTP credential) and gives its code: RFC 6238's vectors."""
+    assert p.totp("12345678901234567890", 59) == "287082"
+    assert p.totp("12345678901234567890", 1111111109) == "081804"
+    page = '<form id="kc-otp-login-form" class="pf" onsubmit="" action="https://x/idp/login-actions/authenticate?a=1&amp;b=2" method="post">'
+    assert p.otp_form(page).group(1).endswith("a=1&amp;b=2")
+    assert p.otp_form('<form id="kc-form-login" action="https://x/y">') is None
+    src = (HERE / "suveryn-provision").read_text()
+    part = src[src.index("def verify_sign_in("):src.index("# ---------------------------------------------------------------------------- main")]
+    assert '"type": "otp"' in part and '"otp": totp(otp_secret)' in part
