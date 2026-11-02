@@ -58,6 +58,8 @@ Event retention is 180 days, decided on 2026-10-11. Long enough to investigate a
 - PostgreSQL, with the password from the environment, never from the file;
 - health checks on, metrics off.
 
+[`../quarkus.properties`](../quarkus.properties) holds the one setting keycloak.conf has no option for: a pooled database connection is checked before use (`quarkus.datasource.jdbc.validate-on-borrow`), so that after PostgreSQL restarts the first sign-in doesn't fail on a dead connection (found by suveryn-core's end-to-end lifecycle scenarios, 2 November 2026). Provisioning copies it beside keycloak.conf.
+
 With `sslRequired: all`, the gateway must reach Keycloak through its public https URL. That is the issuer in `gateway-oidc.env`. The appliance must therefore resolve its own name to itself. Plain http to the realm is refused (checked: 403).
 
 ## Tested
