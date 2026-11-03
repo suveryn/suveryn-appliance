@@ -358,6 +358,17 @@ def test_keycloaks_host_name_comes_from_its_environment_not_its_configuration_fi
     assert "keycloak.conf\").write_text" not in first_boot_part and "conf\" / \"keycloak.conf\").write" not in first_boot_part
 
 
+def test_keycloak_checks_a_pooled_connection_before_using_it():
+    """After PostgreSQL restarted, Keycloak's first request failed on a dead pooled connection: the person signing in
+    got its error page (suveryn-core's end-to-end lifecycle scenario, 2 November 2026). The setting lives in
+    keycloak/quarkus.properties, which provisioning copies beside keycloak.conf, also onto a prebuilt Keycloak."""
+    props = (HERE.parent / "keycloak" / "quarkus.properties").read_text()
+    assert "quarkus.datasource.jdbc.validate-on-borrow=true" in props.replace(" ", "")
+    src = (HERE / "suveryn-provision").read_text()
+    software = src[src.index("def keycloak_software"):src.index("def keycloak(public_url")]
+    assert software.count('"quarkus.properties"') >= 2  # before the prebuilt early return, and with keycloak.conf
+
+
 def test_the_language_models_come_from_an_installed_bundle_where_it_is(tmp_path, monkeypatch, capsys):
     """The read-only system's one path (#47): the installer's bundle, used where it is, never copied."""
     data = b"weights"

@@ -5,7 +5,8 @@ After=network.target postgresql.service
 # Wants, not Requires: with Requires, stopping PostgreSQL stopped Keycloak, and starting PostgreSQL didn't
 # bring it back, so no one could sign in (round 2, finding 2). Keycloak outlives a stopped database: its
 # sign-ins fail meanwhile and work again within about ten seconds of the database's return (checked on
-# Keycloak 26.8 with PostgreSQL 16).
+# Keycloak 26.8 with PostgreSQL 16), the first one included: its pool checks a connection before using it
+# (keycloak/quarkus.properties), instead of failing once on a dead one.
 Wants=postgresql.service
 # Should it stop on its own anyway, it starts again, for as long as it takes.
 StartLimitIntervalSec=0

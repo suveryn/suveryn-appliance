@@ -728,6 +728,10 @@ def keycloak_software() -> None:
     step(f"Keycloak {VERSIONS['keycloak']['version']} and the theme")
     v = VERSIONS["keycloak"]
     built = KEYCLOAK / ".suveryn-built"
+    # Runtime settings keycloak.conf has no option for (keycloak/quarkus.properties): copied whenever the folder
+    # is writable, also onto a Keycloak built beforehand, since they need no build.
+    if (KEYCLOAK / "conf").is_dir() and not read_only_system():
+        shutil.copyfile(REPO / "keycloak" / "quarkus.properties", KEYCLOAK / "conf" / "quarkus.properties")
     if built.exists() and built.read_text() == keycloak_built_as():
         # Built beforehand for the image (image/prebuild.sh): Java's compiler crashes in an emulated build machine.
         run("chown", "-R", "keycloak:keycloak", KEYCLOAK)  # unpacked as root
@@ -742,6 +746,7 @@ def keycloak_software() -> None:
     # keycloak.conf's build options (database kind, health, paths) are fixed; the host name is a runtime
     # option, set at first boot. The example's name stands in until then.
     shutil.copyfile(REPO / "keycloak" / "keycloak.conf.example", KEYCLOAK / "conf" / "keycloak.conf")
+    shutil.copyfile(REPO / "keycloak" / "quarkus.properties", KEYCLOAK / "conf" / "quarkus.properties")
     # The theme, built from suveryn-brand at the commit in keycloak/theme/brand-lock.json.
     run(UV, "run", "-q", REPO / "keycloak" / "theme" / "build_theme.py", cwd=REPO, env={"UV_CACHE_DIR": str(VAR / "uv-cache")})
     shutil.copy2(REPO / "keycloak" / "theme" / "build" / "suveryn-keycloak-theme.jar", KEYCLOAK / "providers")
