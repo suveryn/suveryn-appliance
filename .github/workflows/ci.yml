@@ -29,6 +29,51 @@ jobs:
             python3 -m json.tool "$f" > /dev/null && echo "OK: $f"
           done
 
+  tests:
+    name: Every folder's tests (as a user, then as root)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: What the tests need
+        # The backup tests want a PostgreSQL with pgvector reachable on its socket, age and zstd; the reader
+        # sandbox wants python3-seccomp; the network mode wants dnsmasq and ip. Without them those tests skip
+        # themselves and say so, which is what happened on every machine that ran them by hand (handbook,
+        # testing/regression-gap-analysis.md: the appliance's findings were in exactly these parts).
+        run: |
+          sudo apt-get update -qq
+          pgvector=$(apt-cache search --names-only '^postgresql-[0-9]+-pgvector$' | awk '{print $1}' | sort -V | tail -1)
+          sudo apt-get install -y -qq python3-pytest python3-yaml python3-seccomp age zstd dnsmasq iproute2 \
+                                      postgresql postgresql-contrib "$pgvector"
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "select version()"
+
+      - name: As a user (what a developer runs)
+        run: python3 -m pytest */tests image/mkosi/test -q -p no:cacheprovider -rs
+
+      - name: As root, with PostgreSQL (the sandbox, the network mode, the backups and their restore)
+        env:
+          SUVERYN_TEST_PG_HOST: /var/run/postgresql
+          SUVERYN_TEST_PG_PORT: "5432"
+        run: sudo -E python3 -m pytest */tests image/mkosi/test -q -p no:cacheprovider -rs
+
+  executable-bits:
+    name: Scripts keep their executable bit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Every tracked file that starts with a shebang is executable
+        # suveryn-provision was once committed without it (VM regression e0f2e26, finding 18).
+        run: |
+          status=0
+          while IFS= read -r f; do
+            if [ "$(head -c 2 "$f" 2>/dev/null)" = "#!" ] && [ ! -x "$f" ]; then
+              echo "::error file=$f::starts with #! but isn't executable (git update-index --chmod=+x $f)"
+              status=1
+            fi
+          done < <(git ls-files | grep -v '\.nft$')   # inbound.nft is read by "nft -f", never run
+          exit $status
+
   mkosi-config-check:
     name: mkosi config sanity check (no build)
     runs-on: ubuntu-latest
