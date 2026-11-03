@@ -12,6 +12,7 @@ kc.sh import --file /root/suveryn-realm/suveryn-realm.json   # or the admin cons
 ```
 
 It writes two files, both 0600 and git-ignored here:
+
 - `suveryn-realm.json`: to import once, then delete, because it holds the client secret (and, with
   `--administrator FILE`, the office's administrator from the web setup);
 - `gateway-oidc.env`: `SUVERYN_OIDC_ISSUER`, `SUVERYN_OIDC_CLIENT_ID`, `SUVERYN_OIDC_CLIENT_SECRET` and
@@ -40,6 +41,7 @@ where the chat client has a service account, or where the directory client could
 | The office's administrator | none | with `--administrator FILE` (`{name, email, password}`, from the web setup): signs in with the email address; realm role `suveryn-admin` and user management in the admin console (`manage-users`, `view-users`, `query-users`, `query-groups`); through `suveryn-admin` also `manage-realm`, for the two-step setting | Made by the realm import, so no password passes through Keycloak's admin API. The file holds only a pbkdf2-sha512 hash (210,000 iterations), which Keycloak 26 reads; checked by signing in with Keycloak 26.8 |
 
 Everything else comes unchanged from the development realm:
+
 - the authorisation-code flow with PKCE S256 only;
 - no password grant;
 - brute-force protection;
@@ -53,6 +55,7 @@ Event retention is 180 days, decided on 2026-10-11. Long enough to investigate a
 ## Keycloak itself
 
 [`../keycloak.conf.example`](../keycloak.conf.example) is the production configuration:
+
 - a fixed `hostname` (`https://<office>/idp`), so issuer and redirects never come from request headers;
 - `proxy-headers=xforwarded` behind the appliance's TLS proxy, listening on loopback only;
 - PostgreSQL, with the password from the environment, never from the file;
@@ -65,6 +68,7 @@ With `sslRequired: all`, the gateway must reach Keycloak through its public http
 ## Tested
 
 **Tests** (`python3 -m pytest keycloak/realm/tests`, with a suveryn-core checkout next to this one):
+
 - the overrides are applied;
 - everything else equals the development realm;
 - weakened development realms are refused;
@@ -73,6 +77,7 @@ With `sslRequired: all`, the gateway must reach Keycloak through its public http
 - the built files can't be committed.
 
 **Imported into Keycloak 26.8.0** on the dev pod as a temporary realm, read back through the admin API, then deleted (2026-10-11):
+
 - every setting above arrived as intended, including the client's exact URLs, PKCE S256 and the admin-events expiry;
 - http requests to the realm were refused.
 
