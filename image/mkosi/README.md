@@ -254,7 +254,8 @@ setup refuses an expired manifest. The console doesn't read the manifest yet.
 
 ## Signed bundles (#36)
 
-`/usr/lib/suveryn/bundle` checks and installs signed bundles (models now, system updates in #40)
+`/usr/lib/suveryn/bundle` checks and installs signed bundles (models and packs now, system updates in #40;
+a packs bundle on the stick is installed without a choice and becomes its pack's current version)
 against the public keys in `/usr/lib/suveryn/bundle-keys`: two per release, the current AWS KMS
 key and a spare. Format, signing and key handling: [`bundles/`](../../bundles/README.md).
 

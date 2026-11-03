@@ -614,3 +614,81 @@ def test_verify_answers_keycloaks_two_step_page_with_its_own_app():
     src = (HERE / "suveryn-provision").read_text()
     part = src[src.index("def verify_sign_in("):src.index("# ---------------------------------------------------------------------------- main")]
     assert '"type": "otp"' in part and '"otp": totp(otp_secret)' in part
+
+
+# ---------------------------------------------------------------------------- packs
+def test_versions_are_ordered_as_numbers_where_they_are_numbers():
+    assert sorted(["2026.11.2", "2026.11.10", "2026.12.1", "2026.11.1"], key=p.version_key) == \
+        ["2026.11.1", "2026.11.2", "2026.11.10", "2026.12.1"]
+    assert sorted(["1.4", "1.4-rc1", "1.10"], key=p.version_key) == ["1.4", "1.4-rc1", "1.10"]
+
+
+@pytest.fixture
+def packs_world(tmp_path, monkeypatch):
+    """A fake core whose loader prints what it finds; two installed packs bundles, one of them current."""
+    core = tmp_path / "core"
+    (core / ".venv" / "bin").mkdir(parents=True)
+    fake = core / ".venv" / "bin" / "python"
+    fake.write_text("#!/bin/sh\n# the loader: one line per manifest, as python -m suveryn_playbooks prints\n"
+                    "d=\"$3\"\nfor m in \"$d\"/*/*.yaml; do [ -e \"$m\" ] || continue; "
+                    "echo \"playbook/$(basename $(dirname $m))/$(basename $m .yaml) 1.0: 1 facts\"; done\n")
+    fake.chmod(0o755)
+    bundles = tmp_path / "bundles"
+    for name, version in (("be-notary", "2026.11.1"), ("be-notary", "2026.12.1"), ("be-lawyer", "2026.11.1")):
+        d = bundles / "packs" / name / version
+        (d / "text").mkdir(parents=True)
+        (d / "manifest.json").write_text("{}")
+        (d / "company-formation.yaml").write_text(f"version: {version}\n")
+    packs = tmp_path / "packs"
+    packs.mkdir()
+    (packs / "be-notary").symlink_to("../bundles/packs/be-notary/2026.11.1")  # the installer's link: current
+    monkeypatch.setattr(p, "CORE", core)
+    monkeypatch.setattr(p, "BUNDLES", bundles)
+    monkeypatch.setattr(p, "PACKS", packs)
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    monkeypatch.setattr(p, "run", lambda *cmd, **kw: subprocess.run([str(c) for c in cmd], capture_output=True,
+                                                                    text=True, check=True, cwd=kw.get("cwd")).stdout
+                        if cmd[0] != "chmod" else "")
+    return {"tmp": tmp_path, "packs": packs, "bundles": bundles}
+
+
+def test_the_packs_directory_keeps_the_current_version_and_gives_a_new_pack_its_newest(packs_world, capsys):
+    found = p.packs(None)
+    packs = packs_world["packs"]
+    # be-notary stays at the version the installer made current: an installed newer bundle is not a switch
+    assert (packs / "be-notary").is_symlink() and (packs / "be-notary").resolve().name == "2026.11.1"
+    # be-lawyer had no current version: its newest
+    assert (packs / "be-lawyer").is_symlink() and (packs / "be-lawyer").resolve().name == "2026.11.1"
+    assert found == ["playbook/be-lawyer/company-formation 1.0: 1 facts", "playbook/be-notary/company-formation 1.0: 1 facts"]
+    out = capsys.readouterr().out
+    assert "be-notary: 2026.11.1 (installed bundle, current)" in out and "be-lawyer: 2026.11.1 (installed bundle, newest; made current)" in out
+
+
+def test_a_checkout_fills_the_packs_directory_on_a_test_machine_only(packs_world, monkeypatch):
+    checkout = packs_world["tmp"] / "suveryn-packs"
+    (checkout / "be-test" / "text").mkdir(parents=True)
+    (checkout / "be-test" / "deed-intake.yaml").write_text("version: 9\n")
+    (checkout / ".git").mkdir()
+    (checkout / "README.md").write_text("not a pack")
+    p.packs(checkout)
+    packs = packs_world["packs"]
+    assert (packs / "be-test").is_dir() and not (packs / "be-test").is_symlink()
+    assert (packs / "be-test" / "deed-intake.yaml").read_text() == "version: 9\n"
+    assert (packs / "be-notary").is_symlink()  # the bundles' packs stay
+    monkeypatch.setattr(p, "read_only_system", lambda: True)
+    with pytest.raises(SystemExit):
+        p.packs(checkout)
+
+
+def test_an_empty_packs_directory_is_fine(packs_world, capsys):
+    import shutil
+    shutil.rmtree(packs_world["bundles"])
+    (packs_world["packs"] / "be-notary").unlink()
+    assert p.packs(None) == []
+    assert "no packs installed" in capsys.readouterr().out
+
+
+def test_the_gateway_is_told_where_the_packs_are(monkeypatch, tmp_path):
+    import inspect
+    src = inspect.getsource(p.configure)
+    assert '"SUVERYN_PACKS_DIR": str(PACKS)' in src and p.PACKS == Path("/var/lib/suveryn/packs")

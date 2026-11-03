@@ -244,6 +244,70 @@ def test_a_system_bundle_isnt_installed_as_a_model(world):
     assert code == 1 and "#40" in out["error"]
 
 
+# ---------------------------------------------------------------------------- packs
+def pack(world, version: str, words: str = '{"labels": {}}\n') -> Path:
+    """A packs bundle as suveryn-packs makes it: the pack's folder (manifests at the root, text/ beside)."""
+    b = world["tmp"] / f"be-test-{version}"
+    if b.exists():
+        return b
+    (b / "text").mkdir(parents=True)
+    (b / "company-formation.yaml").write_text(f"manifest: 3\nid: playbook/be-test/company-formation\nversion: \"{version}\"\n")
+    for lang in ("en", "nl", "fr"):
+        (b / "text" / f"{lang}.json").write_text(words)
+    release("make", b, "--kind", "packs", "--name", "be-test", "--version", version, "--title", "Belgian notaries (test)")
+    release("sign", b, "--key-file", world["tmp"] / "current.key")
+    return b
+
+
+def test_a_packs_bundle_installs_beside_the_models_and_becomes_the_packs_current_version(world):
+    code, out = tool(world, "install", pack(world, "2026.11.1"))
+    dest = world["tmp"] / "installed" / "packs" / "be-test" / "2026.11.1"
+    current = world["tmp"] / "packs" / "be-test"  # next to the bundles' root: what the gateway reads
+    assert code == 0 and out["kind"] == "packs" and out["installed"] == str(dest) and out["current"] == str(current)
+    assert sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file()) == \
+        ["company-formation.yaml", "manifest.json", "manifest.sig", "text/en.json", "text/fr.json", "text/nl.json"]
+    assert current.is_symlink() and os.readlink(current) == "../installed/packs/be-test/2026.11.1"  # relative: holds under any mount
+    assert (current / "company-formation.yaml").read_text().startswith("manifest: 3")
+
+
+def test_a_newer_packs_bundle_moves_the_link_and_the_old_version_stays(world):
+    tool(world, "install", pack(world, "2026.11.1"))
+    code, out = tool(world, "install", pack(world, "2026.12.1", words='{"labels": {"x": "y"}}\n'))
+    current = world["tmp"] / "packs" / "be-test"
+    assert code == 0 and os.readlink(current).endswith("/be-test/2026.12.1")
+    assert (world["tmp"] / "installed" / "packs" / "be-test" / "2026.11.1" / "text" / "en.json").exists()
+    assert (current / "text" / "en.json").read_text() == '{"labels": {"x": "y"}}\n'
+    # installing the old one again points the link back at it: a way back, by hand
+    code, out = tool(world, "install", pack(world, "2026.11.1"))
+    assert code == 0 and out["already"] is True and os.readlink(current).endswith("/be-test/2026.11.1")
+
+
+def test_a_packs_directory_elsewhere(world):
+    elsewhere = world["tmp"] / "elsewhere"
+    world["env"]["SUVERYN_PACKS_DIR"] = str(elsewhere)
+    code, out = tool(world, "install", pack(world, "2026.11.1"))
+    assert code == 0 and out["current"] == str(elsewhere / "be-test")
+    assert (elsewhere / "be-test" / "text" / "nl.json").exists()
+
+
+def test_a_packs_bundle_without_a_playbook_is_refused(world):
+    b = world["tmp"] / "empty-pack"
+    (b / "text").mkdir(parents=True)
+    (b / "text" / "en.json").write_text("{}")
+    r = release("make", b, "--kind", "packs", "--name", "be-test", "--version", "1", check=False)
+    assert r.returncode == 1 and "*.yaml" in r.stderr  # the release side refuses it with the appliance's own check
+    # and signed past that check, the appliance refuses it too
+    (b / "company-formation.yaml").write_text("x")
+    release("make", b, "--kind", "packs", "--name", "be-test", "--version", "1")
+    release("sign", b, "--key-file", world["tmp"] / "current.key")
+    m = json.loads((b / "manifest.json").read_text())
+    m["files"] = [f for f in m["files"] if not f["path"].endswith(".yaml")]
+    world["bundle"] = b
+    resign(world, m)
+    code, out = tool(world, "verify", b)
+    assert code == 1 and "*.yaml" in out["error"]
+
+
 # ---------------------------------------------------------------------------- the release side
 def test_make_refuses_a_link(world, tmp_path):
     (world["bundle"] / "link").symlink_to(tmp_path / "current.key")

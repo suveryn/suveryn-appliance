@@ -83,3 +83,47 @@ def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
     args = argparse.Namespace(name="x", timezone="Europe/Brussels", disk="/dev/null")
     with pytest.raises(install.Refused, match="not as the installer"):
         install.install(args)
+
+
+# ---------------------------------------------------------------------------- the stick's bundles (C3)
+RELEASE = Path(__file__).resolve().parents[3] / "bundles" / "suveryn-bundle-release"
+
+
+def signed(tmp_path: Path, keys: Path, folder: str, kind: str, name: str, files: dict[str, str]) -> Path:
+    import subprocess
+    b = tmp_path / "stick" / folder
+    for rel, text in files.items():
+        (b / rel).parent.mkdir(parents=True, exist_ok=True)
+        (b / rel).write_text(text)
+    key = tmp_path / "release.key"
+    if not key.exists():
+        subprocess.run([sys.executable, str(RELEASE), "test-key", str(key)], check=True, capture_output=True)
+        keys.mkdir(exist_ok=True)
+        pem = subprocess.run([sys.executable, str(RELEASE), "public-key", "--key-file", str(key)], check=True,
+                             capture_output=True, text=True).stdout
+        (keys / "current.pem").write_text(pem)
+    subprocess.run([sys.executable, str(RELEASE), "make", str(b), "--kind", kind, "--name", name, "--version", "2026.11.1"],
+                   check=True, capture_output=True)
+    subprocess.run([sys.executable, str(RELEASE), "sign", str(b), "--key-file", str(key)], check=True, capture_output=True)
+    return b
+
+
+def test_c3_lists_the_models_and_the_packs_are_installed_without_a_choice(tmp_path, monkeypatch):
+    """A packs bundle on the stick is not a model to choose (C3 shows models); install() takes every valid one."""
+    keys = tmp_path / "keys"
+    monkeypatch.setenv("SUVERYN_BUNDLE_KEYS", str(keys))
+    monkeypatch.setattr(install, "LIB", TOOL.parent)
+    signed(tmp_path, keys, "qwen-test", "model", "qwen-test", {"model.gguf": "not a model, a test"})
+    signed(tmp_path, keys, "be-test-2026.11.1", "packs", "be-test",
+           {"company-formation.yaml": "manifest: 3\n", "text/en.json": "{}", "text/nl.json": "{}", "text/fr.json": "{}"})
+    stick = tmp_path / "stick"
+    models = install.list_models(stick)
+    assert [(m["folder"], m["kind"]) for m in models] == [("qwen-test", "model")]
+    packs = install.list_models(stick, "packs")
+    assert [(m["name"], m["version"], m["valid"]) for m in packs] == [("be-test", "2026.11.1", True)]
+    # the pack installed under an installer's target becomes the pack's current version, by a relative link
+    bundle = install.load("bundle")
+    target = tmp_path / "target"
+    r = bundle.install(packs and stick / packs[0]["folder"], target / "lib/suveryn/bundles")
+    assert r["current"] == str(target / "lib/suveryn/packs/be-test")
+    assert (target / "lib/suveryn/packs/be-test/text/nl.json").read_text() == "{}"

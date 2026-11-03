@@ -93,6 +93,7 @@ KEYCLOAK = Path("/opt/keycloak")
 CORE = OPT / "core"
 LLAMA = OPT / "llama.cpp"
 MODELS = VAR / "models"
+PACKS = VAR / "packs"  # the packs directory the gateway reads (SUVERYN_PACKS_DIR): one entry per pack, the current version
 HF_HOME = VAR / "hf"
 IMAGE_HF_HOME = OPT / "hf"  # the read-only system's: the embedding and Docling models are part of the image (#47)
 CUDA_LIBS = OPT / "lib" / "cuda"  # the read-only system's: the CUDA libraries llama-server links against
@@ -1080,6 +1081,69 @@ RESOLV_TEXT = ("# Written by suveryn-provision: the appliance's own resolver (su
                "nameserver 127.0.0.1\noptions edns0 trust-ad\n")
 
 
+# ---------------------------------------------------------------------------- packs
+def version_key(version: str) -> tuple:
+    """Versions in order: dotted numbers numerically (2026.11.1 < 2026.11.2 < 2026.12.1), the rest as text."""
+    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"[.+_-]", version))
+
+
+def installed_packs() -> dict[str, list[str]]:
+    """Every installed packs bundle, by pack: ``{"be-notary": ["2026.11.1", "2026.12.1"]}`` (oldest first)."""
+    out: dict[str, list[str]] = {}
+    for d in sorted((BUNDLES / "packs").glob("*/*")) if (BUNDLES / "packs").is_dir() else []:
+        if (d / "manifest.json").exists():
+            out.setdefault(d.parent.name, []).append(d.name)
+    return {name: sorted(versions, key=version_key) for name, versions in out.items()}
+
+
+def packs(packs_from: Path | None) -> list[str]:
+    """The packs directory (SUVERYN_PACKS_DIR, /var/lib/suveryn/packs): one entry per pack, the pack's current
+    version. From the installed packs bundles (the installer, or ``bundle install`` later, made each the
+    current version; a pack that has none yet gets its newest), or, on a test machine, copied from a
+    checkout of suveryn-packs with ``--packs-from`` (unsigned content: never on an office's appliance).
+    Then every playbook in it is loaded with core's own loader, so a pack that doesn't load stops here
+    rather than the gateway. Returns the playbooks found."""
+    step("Packs (certified profession packs: the playbooks beyond core's reference one)")
+    PACKS.mkdir(parents=True, exist_ok=True)
+    os.chmod(PACKS, 0o755)
+    for name, versions in installed_packs().items():
+        link = PACKS / name
+        if link.is_symlink() and (link / "manifest.json").exists():
+            note(f"{name}: {Path(os.readlink(link)).name} (installed bundle, current)")
+            continue
+        if link.exists() and not link.is_symlink():
+            shutil.rmtree(link)  # a checkout's copy from a test run: the signed bundle takes over
+        tmp = PACKS / f".{name}.new"
+        if tmp.is_symlink() or tmp.exists():
+            tmp.unlink()
+        tmp.symlink_to(os.path.relpath(BUNDLES / "packs" / name / versions[-1], PACKS))
+        os.replace(tmp, link)
+        note(f"{name}: {versions[-1]} (installed bundle, newest; made current)")
+    if packs_from:
+        if read_only_system():
+            fail("--packs-from is for a test machine: an appliance takes packs from signed bundles only")
+        found = sorted(d for d in packs_from.iterdir() if d.is_dir() and not d.name.startswith(".") and list(d.glob("*.yaml")))
+        if not found:
+            fail(f"no pack folder (a folder with a playbook manifest *.yaml) in {packs_from}")
+        for src in found:
+            dest = PACKS / src.name
+            if dest.is_symlink():
+                dest.unlink()
+            elif dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest, ignore=shutil.ignore_patterns(".*", "__pycache__"))
+            note(f"{src.name}: copied from {packs_from} (a checkout, unsigned: test machine)")
+    run("chmod", "-R", "a+rX,go-w", PACKS)  # the gateway reads it
+    if not any(PACKS.iterdir()):
+        note("no packs installed: core's reference playbook only")
+        return []
+    out = run(CORE / ".venv" / "bin" / "python", "-m", "suveryn_playbooks", PACKS, cwd=CORE, capture=True)
+    found = [ln for ln in out.splitlines() if ln.startswith("playbook/")]
+    for ln in found:
+        note(ln)
+    return found
+
+
 def updates(mode: str) -> None:
     step("Security updates")
     if read_only_system():
@@ -1101,6 +1165,8 @@ def configure(db_url: str, oidc: dict[str, str], reader: dict[str, str], llms: l
                "SUVERYN_WORK_DIR": str(VAR / "work"), "HF_HOME": str(hf_home()),
                "SUVERYN_LLM_BASE_URL": "http://127.0.0.1:8080", "SUVERYN_LLM_DEFAULT_MODEL": default,
                "SUVERYN_OCR_JOBS": str(min(8, os.cpu_count() or 8)),
+               # The certified packs (suveryn-packs, signed bundles): the playbooks beyond core's reference one.
+               "SUVERYN_PACKS_DIR": str(PACKS),
                # Cases (suveryn-tracker#10): who sees a new case by default. "members": its members only
                # (law firms with conflict walls, healthcare, government). "office": everyone signed in
                # (notary offices, where all staff share the same secrecy). A manager can still restrict one.
@@ -1323,6 +1389,18 @@ def verify(public_url: str | None) -> bool:
         {"model": default, "messages": [{"role": "user", "content": "Antwoord met één woord: ja"}], "max_tokens": 5}).encode(),
         timeout=180)
     result("llama-server", status == 200 and default in ids, f"models {ids}, default {default} answered ({status})")
+    # The packs: the directory gateway.env names exists and every playbook in it loads with core's loader
+    # (an empty directory is fine: core's reference playbook only).
+    packs_dir = Path(gw.get("SUVERYN_PACKS_DIR", str(PACKS)))
+    if packs_dir.is_dir() and any(packs_dir.iterdir()):
+        r = subprocess.run([str(CORE / ".venv" / "bin" / "python"), "-m", "suveryn_playbooks", str(packs_dir)],
+                           cwd=CORE, capture_output=True, text=True)
+        loaded = [ln.split(":")[0] for ln in r.stdout.splitlines() if ln.startswith("playbook/")]
+        result("packs", r.returncode == 0 and bool(loaded),
+               f"{', '.join(loaded) or 'none'} in {packs_dir}" + (f" ({error_lines(r.stderr)})" if r.returncode else ""))
+    else:
+        result("packs", packs_dir.is_dir(), f"{packs_dir}: no packs installed (core's reference playbook only)"
+               if packs_dir.is_dir() else f"{packs_dir} is missing")
     # Keycloak: ready, the realm with its production settings and the sūveryn theme (through the admin API,
     # and the realm's discovery as the reverse proxy will ask it, https in X-Forwarded-Proto).
     wait_for(lambda: 200 in (http("http://127.0.0.1:9000/idp/health/ready")[0], http("http://127.0.0.1:9000/health/ready")[0]),
@@ -1768,6 +1846,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     # Sign-in before the models, the order the web setup's provisioning screen shows.
     oidc = keycloak(a.public_url, keycloak_pw, getattr(a, "administrator", None))
     llms = llm_models(a.models_from, mode, staging)
+    packs(a.packs_from)
     reader = READER_SETTINGS
     host = a.public_url.split("://", 1)[1].rstrip("/")
     tls(host, a.tls_cert, a.tls_key)
@@ -1827,6 +1906,7 @@ def after_restore() -> None:
     mode = subprocess.run([NETWORK_MODE_TOOL, "get"], capture_output=True, text=True).stdout.strip()
     llms = llm_models(None, mode, staging=False)
     (ETC / "llama-presets.ini").write_text(presets(llms))
+    packs(None)  # this machine's own packs bundles; the backup's gateway.env already names the directory
     step("Network mode")
     run(NETWORK_MODE_TOOL, "apply", capture=True)
     note(f"{mode} (from the backup)")
@@ -1857,7 +1937,7 @@ def after_restore() -> None:
 def first_boot_config(path: Path) -> dict[str, str]:
     """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
     values = read_env(path)
-    unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "TLS_CERT", "TLS_KEY",
+    unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "PACKS_FROM", "TLS_CERT", "TLS_KEY",
                              "CASES_ACCESS", "CASES_KEEP", "CONVERSATIONS_KEEP"}
     if values.get("CASES_ACCESS", "members") not in ("members", "office"):
         fail(f"CASES_ACCESS in {path} must be 'members' or 'office'")
@@ -1891,6 +1971,9 @@ def main() -> None:
                        help="how long saved conversations are kept, counted from their last change: 6m, 1y, 5y, "
                             "or manual (the default: until their owner deletes them)")
         p.add_argument("--models-from", type=Path, help="a folder (e.g. physical media) holding the LLM files")
+        p.add_argument("--packs-from", type=Path,
+                       help="a test machine: a checkout of suveryn-packs whose pack folders fill the packs directory "
+                            "(unsigned); an appliance takes packs from signed bundles only")
         p.add_argument("--tls-cert", type=Path, help="the office's certificate for the public name (PEM, full chain)")
         p.add_argument("--tls-key", type=Path, help="its private key (PEM); without both, a local CA issues one")
 
@@ -1904,7 +1987,7 @@ def main() -> None:
     f.add_argument("--administrator", type=Path, metavar="FILE",
                    help="JSON {name, email, password}: the office's administrator (the web setup passes it)")
     f.add_argument("--config", type=Path,
-                   help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, TLS_CERT, TLS_KEY")
+                   help="first-boot.env: PUBLIC_URL, NETWORK_MODE, OUTBOUND, SITE, MODELS_FROM, PACKS_FROM, TLS_CERT, TLS_KEY")
     rs = sub.add_parser("restore", help="a replacement machine: the office's appliance again from a backup (the web setup's restore)")
     rs.add_argument("--settings", type=Path, required=True, help="where the backups are (JSON, as the web setup's Backups answer)")
     rs.add_argument("--share-secret", type=Path, help="the share's password file")
@@ -1968,7 +2051,8 @@ def main() -> None:
             a.cases_access = a.cases_access or c.get("CASES_ACCESS")
             a.cases_keep = a.cases_keep or c.get("CASES_KEEP")
             a.conversations_keep = a.conversations_keep or c.get("CONVERSATIONS_KEEP")
-            for key, attr in (("MODELS_FROM", "models_from"), ("TLS_CERT", "tls_cert"), ("TLS_KEY", "tls_key")):
+            for key, attr in (("MODELS_FROM", "models_from"), ("PACKS_FROM", "packs_from"), ("TLS_CERT", "tls_cert"),
+                              ("TLS_KEY", "tls_key")):
                 if not getattr(a, attr) and c.get(key):
                     setattr(a, attr, Path(c[key]))
         if a.test_machine and a.site != "test":

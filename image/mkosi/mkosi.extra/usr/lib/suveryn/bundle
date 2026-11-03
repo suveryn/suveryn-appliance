@@ -1,9 +1,18 @@
 #!/usr/bin/python3
-"""Signed bundles: models now, system updates later (tracker #36). One verification path for both.
+"""Signed bundles: models and packs now, system updates later (tracker #36). One verification path for all.
 
     bundle verify DIR [--json]            check a bundle: signature by a trusted key, then every file
     bundle install DIR [--to ROOT] [--json]   verify, copy into ROOT/<kind>/<name>/<version>, check the copy
     bundle keys [--json]                  the keys this system trusts
+
+Kinds: ``model`` (the language model files llama-server serves), ``packs`` (a certified profession
+pack: the playbooks and their words, from the private suveryn-packs repository; its name is the
+pack's folder, ``be-notary`` for ``pack/be-notary``, and its files are that folder's, with at least
+one manifest ``*.yaml`` at the root), ``system`` (an update: verified here, installed by the update).
+A packs bundle, once installed, is made the pack's current version: ``<packs dir>/<name>`` (the
+directory the gateway reads, SUVERYN_PACKS_DIR, next to the bundles' root: /var/lib/suveryn/packs)
+points at it, so the next start of the gateway loads it. Every version installed stays under the
+bundles' root; the link is what changes.
 
 A bundle is a folder (on the stick's suveryn-bundles partition, or downloaded):
 
@@ -40,7 +49,9 @@ KEYS = Path(os.environ.get("SUVERYN_BUNDLE_KEYS", "/usr/lib/suveryn/bundle-keys"
 ROOT = Path(os.environ.get("SUVERYN_BUNDLE_ROOT", "/var/lib/suveryn/bundles"))
 FORMAT = "suveryn-bundle/1"
 SIG_FORMAT = "suveryn-bundle-signature/1"
-KINDS = ("model", "system")
+PACKS = os.environ.get("SUVERYN_PACKS_DIR", "")  # set: the packs directory; unset: next to the bundles' root
+KINDS = ("model", "packs", "system")
+INSTALLED_HERE = ("model", "packs")  # a system bundle is installed by the update (#40)
 NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 VERSION = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -147,6 +158,8 @@ def check_manifest(m) -> dict:
         for b in seen:
             if b.startswith(a + "/"):
                 raise Invalid(f"the manifest lists {a} both as a file and as a folder")
+    if m["kind"] == "packs" and not any("/" not in f["path"] and f["path"].endswith(".yaml") for f in files):
+        raise Invalid("a packs bundle holds a pack's folder: at least one playbook manifest (*.yaml) at its root")
     return m
 
 
@@ -262,9 +275,30 @@ def verify(folder: Path) -> dict:
     return summary(folder, manifest, key)
 
 
+def packs_dir(root: Path) -> Path:
+    """The directory the gateway reads its packs from: SUVERYN_PACKS_DIR, or ``packs`` next to the bundles'
+    root (/var/lib/suveryn/packs next to /var/lib/suveryn/bundles; the same under an installer's target)."""
+    return Path(PACKS) if PACKS else root.parent / "packs"
+
+
+def make_current(root: Path, name: str, version: str) -> Path:
+    """``<packs dir>/<name>`` points at the installed version: a relative link, so it holds wherever the
+    data partition is mounted (the installer writes it under a target), replaced in one step."""
+    packs = packs_dir(root)
+    packs.mkdir(parents=True, exist_ok=True)
+    link = packs / name
+    target = Path(os.path.relpath(root / "packs" / name / version, packs))
+    tmp = packs / f".{name}.new"
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(target)
+    os.replace(tmp, link)
+    return link
+
+
 def install(folder: Path, root: Path) -> dict:
     manifest, key = read_signed_manifest(folder)
-    if manifest["kind"] != "model":
+    if manifest["kind"] not in INSTALLED_HERE:
         raise Invalid(f"a {manifest['kind']} bundle isn't installed here (system bundles: the update, #40)")
     dest = root / manifest["kind"] / manifest["name"] / manifest["version"]
     raw = (folder / "manifest.json").read_bytes()
@@ -273,6 +307,8 @@ def install(folder: Path, root: Path) -> dict:
             progress(f"{manifest['name']} {manifest['version']} is already installed")
             out = summary(folder, manifest, key)
             out.update(installed=str(dest), already=True)
+            if manifest["kind"] == "packs":
+                out["current"] = str(make_current(root, manifest["name"], manifest["version"]))
             return out
         raise FileExistsError(f"{dest} exists with another manifest")
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -291,6 +327,8 @@ def install(folder: Path, root: Path) -> dict:
         raise
     out = summary(folder, manifest, key)
     out.update(installed=str(dest), already=False)
+    if manifest["kind"] == "packs":
+        out["current"] = str(make_current(root, manifest["name"], manifest["version"]))
     return out
 
 
@@ -325,7 +363,8 @@ def main(argv: list[str]) -> int:
         print(json.dumps(result, indent=2))
     elif result["valid"]:
         print(f"valid: {result['kind']} {result['name']} {result['version']}, {result['files']} file(s), "
-              f"signed by {result['key'][:16]}…" + (f"; installed in {result['installed']}" if "installed" in result else ""))
+              f"signed by {result['key'][:16]}…" + (f"; installed in {result['installed']}" if "installed" in result else "")
+              + (f"; current: {result['current']} (the gateway loads it at its next start)" if "current" in result else ""))
         for name in result["ignored"]:
             print(f"ignored (not in the manifest): {name}")
     else:
