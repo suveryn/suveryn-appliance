@@ -2,7 +2,7 @@
 """Making and signing bundles, at Sūveryn Labs (tracker #36). The appliance side, which checks them, is
 image/mkosi/mkosi.extra/usr/lib/suveryn/bundle; this tool uses its format, so the two can't drift.
 
-    suveryn-bundle-release make DIR --kind model --name NAME --version VERSION [--title T]
+    suveryn-bundle-release make DIR --kind model|packs --name NAME --version VERSION [--title T]
                                 [--description D] [--description-nl D] [--description-fr D] [--default]
         write DIR/manifest.json: every file in DIR with its size and SHA-256
     suveryn-bundle-release sign DIR (--aws-kms KEY [--region REGION] | --key-file PRIVATE.pem)

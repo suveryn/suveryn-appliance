@@ -9,7 +9,8 @@ takes the services `image/mkosi/prebuild-services` built beforehand (`prebuild -
 
 ```bash
 sudo provision/suveryn-provision install --public-url https://suveryn.office.example \
-     --network-mode connected [--outbound approved|all] --site on-premise [--models-from /media/suveryn-models]
+     --network-mode connected [--outbound approved|all] --site on-premise [--models-from /media/suveryn-models] \
+     [--packs-from ../suveryn-packs]
 sudo provision/suveryn-provision verify            # again later, any time
 sudo provision/suveryn-provision services start    # start | stop | restart | status
 ```
@@ -36,6 +37,7 @@ Secrets are generated on the machine and never printed.
 |---|---|---|
 | PostgreSQL + pgvector | Ubuntu's packages: PostgreSQL 18 on 26.04, 16 on 24.04 (24.04 goes once the image is built on 26.04, #57); databases `suveryn` and `keycloak`, each with its own role and a random password; extension `vector`. The `suveryn` role may checkpoint and switch the WAL file (`pg_checkpoint`, `pg_switch_wal()`) and `wal_recycle` is off: suveryn-core flushes the WAL a few seconds after a deletion, so the deleted text doesn't stay in it for hours (backups keep it until they roll over). suveryn-core creates its own tables when the gateway starts (`CREATE TABLE IF NOT EXISTS`), so there are no migrations | `127.0.0.1:5432` |
 | suveryn-core | At the commit in [`versions.json`](versions.json), `uv sync --locked --all-packages --no-dev`, and `.suveryn-built` saying the commit (Status's version and the backups' manifest read it); its embedding and Docling models with `suveryn-fetch-models` | `/opt/suveryn/core`; models in `/var/lib/suveryn/hf`, or in the read-only system's image at `/opt/suveryn/hf` |
+| Packs | The certified profession packs ([suveryn-packs](https://github.com/suveryn/suveryn-packs), private; core's `suveryn_playbooks.packs`): `/var/lib/suveryn/packs` holds one entry per pack, a link to the pack's current version among the installed packs bundles (`/var/lib/suveryn/bundles/packs/<name>/<version>`; the installer and `bundle install` make a bundle current, `first-boot` and `restore` give a pack that has none its newest). On a test machine `--packs-from <checkout>` (`PACKS_FROM` in `first-boot.env`) copies a checkout's pack folders in instead, unsigned; the read-only system refuses it. Every playbook in the directory is then loaded with core's loader, so a pack that doesn't load stops provisioning, not the gateway. Empty is fine: core's reference playbook only | `/var/lib/suveryn/packs`; `SUVERYN_PACKS_DIR` in `gateway.env` |
 | llama-server | Built from llama.cpp at the pinned commit with CUDA; the LLM files from suveryn-core's `models/manifest.json`, each checked against its size and sha256: from an installed signed model bundle when one has them (used where they are), else downloaded or copied from `--models-from`; router presets written from the manifest | `127.0.0.1:8080`; files in `/var/lib/suveryn/bundles/model/…` (bundles) or `/var/lib/suveryn/models`; `/etc/suveryn/llama-presets.ini` |
 | Keycloak 26.8 | The pinned release (sha256 checked), on Java 21 (`JAVA_HOME` in its unit, also where Ubuntu has newer Java); the sūveryn theme ([`keycloak/theme`](../keycloak/theme/README.md)); the production realm ([`keycloak/realm`](../keycloak/realm/README.md): sslRequired all, 180-day events, exact redirect URLs, a new client secret, passwords of 15 characters, and with `first-boot --administrator FILE` the office's administrator from the web setup), imported once and the realm file deleted. Its unit wants PostgreSQL rather than requiring it, so a stopped database doesn't stop Keycloak: sign-ins fail meanwhile and work again within about ten seconds of its return; should Keycloak stop on its own, systemd starts it again (`Restart=always`). Before each start the unit empties Keycloak's gzip copies of the theme (`data/tmp/kc-gzip-cache`), which outlived a new theme | `127.0.0.1:8180/idp`, management `127.0.0.1:9000` |
 | The reader sandbox | [`reader-sandbox`](../reader-sandbox/README.md): user `suveryn-reader`, its inbox and work folder, the wrapper, and sudo for the gateway to start it as the reader. The gateway's `SUVERYN_EXTRACT_WRAPPER` points at it; `SUVERYN_EXTRACT_UNSANDBOXED` is never set | `/opt/suveryn/bin/suveryn-reader-sandbox`, `/var/lib/suveryn/{inbox,reader}` |
@@ -82,6 +84,8 @@ the read-only system an air-gapped appliance with neither stops.
 
 - **PostgreSQL**: the gateway's role reaches its database, and pgvector is installed.
 - **llama-server**: the manifest's models are listed, and the default model answers.
+- **The packs**: the directory `gateway.env` names exists and every playbook in it loads with core's
+  loader (empty: core's reference playbook only).
 - **Keycloak**: ready; through the admin API, realm `suveryn` has sslRequired `all`, theme
   `suveryn` and 180-day events; its discovery, asked as the reverse proxy will ask it (`https` in
   `X-Forwarded-Proto`), gives exactly the issuer the gateway is configured with.
@@ -124,5 +128,7 @@ python3 -m pytest provision/tests
 ```
 
 The decisions that need no machine: the GPU licence check, environment files (a value can't add a
-line), the units as the runner reads them, the presets from the manifest, the test PDF, the pins.
+line), the units as the runner reads them, the presets from the manifest, the packs directory (the
+current version kept, a new pack's newest linked, a checkout on a test machine only, versions in
+order), the test PDF, the pins.
 The installation itself is tested by running `install` and `verify` on a test box.
