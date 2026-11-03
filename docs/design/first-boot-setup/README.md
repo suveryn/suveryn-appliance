@@ -70,8 +70,7 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - Restore from a backup (tracker #56, added 24 October 2026 after the screens were built, so R1 to R4 follow the built screens rather than the design canvas): a secondary button on Welcome under *Get started*. The appliance finds the newest backup on the USB disk or share and checks it with the recovery key file before asking; then it takes the old appliance's name, accounts and settings, and setup closes. The key is kept on the encrypted data partition for that one check and restore only. No step counter: it isn't one of the six steps.
 
 **Copy and brand rules**
-- UK English. Dutch formal (u/uw). The product name is lower case "sūveryn" except at the start of a sentence; the company is "Sūveryn Labs". Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
-- No em dashes in UI copy. Lucide icons only.
+- Copy follows the brand's [Wording and spelling](https://github.com/suveryn/suveryn-brand/blob/main/guidelines/brand-guidelines.md#wording-and-spelling); icons are Lucide. Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
 - **Colour (since 28 October 2026)**: the web setup shares the chat UI's kit (`packages/chat-ui/src/ui`), so
   the colour rules of suveryn-core `docs/design/chat-ui.md` section 1 apply to it too (decision, 28 October):
   - orange only for the one primary button per screen and text actions;
