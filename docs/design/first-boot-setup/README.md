@@ -50,7 +50,8 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 
 ## Decisions to implement
 
-**Console installer**
+### Console installer
+
 - Linux VT text UI, 16 colours set with `setvtrgb` from the dark brand theme. Font: Terminus (needs `ū`). The mock-ups use Source Code Pro as a stand-in.
 - Network name is set in the installer and announced over mDNS (`<name>.local`). DHCP first; after 30 s without a lease, offer a fixed address (C4b).
 - Model bundles come from the stick's exFAT partition `suveryn-bundles` (file system label `SUVBUNDLES`: exFAT labels hold 11 characters), which fills the rest of the stick; C3 names it by its partition name. Each bundle's signed manifest is checked against the bundle public key built into the image, then every file's SHA-256 (tracker #36). Several models can be installed if the hardware allows.
@@ -59,7 +60,8 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - The installed system's first start creates the appliance identity: UUID and Ed25519 key pair, sealed by the TPM (`suveryn-identity.service`; tracker #35). The installer doesn't make it.
 - C8 shows addresses, the certificate fingerprint, appliance ID and support status. Menu option 3 shows the registration QR code in text mode (block characters, inverted colours, e.g. `qrencode -t ANSIUTF8`).
 
-**Web setup**
+### Web setup
+
 - Reachable on the local network only until setup finishes, then closes itself. Cannot depend on Keycloak (it sets Keycloak up).
 - Layout aligned with the Keycloak login: lockup and tagline above a 560 px card, language dropdown in the card's top-right corner (English, Nederlands, Français). Focus ring: border `#0F8A82` plus a 3 px `rgba(58,212,202,.15)` glow.
 - Network: Connected (default) with "Approved destinations only" (default) or "Allow all outgoing traffic", or Air-gapped. The appliance's own firewall enforces it, and provisioning checks it last (screen 8 shows the result).
@@ -69,9 +71,9 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
 - Conversation retention and the "what deleting means" explanation (tracker #31) are in the admin dashboard, not in setup.
 - Restore from a backup (tracker #56, added 24 October 2026 after the screens were built, so R1 to R4 follow the built screens rather than the design canvas): a secondary button on Welcome under *Get started*. The appliance finds the newest backup on the USB disk or share and checks it with the recovery key file before asking; then it takes the old appliance's name, accounts and settings, and setup closes. The key is kept on the encrypted data partition for that one check and restore only. No step counter: it isn't one of the six steps.
 
-**Copy and brand rules**
-- UK English. Dutch formal (u/uw). The product name is lower case "sūveryn" except at the start of a sentence; the company is "Sūveryn Labs". Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
-- No em dashes in UI copy. Lucide icons only.
+### Copy and brand rules
+
+- Copy follows the brand's [Wording and spelling](https://github.com/suveryn/suveryn-brand/blob/main/guidelines/brand-guidelines.md#wording-and-spelling); icons are Lucide. Say "the appliance" or "this appliance" when the appliance is meant, never "sūveryn" alone.
 - **Colour (since 28 October 2026)**: the web setup shares the chat UI's kit (`packages/chat-ui/src/ui`), so
   the colour rules of suveryn-core `docs/design/chat-ui.md` section 1 apply to it too (decision, 28 October):
   - orange only for the one primary button per screen and text actions;
@@ -82,43 +84,37 @@ Design for the sūveryn appliance's bare-metal console installer and its web set
     "Reachable", a downloaded key, the final check.
   The mock-ups below predate this and show orange for these; the built screens follow the rules.
 
-## Resolved while building
+## Decided while building
 
-- **Setup check of 21 October 2026** (the console screens and the web setup against these mock-ups):
-  - Console: the bars are one unbroken #12161B band and the window is filled with it, with its border in
-    #757E86 (bright black in the palette, or black made bright by bold on the Linux console); a blank line
-    under each title; a radio list's highlight is as wide as the fields, its marks in accent; a text
-    field's "]" lines up with a dropdown's, its field grey also when empty; a field's brackets are in
-    accent while it has the focus; the recovery key is centred in an accent frame, its match on the
-    field's own line, and *Restart* shows as what Enter does; French punctuation after a space never
-    starts a line.
-  - C8 after boot stays a centred window, not the full-width layout (decided by the owner).
-  - Web: the warning under "Allow all outgoing traffic" and the note for air-gapped; the appliance ID and
-    the short fingerprint on one line each, the QR code at 148 px; the ✓ on a loaded manifest; the
-    welcome's narrower intro. The setup stays light only (decided by the owner; there are no dark
-    mock-ups).
-  - As expected: `√` for `✓` (Terminus has no ✓) and bold as bright white on the Linux console.
-- **Pod check of f0ff96c** (348 console screens):
-  - C8 fits 80×25 in Dutch and French: a shorter certificate line on a console under 30 lines, and the
-    label column as wide as its longest label (also on the QR screen, "Vingerafdruk van de sleutel").
-  - C8b, the disk unlock in the initrd, as designed: the bars full width, the keys in the bottom bar,
-    the text wrapped at word boundaries to the console's width (no blank lines on a 25-line console),
-    the field's brackets in accent. Its top bar has no host name: that is on the locked disk.
-  - A radio option that wraps keeps its accent mark and continues under its own text; C4's Address
-    options side by side, as designed; a number stays with its unit ("1 Gbit/s"), and a "·"
-    separator never ends or starts a line.
-  - The help is a box of its own, with its title on its border, as wide as the window's inside, so no
-    word of the screen beneath shows cut off beside it.
-  - A screen without buttons (C6) has a blank line before its bottom border.
+Where the built screens differ from the mock-ups, or settle what they left open:
+
+- Console: the bars are one unbroken #12161B band and the window is filled with it, with its border in
+  #757E86 (bright black in the palette, or black made bright by bold on the Linux console); a blank line
+  under each title; a radio list's highlight is as wide as the fields, its marks in accent; a text
+  field's "]" lines up with a dropdown's, its field grey also when empty; a field's brackets are in
+  accent while it has the focus; the recovery key is centred in an accent frame, its match on the
+  field's own line, and *Restart* shows as what Enter does; French punctuation after a space never
+  starts a line.
+- C8 after boot stays a centred window, not the full-width layout (decided by the owner).
+- Web: the warning under "Allow all outgoing traffic" and the note for air-gapped; the appliance ID and
+  the short fingerprint on one line each, the QR code at 148 px; the ✓ on a loaded manifest; the
+  welcome's narrower intro. The setup stays light only (decided by the owner; there are no dark
+  mock-ups).
+- As expected: `√` for `✓` (Terminus has no ✓) and bold as bright white on the Linux console.
+- C8 fits 80×25 in Dutch and French: a shorter certificate line on a console under 30 lines, and the
+  label column as wide as its longest label (also on the QR screen, "Vingerafdruk van de sleutel").
+- C8b, the disk unlock in the initrd, as designed: the bars full width, the keys in the bottom bar,
+  the text wrapped at word boundaries to the console's width (no blank lines on a 25-line console),
+  the field's brackets in accent. Its top bar has no host name: that is on the locked disk.
+- A radio option that wraps keeps its accent mark and continues under its own text; C4's Address
+  options side by side, as designed; a number stays with its unit ("1 Gbit/s"), and a "·"
+  separator never ends or starts a line.
+- The help is a box of its own, with its title on its border, as wide as the window's inside, so no
+  word of the screen beneath shows cut off beside it.
+- A screen without buttons (C6) has a blank line before its bottom border.
 
 ## Not in this design
 
-- Admin dashboard screens (check-in QR, warnings, conversation retention, maintenance).
-- The banners shown to users (no valid manifest, deviations, expiry).
-- Dutch and French copy.
+- Administration (the check-in QR, warnings, keep periods, backups after setup): suveryn-core `docs/design/admin.md`.
+- The banners shown to users about the support agreement (no valid manifest, deviations, expiry): not designed yet (#41).
 - The portal.
-
-## Open points
-
-- Default backup retention (30 days is a proposal; #31).
-- Renewal discount (commercial; no screen impact).

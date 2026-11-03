@@ -76,6 +76,7 @@ the FAT partition and runs `suveryn-provision first-boot`. Its progress is shown
 screen and in the journal.
 
 On success it:
+
 - deletes `first-boot.env` and any private key from the EFI partition;
 - leaves the local CA's certificate there (`suveryn-local-ca.crt`) for the office's workstations to trust;
 - shows the temporary Keycloak admin password **on the machine's own screen only**, never in the journal.

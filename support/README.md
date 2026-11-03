@@ -1,8 +1,8 @@
 # Support manifests
 
 Sūveryn Labs' signed statement of what an appliance's support agreement covers (design note
-[`first-boot-setup`](../docs/design/first-boot-setup/README.md), "Support agreement"; tracker #35,
-#37). The office registers the appliance on the portal (the QR code in the web setup and on the
+[`first-boot-setup`](../docs/design/first-boot-setup/README.md), "Support agreement"; tracker #35, #37).
+The office registers the appliance on the portal (the QR code in the web setup and on the
 console) and gets a manifest back; the web setup checks it on the appliance (step 4). Optional:
 without one, setup continues. Everyone who signs in sees a notice when there is still no manifest 14
 days after installation, for every deviation from the agreement, and when support ends. Nothing is ever

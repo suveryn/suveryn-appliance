@@ -1,0 +1,13 @@
+{
+  // The house style writes docs as long-line prose and compact pipe tables, so line length (MD013) and
+  // table pipe alignment (MD060) are off; MD031 is off because some docs nest a code fence in a list
+  // item's text, which renders correctly. Everything else in markdownlint's default set stays on.
+  // The same rules as suveryn-docs and suveryn-handbook.
+  "ignores": ["**/node_modules/**"],
+  "config": {
+    "default": true,
+    "MD013": false,
+    "MD031": false,
+    "MD060": false
+  }
+}

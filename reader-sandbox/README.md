@@ -45,7 +45,7 @@ A gateway running as its own user needs sudo to start the wrapper as the reader.
 below, set `SUVERYN_EXTRACT_WRAPPER="sudo -n -u suveryn-reader /opt/suveryn/bin/suveryn-reader-sandbox"`
 ([`provision/suveryn-provision`](../provision/README.md) does both):
 
-```
+```text
 Defaults>suveryn-reader env_keep += "HF_HOME SUVERYN_EXTRACT_WORK_DIR SUVERYN_OCR_JOBS CUDA_VISIBLE_DEVICES"
 <gateway-user> ALL=(suveryn-reader) NOPASSWD: /opt/suveryn/bin/suveryn-reader-sandbox *
 ```
@@ -71,6 +71,7 @@ On an ordinary Ubuntu (the Packer test image) unattended-upgrades applies them. 
 ## Tested
 
 On the dev pod (Ubuntu 24.04 container, RTX 4090), with the real gateway, Docling and OCR, 2026-10-11:
+
 - a born-digital, a scanned and a scanned-and-signed fictional deed were all read through the sandbox;
 - during processing, the reader and its Tesseract processes ran as `suveryn-reader`, with seccomp and
   no_new_privs, and even root could not read their environment;

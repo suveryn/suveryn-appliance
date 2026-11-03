@@ -40,8 +40,7 @@ The appliance's build stops without `prebuilt/`, or when a part in it isn't the 
 (`suveryn-provision check-prebuilt`). `prebuild-services` needs an Ubuntu 26.04 host with CUDA 13.4 from NVIDIA's 26.04 repository (no
 GPU needed; it installs Java and the build tools itself) and takes about 25 minutes on 32 cores; the
 services come to about 13 GB (12 GiB as slot A's uncompressed EROFS). mkosi itself needs a host where
-it may create namespaces: a virtual or real machine, not a container like a RunPod pod (Pod check of
-#47: "mkosi was forbidden to unshare namespaces"). Both together need about 60 GB free.
+it may create namespaces: a virtual or real machine, not a container like a RunPod pod, where "mkosi was forbidden to unshare namespaces" (#47). Both together need about 60 GB free.
 
 Needs Ubuntu 26.04 as the build host, like the image (systemd 259: `systemd-repart`, `ukify`), and
 `bubblewrap`, `erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify` and
