@@ -52,10 +52,13 @@ jobs:
         run: python3 -m pytest */tests image/mkosi/test -q -p no:cacheprovider -rs
 
       - name: As root, with PostgreSQL (the sandbox, the network mode, the backups and their restore)
-        env:
-          SUVERYN_TEST_PG_HOST: /var/run/postgresql
-          SUVERYN_TEST_PG_PORT: "5432"
-        run: sudo -E python3 -m pytest */tests image/mkosi/test -q -p no:cacheprovider -rs
+        # sudo drops the environment (-E isn't allowed here), so the variables go through env. The sandbox
+        # tests run the reader as nobody and suveryn-reader, who must be able to reach the checkout under
+        # /home/runner, which other users can't traverse by default.
+        run: |
+          chmod o+x "$HOME" "$HOME/work"
+          sudo env SUVERYN_TEST_PG_HOST=/var/run/postgresql SUVERYN_TEST_PG_PORT=5432 \
+            python3 -m pytest */tests image/mkosi/test -q -p no:cacheprovider -rs
 
   executable-bits:
     name: Scripts keep their executable bit
