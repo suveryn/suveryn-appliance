@@ -7,8 +7,8 @@
   },
   "llama_cpp": {
     "repo": "https://github.com/ggml-org/llama.cpp",
-    "tag": "b11223",
-    "commit": "4da6337767f973e2b4d0797e5b323d77d8565e4a"
+    "tag": "b12111",
+    "commit": "52e53a76df0298d2c316ae7e704eeec03b0bf478"
   },
   "uv": {
     "version": "0.13.7",
@@ -17,7 +17,7 @@
   },
   "suveryn_core": {
     "repo": "https://github.com/suveryn/suveryn-core",
-    "commit": "561b8efce5f1c924e1e9ef49f1e149bca7fd46c6"
+    "commit": "8ef3f710852a223f4db1d8e94543334d954ab162"
   },
   "node": {
     "version": "22.23.4",
