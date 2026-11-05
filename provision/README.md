@@ -113,11 +113,14 @@ the read-only system an air-gapped appliance with neither stops.
   that are never approved can't be reached). A test machine without the unit, or without systemd,
   reports it as not checked.
 
+Downloads resume: curl retries every error (a connection reset too), each of its three runs continues the partial
+file, and a run of `install` after a stop picks it up.
+
 ## Without systemd
 
 A container (the RunPod test pod) has no systemd. `services start` then runs the same units with a
 small runner: each `ExecStart` as the unit's `User`, with its `EnvironmentFile`s, logging to
-`/var/log/suveryn/<unit>.log`, PIDs in `/run/suveryn`. It is for testing only; an appliance runs
+`/var/log/suveryn/<unit>.log`, PIDs in `/run/suveryn`; `status` lists PostgreSQL and nginx with them, and `stop` waits until nginx has quit, so a `start` right after it finds no nginx still exiting. It is for testing only; an appliance runs
 systemd, which also applies the units' hardening (`ProtectSystem`, `PrivateTmp`, …) that the runner
 doesn't.
 
