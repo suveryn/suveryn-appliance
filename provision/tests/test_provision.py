@@ -692,3 +692,53 @@ def test_the_gateway_is_told_where_the_packs_are(monkeypatch, tmp_path):
     import inspect
     src = inspect.getsource(p.configure)
     assert '"SUVERYN_PACKS_DIR": str(PACKS)' in src and p.PACKS == Path("/var/lib/suveryn/packs")
+
+
+def test_a_download_that_drops_resumes_instead_of_stopping_the_install(tmp_path, monkeypatch):
+    """Pod round of aebf5bc: a connection reset 8.2 GB into the Qwen download (curl 56) stopped the whole install."""
+    import hashlib
+    body = b"model weights " * 1000
+    calls = []
+
+    def curl(*cmd, check=True, **_):
+        argv = [str(c) for c in cmd]
+        calls.append(argv)
+        part = Path(argv[argv.index("-o") + 1])
+        assert "--retry-all-errors" in argv and argv[argv.index("-C") + 1] == "-"  # every run resumes
+        have = part.read_bytes() if part.exists() else b""
+        if len(calls) < 3:  # two runs stop partway, as a reset connection does
+            part.write_bytes(have + body[len(have):len(have) + 4000])
+            return "curl: (56) Recv failure: Connection reset by peer"
+        part.write_bytes(have + body[len(have):])
+        return ""
+
+    monkeypatch.setattr(p, "run", curl)
+    monkeypatch.setattr(p, "DOWNLOAD_PAUSE_S", 0)
+    dest = tmp_path / "model.gguf"
+    p.download("https://example.test/model.gguf", dest, hashlib.sha256(body).hexdigest(), len(body))
+    assert dest.read_bytes() == body and len(calls) == 3 and not (tmp_path / "model.gguf.part").exists()
+
+
+def test_a_download_that_keeps_failing_stops_with_a_sentence_and_keeps_the_part(tmp_path, monkeypatch):
+    def curl(*cmd, check=True, **_):
+        part = Path(str(cmd[list(map(str, cmd)).index("-o") + 1]))
+        part.write_bytes(b"partial")
+        return "curl: (56) Recv failure"
+
+    monkeypatch.setattr(p, "run", curl)
+    monkeypatch.setattr(p, "DOWNLOAD_PAUSE_S", 0)
+    with pytest.raises(SystemExit):
+        p.download("https://example.test/model.gguf", tmp_path / "model.gguf", None, 100)
+    assert (tmp_path / "model.gguf.part").read_bytes() == b"partial"  # the next run resumes it
+
+
+def test_the_test_runner_waits_for_nginx_to_quit_before_anything_starts_it_again(monkeypatch):
+    """Pod round of aebf5bc, finding 6: a start right after a quit reloaded the exiting nginx, and nothing served the
+    site for half a minute."""
+    running = iter([True, True, True, False])  # the check before quitting, then two while it finishes
+    sent = []
+    monkeypatch.setattr(p, "_nginx_running", lambda: next(running))
+    monkeypatch.setattr(p.subprocess, "run", lambda argv, **k: sent.append(argv))
+    monkeypatch.setattr(p.time, "sleep", lambda s: None)
+    p.stop_nginx()
+    assert sent == [["nginx", "-s", "quit"]] and next(running, "done") == "done"  # returned once it had quit

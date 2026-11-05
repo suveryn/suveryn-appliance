@@ -208,6 +208,10 @@ def sha256_of(path: Path) -> str:
     return h.hexdigest()
 
 
+DOWNLOAD_RUNS = 3      # curl runs per file, each resuming the last, each with its own retries
+DOWNLOAD_PAUSE_S = 30  # between two runs: a dropped connection or a busy mirror often needs a moment
+
+
 def download(url: str, dest: Path, sha256: str | None = None, size: int | None = None) -> None:
     """Fetch ``url`` to ``dest`` (resumes a partial file), then check its size and sha256."""
     if dest.exists() and (size is None or dest.stat().st_size == size) and (sha256 is None or sha256_of(dest) == sha256):
@@ -215,7 +219,18 @@ def download(url: str, dest: Path, sha256: str | None = None, size: int | None =
         return
     part = dest.with_name(dest.name + ".part")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    run("curl", "-fL", "--retry", "5", "--retry-delay", "5", "-C", "-", "-sS", "-o", part, url)
+    # A connection reset mid-transfer (curl 56) isn't one of the errors --retry repeats, and one stopped the whole
+    # install 8 GB into a model (pod round of aebf5bc). --retry-all-errors repeats it too, and each try, and each
+    # run of curl here, resumes the partial file (-C -) instead of starting again.
+    for attempt in range(1, DOWNLOAD_RUNS + 1):
+        problem = run("curl", "-fL", "--retry", "5", "--retry-delay", "5", "--retry-all-errors", "-C", "-", "-sS",
+                      "-o", part, url, check=False)
+        if not problem:
+            break
+        if attempt == DOWNLOAD_RUNS:
+            fail(f"{dest.name}: the download stopped {DOWNLOAD_RUNS} times ({problem}); run this again to resume it")
+        note(f"{dest.name}: the download stopped ({problem}); resuming")
+        time.sleep(DOWNLOAD_PAUSE_S)
     if size is not None and part.stat().st_size != size:
         fail(f"{dest.name}: {part.stat().st_size} bytes, expected {size}")
     if sha256 is not None and sha256_of(part) != sha256:
@@ -1027,7 +1042,22 @@ def start_nginx() -> None:
     elif _nginx_running():
         run("nginx", "-s", "reload")
     else:
+        # A quit still finishing leaves no pid file but holds the ports a little longer: wait for them.
+        for _ in range(30):
+            if not _ports_held(80, 443):
+                break
+            time.sleep(1)
         start_daemon(["nginx"], "nginx")
+
+
+def _ports_held(*ports: int) -> bool:
+    """Whether something listens on any of these ports on this machine."""
+    for port in ports:
+        with socket.socket() as s:
+            s.settimeout(0.5)
+            if s.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+    return False
 
 
 def firewall_rules() -> list[list[str]]:
@@ -1250,6 +1280,9 @@ def services(action: str) -> None:
     LOGS.mkdir(parents=True, exist_ok=True)
     if action == "start":
         start_postgres()
+    elif action == "status":  # PostgreSQL and nginx too, as systemctl status lists them (pod round of aebf5bc)
+        up = subprocess.run(["pg_ctlcluster", postgres_major(), "main", "status"], capture_output=True).returncode == 0
+        print(f"postgresql: {'running' if up else 'stopped'}")
     for name in (UNITS if action != "stop" else list(reversed(UNITS))):
         pidfile = RUN / f"{name}.pid"
         pid = int(pidfile.read_text()) if pidfile.exists() else None
@@ -1278,8 +1311,24 @@ def services(action: str) -> None:
             print(f"{name}: started (pid {p.pid}, log {LOGS / name}.log; test runner, not systemd)")
     if action == "start":
         start_nginx()
-    elif action == "stop" and Path("/run/nginx.pid").exists():
-        subprocess.run(["nginx", "-s", "quit"], check=False)
+    elif action == "stop":
+        stop_nginx()
+    elif action == "status":
+        print(f"nginx: {'running' if _nginx_running() else 'stopped'}")
+
+
+def stop_nginx() -> None:
+    """The test runner's stop: nginx quits gracefully, and the stop waits until it has. A start right after a quit
+    that hadn't finished reloaded the exiting nginx, and nothing served the site for half a minute (pod round of
+    aebf5bc, finding 6)."""
+    if not _nginx_running():
+        return
+    subprocess.run(["nginx", "-s", "quit"], check=False)
+    for _ in range(60):
+        if not _nginx_running():
+            return
+        time.sleep(0.5)
+    note("nginx is still finishing its connections; the next start waits for it")
 
 
 # ---------------------------------------------------------------------------- verify
