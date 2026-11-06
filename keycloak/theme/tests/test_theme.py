@@ -350,3 +350,17 @@ def test_text_sizes_are_the_brands_type_scale():
         css = re.sub(r"/\*.*?\*/", "", path.read_text(encoding="utf-8"), flags=re.S)
         sizes = set(re.findall(r"font-size:\s*([0-9.]+px)", css))
         assert sizes <= scale, f"{path.name}: {sorted(sizes - scale)} are not on the type scale"
+
+
+def test_button_groups_follow_the_dialog_pattern():
+    """suveryn-tracker#99: two or more buttons are one row in reading order, the way out first and the main
+    action last (as the chat UI's dialogs); a group with a form of its own is left as written."""
+    buttons = (SRC / "login" / "buttons.ftl").read_text()
+    assert "${suvOthers}${suvPrimary}" in buttons            # the way out first, the main action last
+    assert 'contains("<form")' in buttons                    # WebAuthn's forms inside a group stay as written
+    assert 'label == "doConfirmDelete"' in buttons and "autofocus" in buttons  # deleting: focus on the way out
+    css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
+    row = re.search(r"\.suv-card \.suv-actions-row \{(.*?)\}", css, re.S).group(1)
+    assert "justify-content: flex-end" in row and "row-reverse" not in css   # never reversed by CSS
+    for lang in ("en", "nl", "fr"):
+        assert "\nbackToLogin=" in (SRC / "login" / "messages" / f"messages_{lang}.properties").read_text()
