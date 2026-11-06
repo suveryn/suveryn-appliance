@@ -94,3 +94,11 @@ proxy is checked by `suveryn-provision verify`: TLS versions and certificate, th
 headers on real answers, `/docs`, and a sign-in and an upload end to end over https. That last check
 needs Keycloak's temporary administrator to make a test user. On an office's appliance it is removed
 after setup (#55), so a later `verify` reports the sign-in check as not checked.
+
+**While the gateway or Keycloak restarts** (every update restarts them), nginx answers its own 502, 503
+and 504 with one branded page instead of its default "502 Bad Gateway": `starting/starting.html` and
+`starting/starting.css`, installed in `/opt/suveryn/starting` (by `suveryn-provision`, or built into the
+image), served at `/_starting/` as 503 with `Retry-After: 20`, never cached. Three languages at once
+(nginx can't translate), the brand mark drawn inline, no script; the page reloads itself every 20 s.
+Its look is a file of its own because the strict CSP applies to it too. An answer the gateway sends
+itself (its JSON 503s) passes as it is. Design: Claude Design's handover of 6 November 2026.

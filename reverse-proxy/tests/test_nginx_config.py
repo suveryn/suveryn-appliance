@@ -97,3 +97,18 @@ def test_the_sites_bring_their_own_file_types():
     for name, site in (("the office's site", SITE), ("the setup site", setup_site)):
         https = site[site.index("listen 443"):]
         assert "include /etc/nginx/mime.types;" in https and "default_type application/octet-stream;" in https, name
+
+
+def test_while_the_gateway_restarts_people_see_the_starting_page_not_nginx_own():
+    """Claude Design's handover of 6 November 2026: 502, 503 and 504 from nginx itself become one branded page
+    (reverse-proxy/starting/), answered as 503 with Retry-After, under the strict CSP, never cached."""
+    assert "error_page 502 503 504 =503 /_starting/starting.html;" in SITE
+    body = locations()["^~ /_starting/"]
+    assert "alias /opt/suveryn/starting/;" in body and 'Retry-After "20"' in body and '"no-store"' in body
+    assert "include /etc/nginx/snippets/suveryn-csp.conf;" in body
+    page = (HERE / "starting" / "starting.html").read_text()
+    assert "<script" not in page and "<style" not in page and " style=" not in page   # the CSP refuses all three
+    assert 'http-equiv="refresh" content="20"' in page and 'href="/_starting/starting.css"' in page
+    for lang in ("nl", "fr", "en"):
+        assert f'<section lang="{lang}">' in page
+
