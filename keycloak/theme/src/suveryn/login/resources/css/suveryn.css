@@ -38,7 +38,7 @@
   --suv-accent-ink-hover: oklch(0.4770 0.1690 34.60);
   --suv-teal: oklch(0.7900 0.1250 188.40);               /* brand teal: fills and washes only, never text */
   --suv-teal-ink: oklch(0.5200 0.0903 188.40);           /* brand teal-ink: the teal's lightness minus 0.27; 4.5:1 incl. the badge wash */
-  --suv-teal-focus: oklch(0.5720 0.0970 188.40);         /* brand focus (tokens v3.2): the teal as a UI boundary, 3:1 on every light surface */
+  --suv-teal-focus: oklch(0.6400 0.1100 188.40);         /* brand focus (tokens v3.7): the teal as a UI boundary, 3:1 on bg and surface */
   --suv-teal-glow: oklch(from var(--suv-teal) l c h / 0.15);
   --suv-font-body: "Inter", system-ui, sans-serif;
   --suv-font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
@@ -215,7 +215,8 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 }
 .suv-card .pf-v5-c-button.pf-m-primary:hover,
 .suv-card .pf-v5-c-button.pf-m-primary:focus { background-color: var(--suv-accent-hover); color: var(--suv-on-accent); }
-.suv-card .pf-v5-c-button.pf-m-primary:focus-visible { outline: 2px solid var(--suv-text); outline-offset: 2px; }
+/* on the orange fill: a 2 px gap in bg, the 1 px focus line and the glow, as the chat UI (tokens v3.7) */
+.suv-card .pf-v5-c-button.pf-m-primary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--suv-bg), 0 0 0 3px var(--suv-teal-focus), 0 0 0 6px var(--suv-teal-glow); }
 .suv-card .pf-v5-c-button.pf-m-secondary {
   --pf-v5-c-button--BorderRadius: 6px;
   --pf-v5-c-button--m-secondary--Color: var(--suv-text);
