@@ -965,9 +965,21 @@ def snippets() -> None:
             shutil.copyfile(src, dest)
 
 
+def starting_page() -> None:
+    """The page nginx shows while the gateway or Keycloak restarts (reverse-proxy/starting/), unless it is
+    there already (the read-only system has it built in)."""
+    for name in ("starting.html", "starting.css"):
+        src, dest = REPO / "reverse-proxy" / "starting" / name, Path("/opt/suveryn/starting") / name
+        if not (dest.exists() and dest.read_bytes() == src.read_bytes()):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+            dest.chmod(0o644)
+
+
 def reverse_proxy(host: str) -> None:
     step("Reverse proxy (nginx)")
     snippets()
+    starting_page()
     site = (REPO / "reverse-proxy" / "suveryn.conf.template").read_text().replace("@HOST@", host)
     site_file().write_text(site)
     enabled = NGINX / "sites-enabled" / "suveryn"
@@ -1803,6 +1815,7 @@ def image(with_web_setup: bool = True) -> None:
     reader_sandbox()
     chat_ui()
     snippets()
+    starting_page()
     backup_service()
     clock_service()
     # What a restore needs before any first boot: the services' units and the network-mode tool (VM

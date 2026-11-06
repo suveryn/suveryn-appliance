@@ -78,6 +78,18 @@ server {
         try_files $uri =404;
     }
 
+    # When the gateway or Keycloak doesn't answer (an update restarts them): one branded page in three
+    # languages that reloads itself, instead of nginx's own "502 Bad Gateway". Answered as 503 with
+    # Retry-After. nginx's own errors only: an answer the gateway sends itself (its JSON 503s) passes as it is.
+    error_page 502 503 504 =503 /_starting/starting.html;
+    location ^~ /_starting/ {
+        include /etc/nginx/snippets/suveryn-headers.conf;
+        include /etc/nginx/snippets/suveryn-csp.conf;
+        alias /opt/suveryn/starting/;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After "20" always;
+    }
+
     # The gateway.
     location ~ ^/(v1|auth)/ {
         include /etc/nginx/snippets/suveryn-headers.conf;

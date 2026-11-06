@@ -99,6 +99,8 @@ systemctl enable suveryn-setup.service suveryn-setup-provision.path
 # nginx: the header snippets built in, no default site, and the office's site on the data partition
 # (the link above). It starts once that site exists: the web setup writes it first.
 install -m 0644 "$app"/reverse-proxy/suveryn-headers.conf "$app"/reverse-proxy/suveryn-csp.conf /etc/nginx/snippets/
+install -d -m 0755 /opt/suveryn/starting
+install -m 0644 "$app"/reverse-proxy/starting/starting.html "$app"/reverse-proxy/starting/starting.css /opt/suveryn/starting/
 rm -f /etc/nginx/sites-enabled/default
 mkdir -p /usr/lib/systemd/system/nginx.service.d
 printf '[Unit]\nConditionPathExists=/etc/nginx/sites-enabled/suveryn\n' > /usr/lib/systemd/system/nginx.service.d/suveryn.conf
