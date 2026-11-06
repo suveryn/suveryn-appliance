@@ -93,7 +93,7 @@ def test_teal_focus_on_inputs():
     css = (SRC / "login" / "resources" / "css" / "suveryn.css").read_text()
     focus = re.search(r"\.pf-v5-c-form-control:focus-within::before \{(.*?)\}", css, re.S).group(1)
     assert "border-color: var(--suv-teal-focus)" in focus and "box-shadow: 0 0 0 3px oklch(from var(--suv-teal) l c h / 0.15)" in focus
-    assert "--suv-teal-focus: oklch(0.5720 0.0970 188.40)" in css  # the brand's focus token
+    assert "--suv-teal-focus: oklch(0.6400 0.1100 188.40)" in css  # the brand's focus token (v3.7)
 
 
 def test_nothing_is_loaded_from_the_internet():
