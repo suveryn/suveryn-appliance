@@ -225,6 +225,27 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
   --pf-v5-c-button--m-secondary--hover--after--BorderColor: var(--suv-text-dim);
   border-radius: 6px;
 }
+.suv-card .pf-v5-c-button.pf-m-secondary {
+  font-family: var(--suv-font-body); font-weight: 600; font-size: 14.5px; line-height: 1.2; padding: 12px 20px; min-height: 44px;
+}
+/* the field's focus, as every control in the chat UI: the teal line on the outline and a 3 px glow */
+.suv-card .pf-v5-c-button.pf-m-secondary:focus-visible {
+  outline: none; --pf-v5-c-button--m-secondary--after--BorderColor: var(--suv-teal-focus); box-shadow: 0 0 0 3px var(--suv-teal-glow);
+}
+
+/* Two or more buttons (buttons.ftl, suveryn-tracker#99): one right-aligned row, the way out first and the
+   main action last, every button 44 px, as the chat UI's dialogs; on a phone a full-width column in the
+   same order, the main action last. A single button stays full width. Never reversed by CSS. */
+.suv-card .suv-actions-row { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px;
+                            margin-left: 0; margin-right: 0; }  /* PatternFly's negative margins would push the row past the fields */
+.suv-card .suv-actions-row > .pf-v5-c-button { width: auto; flex: none; margin: 0; display: inline-flex; align-items: center; justify-content: center; }
+@media (max-width: 520px) {
+  .suv-card .suv-actions-row { flex-direction: column; align-items: stretch; }
+  .suv-card .suv-actions-row > .pf-v5-c-button { width: 100%; }
+}
+
+/* a button-shaped link (Back to login) is a button, in ink: not the running text's orange underline */
+.suv-body a.pf-v5-c-button.pf-m-secondary { color: var(--suv-text); text-decoration: none; }
 .suv-body a, .suv-card .pf-v5-c-button.pf-m-link { color: var(--suv-accent-ink); text-decoration: underline; text-underline-offset: 2px; }
 .suv-body a:hover, .suv-card .pf-v5-c-button.pf-m-link:hover { color: var(--suv-accent-ink-hover); }
 
