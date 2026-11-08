@@ -68,6 +68,10 @@ It states a fact, so it shows **only when the installation's network mode is `ai
 - Every theme (login, account, email) ships `messages_en`, `messages_nl` and `messages_fr`, which a test checks.
 - The tagline and the "Air-gapped" label stay in English in every language, as on the Dutch website.
 
+## Screenshots: the theme against its boards
+
+[`screenshots/shoot.py`](screenshots/README.md) starts Keycloak with the built theme and a throwaway realm and photographs the eight pages a notary can meet, at 1440 and 390 px. They are the "code" side of the design boards for the sign-in (the canvas *Sūveryn · interface*, page *Aanmelden*, A01 to A08): a change to the theme is checked against its board there before it is merged, as suveryn-core's screen previews are for the chat UI.
+
 ## Tests
 
 ```bash
