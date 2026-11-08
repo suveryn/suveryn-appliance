@@ -1,0 +1,122 @@
+{
+ "realm": "suveryn",
+ "enabled": true,
+ "displayName": "sūveryn",
+ "loginTheme": "suveryn",
+ "accountTheme": "suveryn",
+ "emailTheme": "suveryn",
+ "internationalizationEnabled": true,
+ "supportedLocales": [
+  "en",
+  "nl",
+  "fr"
+ ],
+ "defaultLocale": "nl",
+ "resetPasswordAllowed": true,
+ "rememberMe": false,
+ "loginWithEmailAllowed": true,
+ "registrationAllowed": false,
+ "bruteForceProtected": false,
+ "smtpServer": {
+  "host": "127.0.0.1",
+  "port": "2525",
+  "from": "suveryn@kantoor.test",
+  "auth": "false",
+  "ssl": "false",
+  "starttls": "false"
+ },
+ "otpPolicyType": "totp",
+ "otpPolicyDigits": 6,
+ "otpPolicyPeriod": 30,
+ "otpPolicyAlgorithm": "HmacSHA1",
+ "clients": [
+  {
+   "clientId": "shots",
+   "publicClient": true,
+   "standardFlowEnabled": true,
+   "redirectUris": [
+    "http://127.0.0.1:8180/*"
+   ],
+   "webOrigins": [
+    "*"
+   ],
+   "attributes": {
+    "pkce.code.challenge.method": "S256"
+   }
+  }
+ ],
+ "users": [
+  {
+   "username": "notaris",
+   "email": "notaris@kantoor.test",
+   "firstName": "Mieke",
+   "lastName": "Delarivière",
+   "enabled": true,
+   "emailVerified": true,
+   "credentials": [
+    {
+     "type": "password",
+     "value": "Welkom-bij-suveryn-1",
+     "temporary": false
+    }
+   ]
+  },
+  {
+   "username": "nieuw",
+   "email": "nieuw@kantoor.test",
+   "firstName": "Jonas",
+   "lastName": "Claes",
+   "enabled": true,
+   "emailVerified": true,
+   "credentials": [
+    {
+     "type": "password",
+     "value": "Welkom-bij-suveryn-1",
+     "temporary": false
+    }
+   ],
+   "requiredActions": [
+    "UPDATE_PASSWORD"
+   ]
+  },
+  {
+   "username": "tweestaps",
+   "email": "tweestaps@kantoor.test",
+   "firstName": "Filip",
+   "lastName": "Tack",
+   "enabled": true,
+   "emailVerified": true,
+   "credentials": [
+    {
+     "type": "password",
+     "value": "Welkom-bij-suveryn-1",
+     "temporary": false
+    },
+    {
+     "type": "otp",
+     "userLabel": "Authenticator",
+     "secretData": "{\"value\": \"JBSWY3DPEHPK3PXP\"}",
+     "credentialData": "{\"subType\": \"totp\", \"digits\": 6, \"counter\": 0, \"period\": 30, \"algorithm\": \"HmacSHA1\"}"
+    }
+   ]
+  },
+  {
+   "username": "instellen",
+   "email": "instellen@kantoor.test",
+   "firstName": "Ellen",
+   "lastName": "Peeters",
+   "enabled": true,
+   "emailVerified": true,
+   "credentials": [
+    {
+     "type": "password",
+     "value": "Welkom-bij-suveryn-1",
+     "temporary": false
+    }
+   ],
+   "requiredActions": [
+    "CONFIGURE_TOTP"
+   ]
+  }
+ ]
+}
