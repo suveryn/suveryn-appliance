@@ -197,6 +197,17 @@ html.login-pf, html.login-pf body { background: var(--suv-bg); }
 /* helper text, including the directory note under the password: tertiary text (0.55: 4.5:1) */
 .suv-card .pf-v5-c-helper-text__item-text { color: var(--suv-text-dimmer); font-size: 13px; }
 .suv-directory-note { margin-top: 2px; }
+/* "Wachtwoord vergeten?" beside the directory note stays on one line (the sign-in board, A01): the note
+   wraps, the link doesn't, with a step of the grid between them. */
+.suv-card .pf-v5-c-helper-text > .pf-v5-c-helper-text__item:has(> .pf-v5-c-helper-text__item-text > a) {
+  flex: none; white-space: nowrap; margin-left: 16px;
+}
+/* No required-field asterisk (the authenticator page, A06): it was PatternFly's red, the brand has no red,
+   and the field is the only required one on its page, so the mark said nothing. The input keeps its
+   required attribute. */
+.suv-card .pf-v5-c-form__label-required { display: none; }
+/* The instruction of "Wachtwoord vergeten?" sits above the field (login-reset-password.ftl, A03). */
+.suv-instruction { margin: 0 0 16px; font-size: 13.5px; line-height: 1.45; color: var(--suv-text-dim); }
 
 /* ---------------------------------------------------------------- buttons and links */
 .suv-card .pf-v5-c-button.pf-m-primary {
