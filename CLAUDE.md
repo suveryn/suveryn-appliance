@@ -4,6 +4,16 @@ The machine in the office: the OS image, its hardening, the installer, first-boo
 
 Start with the private [suveryn-handbook](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#start-here), its *Start here*: the design principles, the project's words, and how a change reaches `main`; then [docs/design/appliance-architecture.md](docs/design/appliance-architecture.md): the disk, the boot and what "verified" means, the installer, first boot, updates, backups, the clock, remote support, testing, the build order and decisions D1 to D9. The first-boot screens are in [docs/design/first-boot-setup](docs/design/first-boot-setup/README.md). Each folder has a `README.md`; the table in [README.md](README.md) maps them.
 
+## Before you start
+
+<!-- shared: copied from suveryn-handbook/context/claude-md-shared.md; change it there, never here -->
+
+1. **Read the handbook's [*Start here*](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#start-here)** before any work: the design principles, the project's words, how a change reaches `main`. If you can't open it, stop and say so. In a long session, read it again when the conversation has been summarised.
+2. **One issue, one branch, one PR.** The change has an issue in suveryn-tracker and the branch is named for it. No branch is built on an unmerged branch. A coding agent never pushes: it delivers its branch into the founder's local clone without switching that clone's branch, and only the founder pushes and merges.
+3. **Before you ask for a merge**, say which design principle the change bends, if any, and why. A bent principle needs the founder's decision in the handbook before the merge.
+
+<!-- /shared -->
+
 ## Rules
 
 The handbook's [design principles](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#the-design-principles) and its *How a change reaches `main`* hold here and are not repeated (a folder's README changes with its code, like a spec). These are the appliance's own rules:
