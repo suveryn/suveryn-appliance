@@ -674,7 +674,10 @@ def llm_models(models_from: Path | None, mode: str, staging: bool = True) -> lis
         else:
             if mode != "connected" and not dest.exists():
                 note(f"(downloading while staging; the installation will be {mode})")
-            download(f"{m['source']}/resolve/main/{m['file']}", dest, m["sha256"], m["size_bytes"])
+            # At the publisher's commit that holds this file (the manifest's ``revision``, suveryn-tracker#134): the
+            # publisher's main moves, and on 11 November 2026 it held another file under the same name. A manifest
+            # from before the revisions takes main, and the checksum below still decides.
+            download(f"{m['source']}/resolve/{m.get('revision', 'main')}/{m['file']}", dest, m["sha256"], m["size_bytes"])
         os.chmod(dest, 0o644)
     return llms
 
