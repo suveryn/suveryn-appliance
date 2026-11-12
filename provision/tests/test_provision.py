@@ -398,6 +398,24 @@ def test_on_the_read_only_system_an_air_gapped_first_boot_without_a_bundle_says_
         p.llm_models(None, "air-gapped", staging=False)
 
 
+def test_a_model_file_is_downloaded_at_the_manifests_revision(tmp_path, monkeypatch):
+    """suveryn-tracker#134: the publisher replaced a file under the same name; main no longer held the pinned one."""
+    core = tmp_path / "core"
+    (core / "models").mkdir(parents=True)
+    model = {"id": "x", "role": "llm", "file": "x.gguf", "size_bytes": 1, "sha256": "0" * 64, "source": "https://example/x"}
+    (core / "models" / "manifest.json").write_text(json.dumps({"models": [
+        {**model, "revision": "a" * 40}, {**model, "id": "y", "file": "y.gguf"}]}))
+    (tmp_path / "models").mkdir()
+    for name, value in (("CORE", core), ("BUNDLES", tmp_path / "bundles"), ("MODELS", tmp_path / "models")):
+        monkeypatch.setattr(p, name, value)
+    monkeypatch.setattr(p, "read_only_system", lambda: False)
+    asked = []
+    monkeypatch.setattr(p, "download", lambda url, dest, *a, **k: (asked.append(url), dest.write_bytes(b"x")))
+    p.llm_models(None, "connected")
+    assert asked == [f"https://example/x/resolve/{'a' * 40}/x.gguf",
+                     "https://example/x/resolve/main/y.gguf"]  # a manifest from before the revisions
+
+
 def test_the_read_only_images_python_is_uvs_own_and_the_build_host_has_java():
     """Pod check of #47: uv took the build host's Python (the venv pointed at /usr/local/bin), and
     Keycloak's build found no java."""
