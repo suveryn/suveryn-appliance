@@ -38,9 +38,25 @@ into writing or reading elsewhere through a link the other left.
 
 The contract is at the top of suveryn-core's
 [`packages/chat-ui/src/setup/api.ts`](https://github.com/suveryn/suveryn-core/blob/main/packages/chat-ui/src/setup/api.ts);
-`tests/test_setup.py` checks that every request in it is answered. Refusals are 422 with
-`{"errors": {field: code}}` or `{"error": code}`, and the screens show each code in the office's
-language.
+`tests/test_setup.py` checks that every request in it is answered.
+
+**What isn't the answer asked for is a code, never a sentence** (suveryn-tracker#141; the handbook's
+decision *Messages are codes*, suveryn-core's
+[`docs/design/messages.md`](https://github.com/suveryn/suveryn-core/blob/main/docs/design/messages.md)).
+The codes are defined in suveryn-core's registry (`messages.json`, its `setup` area); `SAYS` in
+`suveryn-setup` lists the ones this service says, and a test checks that list against the registry.
+The screens word each code in the office's language.
+
+| What happened | What the service answers |
+|---|---|
+| An answer is refused as a whole | Its code as Problem Details, the gateway's shape: `{"type": "urn:suveryn:problem:setup.not_answered", "status": 409, "kind": "refused", "code": "setup.not_answered", "params": {}}` |
+| An answer is refused field by field | `request.invalid` (422) with `fields`: `{"password": {"kind": "refused", "code": "setup.password_short", "params": {"min": 15}}}` |
+| A request the screens never send (another site's, a wrong type, too large, an unknown path) | The general code of its status: `request.forbidden`, `request.unsupported`, `request.too_large`, `request.not_found` |
+| A result inside an answer, or stored | A message, `{kind, code, params}`: `POST backups/test` gives `{"ok": false, "message": …}`; a restore that failed and the step where provisioning stopped carry `message` |
+| Something nobody planned for | `system.internal` (500) with a reference in `params.ref`, such as `7F3K-92QD`. The log (`journalctl -u suveryn-setup`) has the line `internal 7F3K-92QD: PUT /setup/v1/… : <the exception's type> at <file:line function>`; never the exception's message, which may quote a password or a key |
+
+The step where provisioning stopped also keeps provisioning's own last line as `detail` in
+`progress.json`: English, for whoever reads the file or the log, not shown on the screen.
 
 | Request | What the appliance checks |
 |---|---|
@@ -56,11 +72,12 @@ language.
 | `GET provision` | (Progress: `running`, `done` or `failed`, per step) |
 | `PUT answers/restore` | A replacement appliance (#56): a USB disk plugged in now, or a share's address (with a user name and password for SMB); a recovery key file holding an `AGE-SECRET-KEY-1…` line. Saves them (the key and password 0600, on the data partition) and asks the root worker to find and check the newest backup there: `checking` |
 | `POST restore/start` | The check found a backup (`checked`). Starts the restore; once it runs or is done, answers can't change |
-| `GET restore` | (`checking`, `checked` with the backup's date and appliance, `restoring` and `done` per step, or `failed` with a code) |
+| `GET restore` | (`checking`, `checked` with the backup's date and appliance, `restoring` and `done` per step, or `failed` with a message) |
 
 A request that says where it comes from must come from the appliance's own page (`Origin`,
 `Sec-Fetch-Site`), and a body must be JSON (or the manifest's bytes), which a page elsewhere can't
-send without the browser asking first. The service logs method, path and status only.
+send without the browser asking first. The service logs method, path and status only, and one line
+with a reference for a failure nobody planned for.
 
 ## Restoring a backup instead (#56)
 
@@ -70,8 +87,9 @@ send without the browser asking first. The service logs method, path and status 
 - **check**: `suveryn-backup --settings <target> find --json --identity <key>` (the backups that key opens,
   under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
   offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
-  the result says `checked` with the backup, or `failed` with `wrong_key`, `no_backup`, `unreachable`,
-  `damaged`, `newer` (made with a newer PostgreSQL than this appliance's, #57) or `invalid`.
+  the result says `checked` with the backup, or `failed` with a `message`: `setup.restore_wrong_key`,
+  `setup.restore_no_backup`, `setup.restore_unreachable`, `setup.restore_damaged`, `setup.restore_newer`
+  (made with a newer PostgreSQL than this appliance's, #57) or `request.invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its
   `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old
   appliance's network mode and name) and **services**. The key and the share's password are deleted

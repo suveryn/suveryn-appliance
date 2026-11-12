@@ -67,23 +67,33 @@ def s(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------- the administrator
+def said(e) -> dict:
+    """The codes a refusal says, by field."""
+    return {field: m["code"] for field, m in e.value.fields.items()}
+
+
+def refused(code: str, status: int = 422, **params) -> tuple[int, dict]:
+    """A refusal as the API answers it: Problem Details, as suveryn-core's gateway does."""
+    return status, {"type": f"urn:suveryn:problem:{code}", "status": status, "kind": "refused", "code": code, "params": params}
+
+
 def test_the_password_rules_are_the_screens():
     mod = load(Path("/tmp"))
     ok = mod.check_administrator({"name": " Anne  de Smet ", "email": "anne@office.be ", "password": GOOD_PASSWORD}, "notary-01")
     assert ok == {"name": "Anne de Smet", "email": "anne@office.be", "password": GOOD_PASSWORD}
     for answer, codes in [
-        ({"name": "", "email": "anne", "password": "short"}, {"name": "name_missing", "email": "email_invalid",
-                                                              "password": "password_short"}),
-        ({"name": "Anne", "email": "a@b.be", "password": "adminadminadmin"}, {"password": "password_common"}),
-        ({"name": "Anne", "email": "a@b.be", "password": "aaaaaaaaaaaaaaaa"}, {"password": "password_common"}),
-        ({"name": "Anne", "email": "a@b.be", "password": "abcdefghijklmnop"}, {"password": "password_common"}),
-        ({"name": "Anne Vermeulen", "email": "a@b.be", "password": "my vermeulen secret 9"}, {"password": "password_personal"}),
-        ({"name": "Anne", "email": "jansens@b.be", "password": "Jansens and more words"}, {"password": "password_personal"}),
-        ({"name": "Anne", "email": "a@b.be", "password": "the notary office secret"}, {"password": "password_personal"}),
+        ({"name": "", "email": "anne", "password": "short"}, {"name": "setup.name_missing", "email": "setup.email_invalid",
+                                                              "password": "setup.password_short"}),
+        ({"name": "Anne", "email": "a@b.be", "password": "adminadminadmin"}, {"password": "setup.password_common"}),
+        ({"name": "Anne", "email": "a@b.be", "password": "aaaaaaaaaaaaaaaa"}, {"password": "setup.password_common"}),
+        ({"name": "Anne", "email": "a@b.be", "password": "abcdefghijklmnop"}, {"password": "setup.password_common"}),
+        ({"name": "Anne Vermeulen", "email": "a@b.be", "password": "my vermeulen secret 9"}, {"password": "setup.password_personal"}),
+        ({"name": "Anne", "email": "jansens@b.be", "password": "Jansens and more words"}, {"password": "setup.password_personal"}),
+        ({"name": "Anne", "email": "a@b.be", "password": "the notary office secret"}, {"password": "setup.password_personal"}),
     ]:
         with pytest.raises(mod.Refused) as e:
             mod.check_administrator(answer, "notary-01")
-        assert e.value.codes == codes, answer
+        assert said(e) == codes, answer
 
 
 def test_the_common_password_list_is_the_screens(tmp_path):
@@ -140,18 +150,18 @@ def test_the_offices_certificate_is_checked_before_it_is_saved(s, certs):
     assert s.check_certificate({"kind": "own", "certificate": certs["wild.crt"] + certs["ca.crt"], "key": certs["wild.key"]},
                                host)[0]["names"] == ["*.local"]
     for answer, codes in [
-        ({"certificate": "nonsense", "key": certs["good.key"]}, {"certificate": "not_a_certificate"}),
-        ({"certificate": certs["good.crt"], "key": "nonsense"}, {"key": "not_a_key"}),
-        ({"certificate": certs["good.crt"], "key": certs["locked.key"]}, {"key": "not_a_key"}),
-        ({"certificate": certs["good.crt"], "key": certs["x.key"]}, {"key": "key_mismatch"}),
-        ({"certificate": certs["old.crt"], "key": certs["old.key"]}, {"certificate": "expired"}),
-        ({"certificate": certs["other.crt"], "key": certs["other.key"]}, {"certificate": "name_not_covered"}),
-        ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": certs["x.crt"]}, {"chain": "chain_invalid"}),
-        ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": "x" * 70000}, {"chain": "not_a_certificate"}),
+        ({"certificate": "nonsense", "key": certs["good.key"]}, {"certificate": "setup.not_a_certificate"}),
+        ({"certificate": certs["good.crt"], "key": "nonsense"}, {"key": "setup.not_a_key"}),
+        ({"certificate": certs["good.crt"], "key": certs["locked.key"]}, {"key": "setup.not_a_key"}),
+        ({"certificate": certs["good.crt"], "key": certs["x.key"]}, {"key": "setup.key_mismatch"}),
+        ({"certificate": certs["old.crt"], "key": certs["old.key"]}, {"certificate": "setup.certificate_expired"}),
+        ({"certificate": certs["other.crt"], "key": certs["other.key"]}, {"certificate": "setup.name_not_covered"}),
+        ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": certs["x.crt"]}, {"chain": "setup.chain_invalid"}),
+        ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": "x" * 70000}, {"chain": "setup.not_a_certificate"}),
     ]:
         with pytest.raises(s.Refused) as e:
             s.check_certificate({"kind": "own", **answer}, host)
-        assert e.value.codes == codes, codes
+        assert said(e) == codes, codes
 
 
 def test_the_appliances_own_certificate_names_the_name_and_the_address(s):
@@ -174,16 +184,16 @@ def test_a_manifest_is_taken_only_when_signed_for_this_appliance(s, tmp_path):
     other = m.sign(m.make(APPLIANCE.replace("7f3c", "0000"), "Sūveryn Enterprise", 15, "2027-09-30", "2026-12-31"),
                    release.KeyFile(key))
     expired = m.sign(m.make(APPLIANCE, "Sūveryn Enterprise", 15, "2020-09-30", "2020-12-31"), release.KeyFile(key))
-    for raw, code in ((signed.replace(b"users: 15", b"users: 50"), "manifest_signature"),
-                      (signed.split(b"signature:")[0], "manifest_signature"), (other, "manifest_other_appliance"),
-                      (expired, "manifest_expired"), (b"edition: [a, b]\n", "manifest_format"),
-                      (signed.replace(b"users: 15", b"users: '15'"), "manifest_format"), (b"\xff\xfe", "manifest_format")):
+    for raw, code in ((signed.replace(b"users: 15", b"users: 50"), "setup.manifest_signature"),
+                      (signed.split(b"signature:")[0], "setup.manifest_signature"), (other, "setup.manifest_other_appliance"),
+                      (expired, "setup.manifest_expired"), (b"edition: [a, b]\n", "setup.manifest_format"),
+                      (signed.replace(b"users: 15", b"users: '15'"), "setup.manifest_format"), (b"\xff\xfe", "setup.manifest_format")):
         with pytest.raises(s.Refused) as e:
             s.check_manifest(raw, facts)
-        assert e.value.codes == {"_": code}, raw[:60]
+        assert said(e) == {"_": code}, raw[:60]
     with pytest.raises(s.Refused) as e:
         s.check_manifest(signed, {"appliance": None})
-    assert e.value.codes == {"_": "manifest_other_appliance"}
+    assert said(e) == {"_": "setup.manifest_other_appliance"}
 
 
 def test_a_manifest_is_valid_yaml(s):
@@ -204,21 +214,21 @@ def test_backups_need_a_real_recovery_key_and_a_disk_or_share_that_exists(s):
     assert s.check_backups({"target": "later"}) == ({"target": "later"}, None)
     assert s.check_backups({**share, "protocol": "nfs", "address": "nas01:/export/backups", "user": None, "password": None})[1] is None
     broken = RECIPIENT[:-1] + ("q" if RECIPIENT[-1] != "q" else "p")
-    for answer, codes in [({**usb, "disk": "usb-Gone_1"}, {"disk": "disk_gone"}),
-                          ({**usb, "recipient": broken}, {"_": "invalid"}),
-                          ({**usb, "recipient": "age1" + "q" * 10}, {"_": "invalid"}),
-                          ({**usb, "retention_days": 7}, {"_": "invalid"}),
-                          ({**share, "address": "nas01/backups"}, {"address": "address"})]:
+    for answer, codes in [({**usb, "disk": "usb-Gone_1"}, {"disk": "setup.disk_gone"}),
+                          ({**usb, "recipient": broken}, {"_": "request.invalid"}),
+                          ({**usb, "recipient": "age1" + "q" * 10}, {"_": "request.invalid"}),
+                          ({**usb, "retention_days": 7}, {"_": "request.invalid"}),
+                          ({**share, "address": "nas01/backups"}, {"address": "setup.share_address"})]:
         with pytest.raises(s.Refused) as e:
             s.check_backups(answer)
-        assert e.value.codes == codes, answer
+        assert said(e) == codes, answer
 
 
 def test_the_share_test_stays_on_the_offices_network(s):
-    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "error": "address"}
-    assert s.test_share({"protocol": "smb", "address": "\\\\8.8.8.8\\share"}) == {"ok": False, "error": "not_local"}
-    assert s.test_share({"protocol": "nfs", "address": "127.0.0.1:/x"}) == {"ok": False, "error": "not_local"}
-    assert s.test_share({"protocol": "nfs", "address": "10.255.255.1:/export"}) == {"ok": False, "error": "unreachable"}
+    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_address", "params": {}}}
+    assert s.test_share({"protocol": "smb", "address": "\\\\8.8.8.8\\share"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_not_local", "params": {}}}
+    assert s.test_share({"protocol": "nfs", "address": "127.0.0.1:/x"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_not_local", "params": {}}}
+    assert s.test_share({"protocol": "nfs", "address": "10.255.255.1:/export"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_unreachable", "params": {}}}
 
 
 # ---------------------------------------------------------------------------- files
@@ -298,19 +308,58 @@ def test_state_and_answers_survive_a_reload_and_secrets_never_come_back(s, api):
     assert stat.S_IMODE((s.ANSWERS / "administrator-password").stat().st_mode) == 0o600
 
 
+def test_every_code_the_setup_says_is_in_cores_registry_with_its_kind_and_status(s):
+    """Messages are codes (suveryn-tracker#141): the registry in suveryn-core defines them; this service only says them."""
+    registry = CORE / "packages" / "harness" / "src" / "suveryn_harness" / "messages.json"
+    if not registry.exists():
+        pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE)")
+    codes = json.loads(registry.read_text(encoding="utf-8"))["codes"]
+    if not any(c.startswith("setup.") for c in codes):
+        pytest.skip("this suveryn-core is from before the registry's setup area (suveryn-tracker#141)")
+    for code, status in s.SAYS.items():
+        assert code in codes, f"{code} isn't a code of suveryn-core's messages.json"
+        assert (codes[code]["kind"], codes[code]["status"]) == (s.message(code)["kind"], status), code
+    # and nothing of the setup's area is left unsaid: a code nobody says is removed from the registry's next release
+    assert {c for c in codes if c.startswith("setup.")} == {c for c in s.SAYS if c.startswith("setup.")}
+    # every code in this file's source is a listed one
+    source = (HERE / "suveryn-setup").read_text(encoding="utf-8")
+    used = set(re.findall(r'"((?:setup|request|system)\.[a-z_]+)"', source))
+    assert used == set(s.SAYS), used ^ set(s.SAYS)
+
+
+def test_a_failure_nobody_planned_for_gives_a_reference_the_log_has_and_never_its_message(s, api, capfd, monkeypatch):
+    def broken(a):
+        raise RuntimeError("the administrator's password is hunter2-and-more")
+    monkeypatch.setattr(s, "check_network", broken)
+    status, body = api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"})
+    assert status == 500 and body["code"] == "system.internal" and body["kind"] == "internal"
+    assert body["type"] == "urn:suveryn:problem:system.internal" and body["status"] == 500
+    ref = body["params"]["ref"]
+    assert re.fullmatch(r"[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}", ref)
+    log = capfd.readouterr().err
+    line = next(ln for ln in log.splitlines() if f"internal {ref}" in ln)
+    assert "PUT /setup/v1/answers/network" in line and "RuntimeError" in line and "broken" in line
+    assert "hunter2" not in log
+    assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"})[1]["params"]["ref"] != ref
+    assert api("GET", "state")[0] == 200  # one failed request never stops setup
+
+
 def test_refusals_come_as_codes_by_field(api):
     assert api("PUT", "answers/administrator", {"name": "", "email": "x", "password": "y"}) == (
-        422, {"errors": {"name": "name_missing", "email": "email_invalid", "password": "password_short"}})
-    assert api("POST", "manifest", b"not a manifest", "application/octet-stream") == (422, {"error": "manifest_format"})
-    assert api("POST", "provision", {}) == (422, {"error": "not_answered"})
+        422, {"type": "urn:suveryn:problem:request.invalid", "status": 422, "kind": "refused", "code": "request.invalid", "params": {},
+              "fields": {"name": {"kind": "refused", "code": "setup.name_missing", "params": {}},
+                         "email": {"kind": "refused", "code": "setup.email_invalid", "params": {}},
+                         "password": {"kind": "refused", "code": "setup.password_short", "params": {"min": 15}}}})
+    assert api("POST", "manifest", b"not a manifest", "application/octet-stream") == refused("setup.manifest_format")
+    assert api("POST", "provision", {}) == refused("setup.not_answered", 409)
 
 
 def test_only_the_appliances_own_page_can_call_it(api):
     assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"},
-               headers={"Origin": "https://evil.example"}) == (403, {"error": "cross_origin"})
+               headers={"Origin": "https://evil.example"}) == refused("request.forbidden", 403)
     assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"},
-               headers={"Sec-Fetch-Site": "cross-site"}) == (403, {"error": "cross_origin"})
-    assert api("PUT", "answers/network", b'{"mode":"connected","outgoing":"all"}', "text/plain") == (415, {"error": "json_only"})
+               headers={"Sec-Fetch-Site": "cross-site"}) == refused("request.forbidden", 403)
+    assert api("PUT", "answers/network", b'{"mode":"connected","outgoing":"all"}', "text/plain") == refused("request.unsupported", 415)
     assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"},
                headers={"Origin": "https://notary-brussels-01.local", "Sec-Fetch-Site": "same-origin"}) == (204, None)
     assert api("GET", "anything")[0] == 404 and api("DELETE", "state")[0] in (404, 501)
@@ -323,7 +372,7 @@ def test_provisioning_is_asked_for_once_and_answers_then_stay_as_they_are(s, api
     assert status == 200 and p["state"] == "running" and all(st["state"] == "waiting" for st in p["steps"])
     assert (s.ANSWERS / "start").exists()
     assert api("GET", "provision")[1]["state"] == "running"
-    assert api("PUT", "answers/network", {"mode": "air-gapped", "outgoing": "approved"}) == (422, {"error": "provisioning_started"})
+    assert api("PUT", "answers/network", {"mode": "air-gapped", "outgoing": "approved"}) == refused("setup.provisioning_started", 409)
     assert api("POST", "provision", {})[1]["state"] == "running"
 
 
@@ -408,7 +457,9 @@ def test_a_failed_step_is_reported_and_can_be_tried_again(s, api, fake_tools):
     assert p["state"] == "failed"
     assert [(st["id"], st["state"]) for st in p["steps"]] == [("database", "done"), ("signin", "failed"),
                                                               ("models", "waiting"), ("web", "waiting"), ("outgoing", "waiting")]
-    assert p["steps"][1]["error"] == "suveryn-provision: Keycloak didn't start"
+    # the screen gets a code and the step's id; provisioning's own English line is for whoever reads the file
+    assert p["steps"][1]["message"] == {"kind": "unavailable", "code": "setup.provisioning_failed", "params": {"step": "signin"}}
+    assert p["steps"][1]["detail"] == "suveryn-provision: Keycloak didn't start"
     assert not s.SETUP_COMPLETE.exists() and (s.ANSWERS / "administrator-password").exists()
     # Try again: running at once (the old failure doesn't flash back), then the runner takes over.
     assert api("POST", "provision", {})[1]["state"] == "running"
@@ -421,8 +472,8 @@ def test_answers_tampered_with_in_the_services_folder_stop_provisioning(s, api, 
     api("POST", "provision", {})
     (s.ANSWERS / "administrator-password").write_text("short")
     assert s.provision() == 1
-    assert json.loads((s.STATE / "progress.json").read_text())["steps"][0] == {"id": "database", "state": "failed",
-                                                                               "error": "answers"}
+    assert json.loads((s.STATE / "progress.json").read_text())["steps"][0] == {
+        "id": "database", "state": "failed", "message": {"kind": "refused", "code": "request.invalid", "params": {}}}
 
 
 def test_the_outgoing_result_follows_the_mode(s, api, fake_tools, monkeypatch):
@@ -526,13 +577,13 @@ def test_where_the_backups_are_and_the_key_are_checked(s):
     answer, key, password = s.check_restore({"target": "share", "protocol": "smb", "address": "\\\\nas\\backups",
                                              "user": "bk", "password": "pw", "key": KEY}, disks)
     assert answer["protocol"] == "smb" and "key" not in answer and password == "pw"
-    for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "key_invalid"}),
-                      ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "disk_gone"}),
-                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "address"}),
-                      ({"target": "later", "key": KEY}, {"_": "invalid"})):
+    for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "setup.key_invalid"}),
+                      ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "setup.disk_gone"}),
+                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "setup.share_address"}),
+                      ({"target": "later", "key": KEY}, {"_": "request.invalid"})):
         with pytest.raises(s.Refused) as e:
             s.check_restore(bad, disks)
-        assert e.value.codes == code
+        assert said(e) == code
 
 
 def stand_in(path: Path, text: str) -> Path:
@@ -580,7 +631,7 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
     assert api("POST", "restore/start", {"file": "suveryn-backup_other_20261024T023900Z.tar.zst.age"})[0] == 422
     status, r = api("POST", "restore/start", {"file": "suveryn-backup_notary-ghent_20261016T023900Z.tar.zst.age"})  # a week earlier
     assert status == 200 and r["state"] == "restoring" and r["backup"]["created"] == "2026-10-16T02:39:00Z"
-    assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == (422, {"error": "restore_started"})
+    assert api("PUT", "answers/network", {"mode": "connected", "outgoing": "approved"}) == refused("setup.restore_started", 409)
     assert s.restore_run() == 0
     done = json.loads(s.RESTORE.read_text())
     assert done["state"] == "done" and done["address"] == "https://notary-ghent.local"
@@ -589,15 +640,16 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
 
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
-    for step, message, code in (("decrypt", "age: no identity matched", "wrong_key"), ("target", "there is no backup on the target", "no_backup"),
-                                ("target", "the backup disk isn't connected", "unreachable"), ("read", "damaged", "damaged"),
-                                ("version", "the backup was made with PostgreSQL 18, newer than this appliance's 16", "newer")):
+    for step, message, code in (("decrypt", "age: no identity matched", "restore_wrong_key"), ("target", "there is no backup on the target", "restore_no_backup"),
+                                ("target", "the backup disk isn't connected", "restore_unreachable"), ("read", "damaged", "restore_damaged"),
+                                ("version", "the backup was made with PostgreSQL 18, newer than this appliance's 16", "restore_newer")):
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'step': {step!r}, 'message': {message!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
         assert s.restore_check() == 1
-        assert api("GET", "restore")[1] == {"state": "failed", "error": code}
+        assert api("GET", "restore")[1] == {"state": "failed", "message": {
+            "kind": "unavailable" if code == "restore_unreachable" else "refused", "code": f"setup.{code}", "params": {}}}
         assert not (s.ANSWERS / "recovery-key").exists()  # asked for again, not kept
-    assert api("POST", "restore/start") == (422, {"error": "not_checked"})
+    assert api("POST", "restore/start") == refused("setup.not_checked", 409)
 
 
 def test_a_failed_verify_names_the_check_that_failed_not_the_last_line(s, api, fake_tools):
@@ -608,5 +660,5 @@ def test_a_failed_verify_names_the_check_that_failed_not_the_last_line(s, api, f
     api("POST", "provision", {})
     assert s.provision() == 1
     p = api("GET", "provision")[1]
-    errors = [st.get("error") for st in p["steps"] if st["state"] == "failed"]
+    errors = [st.get("detail") for st in p["steps"] if st["state"] == "failed"]
     assert errors == ["Reader sandbox: the test PDF wasn't read"]

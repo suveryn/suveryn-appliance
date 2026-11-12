@@ -60,7 +60,14 @@ CHUNK = 8 * 2**20
 
 
 class Invalid(Exception):
-    """The bundle can't be trusted; the message says why, in a sentence an administrator can read."""
+    """The bundle can't be trusted; the message says why, in a sentence an administrator can read on the
+    command line and in a log. `code` is the reason for a screen, which words it in its reader's language:
+    `changed` (a file isn't what the manifest says), `signature` (not signed by a key this system trusts)
+    or `invalid` (anything else)."""
+
+    def __init__(self, detail: str, code: str = "invalid"):
+        super().__init__(detail)
+        self.code = code
 
 
 def signed_text(manifest: bytes) -> bytes:
@@ -172,23 +179,23 @@ def read_signed_manifest(folder: Path) -> tuple[dict, str]:
     try:
         sig = json.loads((folder / "manifest.sig").read_bytes())
     except OSError:
-        raise Invalid("no manifest.sig: the bundle isn't signed") from None
+        raise Invalid("no manifest.sig: the bundle isn't signed", "signature") from None
     except ValueError:
-        raise Invalid("manifest.sig is damaged") from None
+        raise Invalid("manifest.sig is damaged", "signature") from None
     if not isinstance(sig, dict) or sig.get("format") != SIG_FORMAT:
-        raise Invalid("manifest.sig is damaged")
+        raise Invalid("manifest.sig is damaged", "signature")
     keys = trusted_keys()
     if not keys:
-        raise Invalid(f"this system trusts no bundle key ({KEYS} is empty)")
+        raise Invalid(f"this system trusts no bundle key ({KEYS} is empty)", "signature")
     key = sig.get("key")
     if key not in keys:
-        raise Invalid(f"signed by a key this system doesn't trust ({str(key)[:16]}…)")
+        raise Invalid(f"signed by a key this system doesn't trust ({str(key)[:16]}…)", "signature")
     try:
         signature = base64.b64decode(sig.get("signature", ""), validate=True)
     except (ValueError, TypeError):
-        raise Invalid("manifest.sig is damaged") from None
+        raise Invalid("manifest.sig is damaged", "signature") from None
     if len(signature) != 64 or not ed25519_verify(signed_text(raw), signature, keys[key][1]):
-        raise Invalid("the signature doesn't match: the manifest was changed, or signed with another key")
+        raise Invalid("the signature doesn't match: the manifest was changed, or signed with another key", "signature")
     try:
         manifest = json.loads(raw)
     except ValueError:
@@ -208,7 +215,7 @@ def hash_file(src: Path, size: int, dst=None, name: str = "") -> str:
     if not os.path.isfile(src) or os.path.islink(src):
         raise Invalid(f"{name} isn't a plain file")
     if st.st_size != size:
-        raise Invalid(f"{name}: {st.st_size} bytes, the manifest says {size}")
+        raise Invalid(f"{name}: {st.st_size} bytes, the manifest says {size}", "changed")
     h = hashlib.sha256()
     done = 0
     with open(src, "rb", buffering=0) as f:
@@ -218,7 +225,7 @@ def hash_file(src: Path, size: int, dst=None, name: str = "") -> str:
                 dst.write(chunk)
             done += len(chunk)
     if done != size:
-        raise Invalid(f"{name} changed while it was read")
+        raise Invalid(f"{name} changed while it was read", "changed")
     return h.hexdigest()
 
 
@@ -228,7 +235,7 @@ def check_files(folder: Path, manifest: dict, copy_to: Path | None = None) -> No
     for n, f in enumerate(manifest["files"], 1):
         src = folder / f["path"]
         if not src.exists() and not src.is_symlink():
-            raise Invalid(f"{f['path']} is missing")
+            raise Invalid(f"{f['path']} is missing", "changed")
         # Every folder on the way must be a real folder inside the bundle (no link out of it).
         if folder.resolve() not in src.resolve().parents:
             raise Invalid(f"{f['path']} leads outside the bundle")
@@ -243,7 +250,7 @@ def check_files(folder: Path, manifest: dict, copy_to: Path | None = None) -> No
         else:
             digest = hash_file(src, f["size"], name=f["path"])
         if digest != f["sha256"]:
-            raise Invalid(f"{f['path']}: its SHA-256 doesn't match the manifest")
+            raise Invalid(f"{f['path']}: its SHA-256 doesn't match the manifest", "changed")
         done += f["size"]
     took = max(time.time() - start, 0.001)
     progress(f"{len(manifest['files'])} file(s), {done / 2**30:.2f} GiB checked in {took:.0f} s")
