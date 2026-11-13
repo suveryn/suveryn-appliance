@@ -190,7 +190,7 @@ class RealSystem:
                                 stderr=subprocess.PIPE, text=True)
 
     def open_log(self):
-        """This run's log, on the stick's logs partition (in memory when the stick has none), with the
+        """This run's log, on the stick's logs partition (in memory when it can't be used), with the
         system's own messages copied beside it while the installer runs."""
         log = LOGS.Log.open()
         log.follow_system()
@@ -277,7 +277,7 @@ class FakeSystem(RealSystem):
             f.write(json.dumps({key: value}) + "\n")
 
     def open_log(self):
-        """The run's folder beside the machine's file; "logs": false stands for a stick without a logs partition."""
+        """The run's folder beside the machine's file; "logs": false stands for a stick whose logs partition can't be used."""
         if self.d.get("logs", True) is False:
             return self._no_log()
         return LOGS.Log.open(self.path.parent / "logs")

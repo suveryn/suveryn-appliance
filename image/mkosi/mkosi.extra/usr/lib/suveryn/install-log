@@ -23,9 +23,10 @@ never logged, only its arguments, exit code, duration and what it said on standa
 marked secret, not even that. ``Log.forbid`` checks the run's files for a secret once it is known and
 masks it, as a last line of defence; the tests check that the recovery key stays out.
 
-Without a logs partition (a stick made before #144), or when it can't be mounted, the log is kept in
-memory under /run and the screen says that this stick keeps no log: nothing here ever stops an
-installation. Python 3 standard library only.
+Every stick has the partition (make-stick always makes it). When it can't be mounted or written to (a
+damaged stick), the installation goes on, the log is kept in memory under /run for whoever is at the
+console, and the screen says the log couldn't be written: a log never stops an installation.
+Python 3 standard library only.
 
     install-log mount | unmount | list          for a person at a shell: where the logs are
 """
@@ -43,7 +44,7 @@ from pathlib import Path
 
 RUN = Path(os.environ.get("SUVERYN_RUN", "/run/suveryn"))
 MOUNT = RUN / "install-logs"            # the logs partition, while the installer runs
-MEMORY = RUN / "install-log-in-memory"  # where a run goes when the stick has no logs partition
+MEMORY = RUN / "install-log-in-memory"  # where a run goes when the logs partition can't be used
 ENV = "SUVERYN_INSTALL_LOG"             # the run's folder, handed from the screens to the tools they start
 PARTITION_NAME = "suveryn-logs"
 LABEL = "SUVLOGS"
@@ -71,7 +72,7 @@ def partition() -> str | None:
 
 
 def mount() -> Path | None:
-    """The logs partition, mounted to write on (once); None when the stick has none or it can't be mounted."""
+    """The logs partition, mounted to write on (once); None when it can't be found or mounted."""
     if os.path.ismount(MOUNT):
         return MOUNT
     node = partition()
@@ -338,7 +339,7 @@ def main(argv: list[str]) -> int:
     what = argv[0] if argv else "list"
     if what == "mount":
         root = mount()
-        print(root if root else "install-log: this stick has no logs partition, or it can't be mounted")
+        print(root if root else "install-log: the stick's logs partition can't be mounted")
         return 0 if root else 1
     if what == "unmount":
         unmount()

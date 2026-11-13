@@ -160,9 +160,9 @@ the restart; without this an installation left nothing behind but the last line 
   never logged (systemd-cryptenroll prints the recovery key there), and for the command that makes
   the recovery key not its standard error either. Once the key is known, the run's files are checked
   for it as a last defence. The tests plant the key in a stand-in's output and check it stays out.
-- **It never stops an installation.** A stick without the partition (made before #144), or one that
-  can't be mounted or written to, installs as before: the log is kept in memory and the screen says
-  the stick keeps no log.
+- **It never stops an installation.** Every stick has the partition. When it can't be mounted or
+  written to (a damaged stick), the installation goes on, the log is kept in memory, and the failure
+  screen says the log couldn't be written.
 - **The last 20 runs are kept**; older ones are removed when a run starts. One stick often installs
   several offices: an earlier office's run (its machine's name, addresses and hardware; no client
   data exists at installation) stays on the stick until it falls off the end or the partner clears

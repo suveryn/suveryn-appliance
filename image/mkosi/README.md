@@ -120,8 +120,7 @@ sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundle
 - **Every run of the installer is logged on the stick** (`install-log`, #144): one folder per run on
   the logs partition, with a summary, every line and command of the installation, the kernel's
   messages and the hardware found; never the recovery key. Plug the stick into a laptop and open the
-  drive SUVLOGS. What is kept and what never is: the design note, "The installer's log". A stick made
-  before #144 has no such partition and installs as before, without a log; make it again to get one.
+  drive SUVLOGS. What is kept and what never is: the design note, "The installer's log".
 - **One system, two modes, decided in the initrd** (`suveryn-boot-mode`, before anything else
   starts). The disk the firmware started from (systemd-boot's `LoaderDevicePartUUID`) has a partition
   named `suveryn-data`: **installed**, it is unlocked and mounted on `/var`. It has none:

@@ -89,7 +89,7 @@ def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
 
 def test_an_installation_that_is_refused_is_logged_with_how_it_ended(tmp_path, monkeypatch, capsys):
     """suveryn-tracker#144: the engine logs its own lines and how it ended, also when started by hand (it then
-    opens a run of its own; on a stick without a logs partition, in memory)."""
+    opens a run of its own; here, with no stick, in memory)."""
     if os.geteuid() != 0:
         pytest.skip("install refuses to run except as root")
     monkeypatch.setenv("SUVERYN_RUN", str(tmp_path))

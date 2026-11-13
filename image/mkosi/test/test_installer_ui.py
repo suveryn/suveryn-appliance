@@ -402,7 +402,7 @@ def test_a_failed_installation_shows_its_reference_and_where_the_log_is(console,
     assert "the installation failed (exit 1)" in (run / "install.log").read_text()
 
 
-def test_a_stick_without_a_logs_partition_says_it_keeps_no_log(console):
+def test_a_stick_whose_logs_partition_cant_be_used_still_installs_and_says_so(console):
     m = copy.deepcopy(MACHINE)
     m["logs"] = False
     m["install"] = {"lines": ["install: systemd-repart failed: No such device"], "exit": 1, "result": {}}
@@ -412,7 +412,7 @@ def test_a_stick_without_a_logs_partition_says_it_keeps_no_log(console):
     c.press(ENTER)
     c.wait("The installation failed")
     s = " ".join(c.text.replace("│", " ").split())
-    assert "This stick keeps no log of the installation: note the line above." in s and "SUVLOGS" not in s
+    assert "The log couldn't be written to the stick: note the line above." in s and "SUVLOGS" not in s
 
 
 def test_a_machine_the_installer_refuses_leaves_its_record_too(console, tmp_path):

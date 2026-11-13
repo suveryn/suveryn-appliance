@@ -760,9 +760,9 @@
     "fr": "Journal sur la clé USB (SUVLOGS) : {folder}"
   },
   "c6_log_none": {
-    "en": "This stick keeps no log of the installation: note the line above.",
-    "nl": "Deze USB-stick bewaart geen logboek van de installatie: noteer de regel hierboven.",
-    "fr": "Cette clé USB ne conserve pas de journal de l'installation : notez la ligne ci-dessus."
+    "en": "The log couldn't be written to the stick: note the line above.",
+    "nl": "Het logboek kon niet op de USB-stick worden geschreven: noteer de regel hierboven.",
+    "fr": "Le journal n'a pas pu être écrit sur la clé USB : notez la ligne ci-dessus."
   },
   "c6_no_result": {
     "en": "the installer gave no result",

@@ -101,7 +101,7 @@ def test_serial_numbers_are_not_kept(tool, tmp_path):
     assert tool.SERIAL.sub(r"\1(not kept)", "[    2.1] usb 2-1: SerialNumber: AA00123") == "[    2.1] usb 2-1: SerialNumber: (not kept)"
 
 
-def test_a_stick_without_a_logs_partition_keeps_the_log_in_memory_and_says_so(tool, tmp_path):
+def test_when_the_logs_partition_cant_be_used_the_log_is_kept_in_memory_and_says_so(tool, tmp_path):
     assert tool.partition() is None and tool.mount() is None
     log = tool.Log.open()
     assert log.persistent is False and log.folder.parent == tool.MEMORY
