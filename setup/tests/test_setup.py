@@ -30,10 +30,10 @@ CORE = Path(os.environ.get("SUVERYN_CORE", REPO.parent / "suveryn-core"))
 # One list of messages, suveryn-core's (suveryn-tracker#141): the service loads core's module, so these tests need
 # a suveryn-core checkout whose registry has the setup area.
 CORE_MESSAGES = CORE / "packages" / "harness" / "src" / "suveryn_harness" / "messages.py"
-if not CORE_MESSAGES.exists():
+if not CORE.is_dir():
     pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE): the web setup says core's messages",
                 allow_module_level=True)
-if '"setup"' not in CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"):
+if not CORE_MESSAGES.exists() or '"setup"' not in CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"):
     pytest.skip(f"the suveryn-core at {CORE} is from before the web setup's messages (suveryn-tracker#141)",
                 allow_module_level=True)
 APPLIANCE = "7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41"
