@@ -27,7 +27,8 @@ Three parts, so that nothing reachable from the network runs as root:
 The API is the contract at the top of suveryn-core's packages/chat-ui/src/setup/api.ts. What isn't
 the answer asked for is a code of suveryn-core's registry of messages (its `setup` area; core's
 docs/design/messages.md), never a sentence, in the gateway's shape: Problem Details with `kind`,
-`code` and `params`, and `fields` when an answer is refused field by field. The screens word each
+`code` and `params`, and `fields` when an answer is refused field by field. The registry is read
+from the core on this appliance: there is one list, and it is core's. The screens word each
 code in the office's language. Anything unplanned is `system.internal` with a reference, which the
 log has. Python 3 standard library, openssl, ip and lsblk only.
 """
@@ -40,7 +41,6 @@ import ipaddress
 import json
 import os
 import re
-import secrets
 import shutil
 import socket
 import stat
@@ -117,6 +117,7 @@ def load(name: str, path: Path):
     loader = importlib.machinery.SourceFileLoader(name, str(path))
     spec = importlib.util.spec_from_loader(name, loader)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # a module that defines dataclasses is looked up by its name
     loader.exec_module(mod)
     return mod
 
@@ -125,48 +126,28 @@ manifests = load("suveryn_manifest", REPO / "support" / "suveryn-manifest")
 
 
 # ---------------------------------------------------------------------------- messages are codes
-# Every code this service can say, with the HTTP status it has in suveryn-core's registry
-# (packages/harness/src/suveryn_harness/messages.json: the `setup` area, and the general codes). The
-# registry is where a code is defined and described; tests/test_setup.py checks this list against it.
-# A code is never renamed or reused. The kind follows from the status, as the registry's rules say:
-# 4xx refused (nothing was done), 500 internal (nobody planned for it), other 5xx unavailable.
-SAYS = {
-    "request.invalid": 422, "request.forbidden": 403, "request.not_found": 404, "request.too_large": 413,
-    "request.unsupported": 415, "system.internal": 500,
-    "setup.name_missing": 422, "setup.email_invalid": 422, "setup.password_short": 422, "setup.password_common": 422,
-    "setup.password_personal": 422,
-    "setup.not_a_certificate": 422, "setup.not_a_key": 422, "setup.key_mismatch": 422, "setup.name_not_covered": 422,
-    "setup.certificate_expired": 422, "setup.chain_invalid": 422,
-    "setup.manifest_format": 422, "setup.manifest_signature": 422, "setup.manifest_other_appliance": 422,
-    "setup.manifest_expired": 422,
-    "setup.share_address": 422, "setup.share_not_local": 422, "setup.share_unreachable": 422,
-    "setup.disk_gone": 422, "setup.key_invalid": 422,
-    "setup.not_answered": 409, "setup.provisioning_started": 409, "setup.restore_started": 409, "setup.not_checked": 409,
-    "setup.restore_wrong_key": 422, "setup.restore_no_backup": 422, "setup.restore_damaged": 422, "setup.restore_newer": 422,
-    "setup.restore_unreachable": 503, "setup.restore_failed": 503, "setup.provisioning_failed": 503,
-}
-URN = "urn:suveryn:problem:"  # a problem's `type`: a name, not an address (an appliance is offline)
-
-
-def message(code: str, **params) -> dict:
-    """`{kind, code, params}` for a listed code: what travels inside an answer or is stored. A code
-    that isn't listed is a programming error."""
-    status = SAYS[code]
-    return {"kind": "internal" if status == 500 else "unavailable" if status >= 500 else "refused", "code": code, "params": params}
+# One list, in suveryn-core: its registry of messages (messages.json) and the module that is the one
+# way to use it (suveryn_harness/messages.py, standard library only). This service loads that module
+# from the core on this appliance, the pinned one, and keeps no list of its own: a code this core
+# doesn't list can't be said. Without it setup can't say what went wrong, so it doesn't start.
+CORE_MESSAGES = Path(ENV("SUVERYN_CORE_MESSAGES", "/opt/suveryn/core/packages/harness/src/suveryn_harness/messages.py"))
+try:
+    messages = load("suveryn_core_messages", CORE_MESSAGES)
+except (OSError, ValueError, KeyError, SyntaxError) as e:
+    raise SystemExit(f"suveryn-setup: suveryn-core's messages can't be loaded from {CORE_MESSAGES} ({type(e).__name__}): "
+                     "setup needs the core on this appliance") from None
+if "setup" not in messages.AREAS:
+    raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the web setup's "
+                     "messages (suveryn-tracker#141): this appliance needs a newer core")
+message = messages.message      # {kind, code, params} for a listed code: inside an answer, or stored
+reference = messages.reference  # a short id for an unplanned failure ("7F3K-92QD")
 
 
 def problem(msg: dict, fields: dict[str, dict] | None = None) -> tuple[int, dict]:
-    """The status and the Problem Details (RFC 9457) for a message that takes the answer's place, as
-    suveryn-core's gateway answers them; the English `title` is in the registry, not repeated here."""
-    status = SAYS[msg["code"]]
-    return status, {"type": URN + msg["code"], "status": status, **msg, **({"fields": fields} if fields else {})}
-
-
-def reference() -> str:
-    """A short id for an unplanned failure ("7F3K-92QD"), as suveryn-core makes them: shown to the
-    person, found in the log. No 0/O or 1/I: it is read aloud to support."""
-    raw = "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
-    return f"{raw[:4]}-{raw[4:]}"
+    """The status and the Problem Details (RFC 9457) for a message that takes the answer's place,
+    exactly as suveryn-core's gateway answers them; `fields` when it is refused field by field."""
+    body = messages.problem(msg["code"], **msg["params"])
+    return body["status"], {**body, **({"fields": fields} if fields else {})}
 
 
 class Refused(Exception):

@@ -27,6 +27,15 @@ import pytest
 HERE = Path(__file__).resolve().parent.parent
 REPO = HERE.parent
 CORE = Path(os.environ.get("SUVERYN_CORE", REPO.parent / "suveryn-core"))
+# One list of messages, suveryn-core's (suveryn-tracker#141): the service loads core's module, so these tests need
+# a suveryn-core checkout whose registry has the setup area.
+CORE_MESSAGES = CORE / "packages" / "harness" / "src" / "suveryn_harness" / "messages.py"
+if not CORE_MESSAGES.exists():
+    pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE): the web setup says core's messages",
+                allow_module_level=True)
+if '"setup"' not in CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"):
+    pytest.skip(f"the suveryn-core at {CORE} is from before the web setup's messages (suveryn-tracker#141)",
+                allow_module_level=True)
 APPLIANCE = "7f3c9a2e-41b8-4d0e-9a6c-2e5d18b07f41"
 # A throwaway age recipient (age-keygen, as in suveryn-core's screens.test.ts). Not used anywhere.
 RECIPIENT = "age166srcke2l538za388de4cly32dhk96rg8yp6ckng0962fderf3yq64whup"
@@ -38,7 +47,8 @@ def load(tmp: Path, **env):
     defaults = {"SUVERYN_SETUP_TEST": "1", "SUVERYN_SETUP_DIR": tmp / "setup", "SUVERYN_ETC": tmp / "etc",
                 "SUVERYN_VAR": tmp / "var", "SUVERYN_NGINX": tmp / "nginx", "SUVERYN_LOGS": tmp / "log",
                 "SUVERYN_SETUP_WORK": tmp / "run", "SUVERYN_SETUP_SEEN_DONE_WAIT": "5",
-                "SUVERYN_SETUP_SHARE_TIMEOUT": "0.5", "SUVERYN_PORTAL_KEYS": tmp / "portal-keys"}
+                "SUVERYN_SETUP_SHARE_TIMEOUT": "0.5", "SUVERYN_PORTAL_KEYS": tmp / "portal-keys",
+                "SUVERYN_CORE_MESSAGES": CORE_MESSAGES}
     for k, v in {**defaults, **env}.items():
         os.environ[k] = str(v)
     loader = importlib.machinery.SourceFileLoader("suveryn_setup", str(HERE / "suveryn-setup"))
@@ -72,9 +82,15 @@ def said(e) -> dict:
     return {field: m["code"] for field, m in e.value.fields.items()}
 
 
-def refused(code: str, status: int = 422, **params) -> tuple[int, dict]:
-    """A refusal as the API answers it: Problem Details, as suveryn-core's gateway does."""
-    return status, {"type": f"urn:suveryn:problem:{code}", "status": status, "kind": "refused", "code": code, "params": params}
+REGISTRY = json.loads(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"))["codes"]
+
+
+def refused(code: str, status: int | None = None, **params) -> tuple[int, dict]:
+    """A refusal as the API answers it: Problem Details, as suveryn-core's gateway does, from core's own list."""
+    known = REGISTRY[code]
+    assert status in (None, known["status"]), code
+    return known["status"], {"type": f"urn:suveryn:problem:{code}", "title": known["title"], "status": known["status"],
+                             "detail": known["title"], "kind": known["kind"], "code": code, "params": params}
 
 
 def test_the_password_rules_are_the_screens():
@@ -308,23 +324,30 @@ def test_state_and_answers_survive_a_reload_and_secrets_never_come_back(s, api):
     assert stat.S_IMODE((s.ANSWERS / "administrator-password").stat().st_mode) == 0o600
 
 
-def test_every_code_the_setup_says_is_in_cores_registry_with_its_kind_and_status(s):
-    """Messages are codes (suveryn-tracker#141): the registry in suveryn-core defines them; this service only says them."""
-    registry = CORE / "packages" / "harness" / "src" / "suveryn_harness" / "messages.json"
-    if not registry.exists():
-        pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE)")
-    codes = json.loads(registry.read_text(encoding="utf-8"))["codes"]
-    if not any(c.startswith("setup.") for c in codes):
-        pytest.skip("this suveryn-core is from before the registry's setup area (suveryn-tracker#141)")
-    for code, status in s.SAYS.items():
-        assert code in codes, f"{code} isn't a code of suveryn-core's messages.json"
-        assert (codes[code]["kind"], codes[code]["status"]) == (s.message(code)["kind"], status), code
-    # and nothing of the setup's area is left unsaid: a code nobody says is removed from the registry's next release
-    assert {c for c in codes if c.startswith("setup.")} == {c for c in s.SAYS if c.startswith("setup.")}
-    # every code in this file's source is a listed one
+def test_there_is_one_list_of_messages_and_it_is_cores(s, tmp_path):
+    """Messages are codes (suveryn-tracker#141): this service keeps no list of its own. It says only codes of the
+    registry in suveryn-core, says every code of the registry's setup area, and doesn't start without that core."""
     source = (HERE / "suveryn-setup").read_text(encoding="utf-8")
     used = set(re.findall(r'"((?:setup|request|system)\.[a-z_]+)"', source))
-    assert used == set(s.SAYS), used ^ set(s.SAYS)
+    used |= {f"setup.{c}" for c in re.findall(r'Refused\("(manifest_[a-z_]+)"', (REPO / "support" / "suveryn-manifest").read_text())}
+    assert used <= set(REGISTRY), used - set(REGISTRY)
+    assert {c for c in REGISTRY if c.startswith("setup.")} <= used, "a setup code of the registry that nothing here says"
+    assert s.messages.CODES.keys() == REGISTRY.keys() and not hasattr(s, "SAYS")
+    with pytest.raises(ValueError):
+        s.message("setup.tomorrows_code")
+    env = {**os.environ, "SUVERYN_CORE_MESSAGES": str(tmp_path / "no-core" / "messages.py")}
+    r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env=env, capture_output=True, text=True)
+    assert r.returncode != 0 and "suveryn-core's messages can't be loaded" in r.stderr
+    old = tmp_path / "old-core" / "packages" / "harness" / "src" / "suveryn_harness"
+    old.mkdir(parents=True)
+    (old / "messages.py").write_text(CORE_MESSAGES.read_text(encoding="utf-8"), encoding="utf-8")
+    before = json.loads(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"))
+    before["areas"].remove("setup")
+    before["codes"] = {k: v for k, v in before["codes"].items() if not k.startswith("setup.")}
+    (old / "messages.json").write_text(json.dumps(before), encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env={**env, "SUVERYN_CORE_MESSAGES": str(old / "messages.py")},
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "needs a newer core" in r.stderr
 
 
 def test_a_failure_nobody_planned_for_gives_a_reference_the_log_has_and_never_its_message(s, api, capfd, monkeypatch):
@@ -333,7 +356,7 @@ def test_a_failure_nobody_planned_for_gives_a_reference_the_log_has_and_never_it
     monkeypatch.setattr(s, "check_network", broken)
     status, body = api("PUT", "answers/network", {"mode": "connected", "outgoing": "all"})
     assert status == 500 and body["code"] == "system.internal" and body["kind"] == "internal"
-    assert body["type"] == "urn:suveryn:problem:system.internal" and body["status"] == 500
+    assert body["type"] == "urn:suveryn:problem:system.internal" and body["status"] == 500 and body["title"]
     ref = body["params"]["ref"]
     assert re.fullmatch(r"[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}", ref)
     log = capfd.readouterr().err
@@ -346,7 +369,7 @@ def test_a_failure_nobody_planned_for_gives_a_reference_the_log_has_and_never_it
 
 def test_refusals_come_as_codes_by_field(api):
     assert api("PUT", "answers/administrator", {"name": "", "email": "x", "password": "y"}) == (
-        422, {"type": "urn:suveryn:problem:request.invalid", "status": 422, "kind": "refused", "code": "request.invalid", "params": {},
+        422, {**refused("request.invalid")[1],
               "fields": {"name": {"kind": "refused", "code": "setup.name_missing", "params": {}},
                          "email": {"kind": "refused", "code": "setup.email_invalid", "params": {}},
                          "password": {"kind": "refused", "code": "setup.password_short", "params": {"min": 15}}}})
@@ -560,7 +583,8 @@ def test_serve_refuses_to_run_as_root(tmp_path):
     if os.geteuid() != 0:
         pytest.skip("needs root to see the refusal")
     r = subprocess.run([sys.executable, HERE / "suveryn-setup", "serve"], capture_output=True, text=True,
-                       env={"PATH": os.environ["PATH"], "SUVERYN_SETUP_DIR": str(tmp_path)})
+                       env={"PATH": os.environ["PATH"], "SUVERYN_SETUP_DIR": str(tmp_path),
+                            "SUVERYN_CORE_MESSAGES": str(CORE_MESSAGES)})
     assert r.returncode != 0 and "not as root" in r.stderr
 
 

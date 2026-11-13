@@ -1,5 +1,5 @@
 #!/bin/sh
-# The chat UI's production build, with the web setup's screens (setup.html), for the test system
+# The chat UI's production build, with the web setup's screens (setup.html), and core's messages, for the test system
 # (tracker #37): run-vm-tests drives those screens against the appliance's setup service. Never
 # committed; the appliance image gets the UI with the sūveryn services (#39).
 #   image/mkosi/test/make-test-ui [path/to/suveryn-core]     (before: mkosi -f --profile test build)
@@ -9,4 +9,8 @@ cd "$(dirname "$0")"
 core=$(cd "${1:-../../../../suveryn-core}" && pwd)
 (cd "$core/packages/chat-ui" && npm ci --silent && npm run build --silent)
 rm -rf ui && mkdir ui && cp -r "$core/packages/chat-ui/dist/." ui/
-echo "the chat UI from $core ($(git -C "$core" rev-parse --short HEAD)) in image/mkosi/test/ui (not committed)"
+# The web setup says suveryn-core's messages (one list, core's: tracker #141). The appliance image has the whole of
+# core at /opt/suveryn/core; the test system gets just the module and its registry, at the same place.
+rm -rf core-messages && mkdir core-messages
+cp "$core/packages/harness/src/suveryn_harness/messages.py" "$core/packages/harness/src/suveryn_harness/messages.json" core-messages/
+echo "the chat UI and the messages from $core ($(git -C "$core" rev-parse --short HEAD)) in image/mkosi/test/ui and core-messages (not committed)"

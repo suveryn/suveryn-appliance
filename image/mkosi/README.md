@@ -32,7 +32,7 @@ cd image/mkosi
 sudo ./prebuild-services             # the appliance's sūveryn services, built on this host into prebuilt/ (#47)
 sudo mkosi -f build                  # the appliance: linux-generic and firmware, the services, slot A of 32 GiB
 test/make-test-keys                  # once: the test system's bundle and portal keys (#36, #37), never committed
-test/make-test-ui                    # the chat UI's build for the test system's web setup (#37), never committed
+test/make-test-ui                    # the chat UI's build and core's messages for the test system's web setup (#37, #141), never committed
 sudo mkosi -f --profile test build   # the test system: the same layout, small (for run-vm-tests)
 ```
 
@@ -232,7 +232,7 @@ nginx, the setup service and its units, at `/opt/suveryn/appliance`. It opens at
 installed appliance, writes `setup-cert.pem` while open and `setup-complete` when it closes. Its
 provisioning runs the sūveryn services, which are in this image since #47; the VM tests still run it
 with a stand-in for provisioning (`run-vm-tests` step 4b, which has no GPU) and carry their own build
-of the chat UI (`test/make-test-ui`).
+of the chat UI and their own copy of core's messages (`test/make-test-ui`).
 
 ## The appliance's identity and system state (#35)
 

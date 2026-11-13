@@ -155,6 +155,7 @@ image/mkosi/mkosi.tools/
 image/mkosi/test/keys/
 # The chat UI's build for the test system, made by image/mkosi/test/make-test-ui: never committed
 image/mkosi/test/ui/
+image/mkosi/test/core-messages/
 # macOS folder settings (Finder)
 .DS_Store
 # The services built for the read-only system on a Pod, made by image/mkosi/prebuild-services: never committed
