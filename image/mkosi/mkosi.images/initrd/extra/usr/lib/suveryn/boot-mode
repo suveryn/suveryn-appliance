@@ -18,13 +18,14 @@ die() { say "$*" >&2; exit 1; }
 disk=$(/usr/lib/suveryn/boot-disk wait) || die "can't tell which disk this system started from"
 
 # 2. Its partitions, by name (sysfs; no other disk is looked at).
-data= bundles=
+data= bundles= logs=
 for p in /sys/class/block/"$disk"/"$disk"*; do
   [ -r "$p/uevent" ] || continue
   name=$(grep -m1 '^PARTNAME=' "$p/uevent" | cut -d= -f2- || true)
   case "$name" in
     suveryn-data) data=${p##*/} ;;
     suveryn-bundles) bundles=${p##*/} ;;
+    suveryn-logs) logs=${p##*/} ;;
   esac
 done
 mkdir -p /run/suveryn
@@ -52,6 +53,8 @@ else
   : > "$SYSROOT/var/lib/suveryn/host/machine-id"
 fi
 [ -n "$bundles" ] && echo "/dev/$bundles" > /run/suveryn/bundles-partition
+# The stick's own logs partition (#144): the installer writes every run there. Nothing is mounted here.
+[ -n "$logs" ] && echo "/dev/$logs" > /run/suveryn/logs-partition
 echo "/dev/$disk" > /run/suveryn/boot-disk
 
 # The machine-id lives on /var: systemd won't follow a link for it, so the file is mounted over the

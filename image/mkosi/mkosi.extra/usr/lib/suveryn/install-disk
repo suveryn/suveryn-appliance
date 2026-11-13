@@ -44,8 +44,18 @@ def step(text: str) -> None:
     print(f"install-disk [{time.monotonic() - START:6.1f}s] {text}", file=sys.stderr, flush=True)
 
 
-def run(*cmd: str, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, check=True, capture_output=True, text=True, **kw)
+LOG = None  # the installer's log (install-log, #144), set by `install` when it loads this tool
+
+
+def run(*cmd: str, secret: bool = False, **kw) -> subprocess.CompletedProcess:
+    """Run a command; in the installer's log go its arguments, exit code, duration and standard error,
+    never its standard output, and for a `secret` command not its standard error either."""
+    began = time.monotonic()
+    r = subprocess.run(cmd, capture_output=True, text=True, **kw)
+    if LOG:
+        LOG.command("install-disk", cmd, r.returncode, time.monotonic() - began, r.stderr, secret=secret)
+    r.check_returncode()
+    return r
 
 
 def lsblk(*devs: str) -> list[dict]:
@@ -127,7 +137,8 @@ def enrol(part: str, key: Path) -> str:
     run("systemd-cryptenroll", f"--unlock-key-file={key}", "--tpm2-device=auto", f"--tpm2-pcrs={TPM_PCRS}",
         "--tpm2-pcrlock=", part)
     step("enrolling a recovery key")
-    out = run("systemd-cryptenroll", f"--unlock-key-file={key}", "--recovery-key", part).stdout
+    # secret: the recovery key is in this command's output, and nothing of it may reach the installer's log
+    out = run("systemd-cryptenroll", f"--unlock-key-file={key}", "--recovery-key", part, secret=True).stdout
     words = [w for w in out.split() if len(w) == 71 and w.count("-") == 7]  # 8 groups of 8 modhex
     if len(words) != 1:
         raise Refused("systemd-cryptenroll gave no recovery key")

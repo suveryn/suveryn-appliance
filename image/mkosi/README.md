@@ -65,7 +65,7 @@ couldn't build a noble initrd; 26.04's own mkosi 26 builds resolute. Packages co
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `make-stick` | Makes an installer stick: the disk image and a bundles partition with signed bundles |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
-| `test/` | `test_mkosi_config.py`, `test_install.py`, `test_installer_ui.py` (any machine; the console installer in a pseudo-terminal), `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
+| `test/` | `test_mkosi_config.py`, `test_install.py`, `test_install_log.py`, `test_installer_ui.py` (any machine; the console installer in a pseudo-terminal), `test_make_stick.py` and `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
 
 ## How the pieces fit
 
@@ -108,14 +108,19 @@ Known:
 ## Installer mode and the installer (#37)
 
 The installer stick holds the **same** system as an installed appliance (design note, "The installer"),
-made by `make-stick`: the image's EFI partition, slot A and verity, block for block, and a fourth
-partition named `suveryn-bundles` that fills the rest of the stick, exFAT (label `SUVBUNDLES`: exFAT
-labels hold 11 characters), with the signed bundles in folders of their own.
+made by `make-stick`: the image's EFI partition, slot A and verity, block for block; a partition
+named `suveryn-logs` (FAT, label `SUVLOGS`, 512 MiB) for the installer's log; and a partition named
+`suveryn-bundles` that fills the rest of the stick, exFAT (label `SUVBUNDLES`: exFAT labels hold 11
+characters), with the signed bundles in folders of their own.
 
 ```bash
 sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundles ./qwen3-30b-a3b-2026.10.1 …
 ```
 
+- **Every run of the installer is logged on the stick** (`install-log`, #144): one folder per run on
+  the logs partition, with a summary, every line and command of the installation, the kernel's
+  messages and the hardware found; never the recovery key. Plug the stick into a laptop and open the
+  drive SUVLOGS. What is kept and what never is: the design note, "The installer's log".
 - **One system, two modes, decided in the initrd** (`suveryn-boot-mode`, before anything else
   starts). The disk the firmware started from (systemd-boot's `LoaderDevicePartUUID`) has a partition
   named `suveryn-data`: **installed**, it is unlocked and mounted on `/var`. It has none:

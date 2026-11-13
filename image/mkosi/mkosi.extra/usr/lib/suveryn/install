@@ -71,12 +71,24 @@ class Refused(Exception):
         self.code, self.params = code, params
 
 
+LOG = None  # the installer's log (install-log, #144): set in main for an installation
+
+
 def step(n: int, total: int, text: str) -> None:
+    if LOG:
+        LOG.summary(steps=[{"step": f"{n}/{total} {text}", "at_seconds": round(time.monotonic() - START, 1)}])
     print(f"step {n}/{total}: {text}  [{time.monotonic() - START:.0f} s]", file=sys.stderr, flush=True)
 
 
 def run(*cmd: str) -> str:
-    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    """Run a command; in the installer's log go its arguments, exit code, duration and standard error,
+    never its standard output."""
+    began = time.monotonic()
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if LOG:
+        LOG.command("install", cmd, r.returncode, time.monotonic() - began, r.stderr)
+    r.check_returncode()
+    return r.stdout
 
 
 # ---------------------------------------------------------------------------- the answers
@@ -212,6 +224,7 @@ def install(args) -> dict:
         raise Refused(f"unknown language {args.language!r} (one of: {', '.join(LANGUAGES)})")
     network, net_summary = network_file(args)
     disk = load("install-disk")
+    disk.LOG = LOG
     bundle = load("bundle")
     total = 4
     models, packs = [], []
@@ -337,14 +350,42 @@ def main(argv: list[str]) -> int:
         return 0
     if not a.disk or not a.name:
         ap.error("--disk and --name are needed")
+    # Everything from here is logged on the stick's logs partition (#144): this tool's own lines (standard
+    # error, as the screens read them), every command it runs, and how it ended. Never the recovery key:
+    # it leaves on standard output only.
+    global LOG
+    log_tool = load("install-log")
+    own_run = not os.environ.get(log_tool.ENV)  # started by hand: the screens open the run otherwise
+    LOG = log_tool.Log.attach()
+    sys.stderr = log_tool.Tee(sys.stderr, LOG, "install")
+    LOG.line("install", "arguments: " + " ".join(argv))
     try:
         result = install(a)
     except Refused as e:
         print(f"install: {e}", file=sys.stderr)
+        LOG.summary(installation={"result": "refused", "exit": 2})
+        if own_run:
+            LOG.close("refused")
         return 2
     except subprocess.CalledProcessError as e:
         print(f"install: {' '.join(e.cmd)} failed: {(e.stderr or '').strip()[-500:]}", file=sys.stderr)
+        LOG.summary(installation={"result": "failed", "exit": 1, "command": e.cmd[0]})
+        if own_run:
+            LOG.close("failed")
         return 1
+    except BaseException as e:  # nobody planned for it: its kind and place in the log, then as before
+        import traceback
+        where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-4:]))
+        LOG.line("install", f"stopped by {type(e).__name__} at {where}")
+        LOG.summary(installation={"result": "failed", "exit": 1, "stopped_by": type(e).__name__})
+        if own_run:
+            LOG.close("failed")
+        raise
+    LOG.summary(installation={"result": "installed", "exit": 0,
+                              **{k: v for k, v in result.items() if k != "recovery_key"}})
+    LOG.forbid(result.get("recovery_key", ""))
+    if own_run:
+        LOG.close("installed")
     if a.json:
         print(json.dumps(result, indent=1))
     else:

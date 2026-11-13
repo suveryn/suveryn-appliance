@@ -46,6 +46,7 @@ def load(name: str):
 
 
 ENGINE = load("install")
+LOGS = load("install-log")  # every run of the installer leaves a folder on the stick's logs partition (#144)
 
 
 TEXT = json.loads((LIB / "installer-text.json").read_text())
@@ -188,7 +189,47 @@ class RealSystem:
         return subprocess.Popen([str(LIB / "install"), *args, "--json"], stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
 
+    def open_log(self):
+        """This run's log, on the stick's logs partition (in memory when it can't be used), with the
+        system's own messages copied beside it while the installer runs."""
+        log = LOGS.Log.open()
+        log.follow_system()
+        return log
+
+    def describe(self) -> str:
+        """hardware.txt: the machine as found, for whoever analyses the run. Makes, models, sizes and
+        versions; no serial numbers and no network card addresses (decision of 13 November 2026)."""
+        def read(path: str) -> str:
+            try:
+                return Path(path).read_text(errors="replace").strip()
+            except OSError:
+                return ""
+
+        def tool(*cmd: str) -> str:
+            try:
+                return subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout.strip()
+            except (OSError, subprocess.TimeoutExpired):
+                return ""
+        dmi = "/sys/class/dmi/id/"
+        cpu = next((ln.split(":", 1)[1].strip() for ln in read("/proc/cpuinfo").splitlines() if ln.startswith("model name")), "")
+        parts = [
+            ("machine", "\n".join(f"{k}: {read(dmi + k)}" for k in ("sys_vendor", "product_name", "product_version", "board_vendor",
+                                                                    "board_name", "bios_vendor", "bios_version", "bios_date"))),
+            ("processor and memory", f"{cpu}\ncores: {os.cpu_count()}\n" + "\n".join(read("/proc/meminfo").splitlines()[:3])),
+            ("kernel", " ".join(os.uname())),
+            ("firmware", "UEFI" if Path("/sys/firmware/efi").exists() else "not UEFI"),
+            ("tpm", f"/dev/tpmrm0: {Path('/dev/tpmrm0').exists()}\nversion: {read('/sys/class/tpm/tpm0/tpm_version_major')}"),
+            ("graphics card", tool("nvidia-smi", "--query-gpu=name,memory.total,driver_version", "--format=csv")),
+            ("disks", tool("lsblk", "-o", "NAME,TYPE,SIZE,MODEL,TRAN,ROTA,RM,RO,PARTLABEL")),
+            ("pci devices", tool("lspci", "-nn")),
+            ("network ports", "\n".join(f"{p['name']}: {p.get('model', '')}, cable {'in' if p.get('carrier') else 'out'}, speed {p.get('speed')}"
+                                         for p in self.interfaces())),
+            ("what the installer's hardware check read", json.dumps(self.hardware(), indent=1)),
+        ]
+        return "".join(f"== {title}\n{body or '(nothing found)'}\n\n" for title, body in parts)
+
     def reboot(self) -> None:
+        LOGS.unmount()
         subprocess.run(["systemctl", "reboot"])
 
 
@@ -234,6 +275,21 @@ class FakeSystem(RealSystem):
         log = self.path.with_suffix(".log")
         with open(log, "a") as f:
             f.write(json.dumps({key: value}) + "\n")
+
+    def open_log(self):
+        """The run's folder beside the machine's file; "logs": false stands for a stick whose logs partition can't be used."""
+        if self.d.get("logs", True) is False:
+            return self._no_log()
+        return LOGS.Log.open(self.path.parent / "logs")
+
+    def _no_log(self):
+        log = LOGS.Log.open(self.path.parent / "logs-in-memory")
+        log.persistent = False
+        return log
+
+    def describe(self):
+        return json.dumps({"hardware": self.d["hardware"], "disks": self.d["disks"],
+                           "interfaces": [{k: v for k, v in p.items() if k != "mac"} for p in self.d["interfaces"]]}, indent=1)
 
     def run_install(self, args):
         self.record("install", args)
@@ -990,6 +1046,7 @@ class Installing(Screen):
             self.follow(line)
         out = self.proc.stdout.read()
         code = self.proc.wait()
+        log = self.app.log
         if code == 0:
             try:
                 self.result = json.loads(out)
@@ -999,6 +1056,14 @@ class Installing(Screen):
         else:
             last = [ln for ln in self.lines if not ln.startswith(("bundle:", "step ", "install-disk ["))]
             self.failed = (last[-1] if last else f"exit {code}").removeprefix("install: ")
+        if self.result and not self.failed:
+            # The recovery key is on the next screen and nowhere else: make sure of it.
+            log.forbid(self.result.get("recovery_key", ""))
+            log.summary(result="installed, waiting for the restart")
+        else:
+            log.line("installer", f"the installation failed (exit {code}): {self.failed}")
+            log.summary(result="failed", failure=self.failed, exit=code)
+            log.flush()  # everything onto the stick now: the machine may be switched off at this screen
         self.done = True
 
     def follow(self, line):
@@ -1054,6 +1119,8 @@ class Installing(Screen):
         if self.failed:
             c.add((f"{WARN} ", "accent"), (t("c6_failed"), "strong"))
             c.wrap(self.failed[:1].upper() + self.failed[1:], "accent", indent=2)
+            log = self.app.log
+            c.wrap(t("c6_log", folder=log.name) if log.persistent else t("c6_log_none"), "text", indent=2)
             c.wrap(t("c6_failed_note", disk=self.app.answers["disk"]), "dim", indent=2)
         else:
             c.wrap(t("c6_duration"), "text")
@@ -1100,6 +1167,8 @@ class RecoveryKey(Screen):
         c.blank()
         c.add((f"{WARN} ", "accent"), (t("c7_once"), "strong"))
         c.wrap(t("c7_paper"), "dim", indent=2)
+        if self.app.log.persistent:
+            c.wrap(t("c7_log", folder=self.app.log.name), "dim", indent=2)
         c.blank()
         ok = self.confirm.value == groups[0]
         col = len(text_of(self.confirm.label))
@@ -1126,6 +1195,14 @@ class App:
         self.scr, self.system = scr, system
         self.answers = {"language": "en", "keyboard": "be", "timezone": "Europe/Brussels", "models": None}
         self.version = system.version()
+        # The log of this run (#144): opened before anything is asked, so a machine the installer refuses
+        # (no graphics card, no TPM) leaves its record too.
+        self.log = system.open_log()
+        self.log.summary(image_version=self.version)
+        try:
+            self.log.hardware(system.describe())
+        except Exception as e:  # noqa: BLE001: the description never stops the installer
+            self.log.line("installer", f"the machine couldn't be described: {type(e).__name__}")
         self.models, self.models_started = None, time.time()
         threading.Thread(target=self.check_models, daemon=True).start()
         self.ink = Ink()
@@ -1144,6 +1221,9 @@ class App:
             self.models = self.system.models()
         except Exception as e:  # noqa: BLE001 (shown, not hidden)
             self.models = [{"folder": "?", "valid": False, "error": str(e)}]
+        for m in self.models:
+            self.log.line("models", f"{m.get('folder')}: " + (f"valid, {m.get('name')} {m.get('version')}, {m.get('size')} bytes"
+                                                               if m.get("valid") else f"NOT VALID: {m.get('error')}"))
 
     def go(self, cls):
         # A screen keeps its fields when you come back to it; the ones after the hardware check are
@@ -1318,8 +1398,12 @@ class App:
             err = s.leave()
             if err:
                 s.error = err
+                self.log.event(f"{type(s).__name__}: refused", shown=err)
                 return
+            self.log.event(f"{type(s).__name__}: done")
             if isinstance(s, Summary):
+                # the choices, as the installation starts with them (nothing typed is a secret here)
+                self.log.summary(choices={k: v for k, v in self.answers.items() if k not in ("result", "hardware", "lease")})
                 self.go(Installing)
             else:
                 self.go(FLOW[FLOW.index(type(s)) + 1])
@@ -1330,6 +1414,7 @@ class App:
                 return
             s.error = ""
             self.draw()
+            self.log.close("installed")
             self.system.reboot()
 
     def run(self):
@@ -1359,7 +1444,19 @@ def main() -> int:
         return 2
     import locale
     locale.setlocale(locale.LC_ALL, "C.UTF-8")
-    curses.wrapper(lambda scr: App(scr, system).run())
+    def program(scr):
+        app = App(scr, system)
+        try:
+            app.run()
+        except SystemExit:
+            raise
+        except BaseException as e:  # the installer itself stopped: its kind and place in the log, then as before
+            import traceback
+            where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-4:]))
+            app.log.line("installer", f"stopped by {type(e).__name__} at {where}")
+            app.log.close("the installer stopped", stopped_by=type(e).__name__)
+            raise
+    curses.wrapper(program)
     return 0
 
 

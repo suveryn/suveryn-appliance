@@ -361,6 +361,71 @@ def test_install_recovery_key_and_restart(console):
     assert {"reboot": True} in c.log()
 
 
+def test_an_installation_leaves_its_log_on_the_stick_without_the_recovery_key(console, tmp_path):
+    """suveryn-tracker#144: every run is logged, good or bad, in its own folder on the stick's logs partition."""
+    c = console()
+    to_summary(c)
+    c.type("ERASE")
+    c.press(ENTER)
+    c.wait("Write down the disk recovery key", timeout=10)
+    (run,) = (tmp_path / "logs").iterdir()
+    assert f"Installation log on the stick: {run.name}" in c.text
+    c.type("fjkcbvgt")
+    c.press(ENTER, settle=0.5)
+    assert {"reboot": True} in c.log()
+    assert sorted(p.name for p in run.iterdir()) == ["hardware.txt", "install.log", "summary.json"]
+    summary = json.loads((run / "summary.json").read_text())
+    assert summary["result"] == "installed" and summary["reference"] == run.name[-9:] and summary["image_version"]
+    assert summary["choices"]["name"] == "notary-brussels-01" and summary["choices"]["disk"] == "nvme0n1"
+    log = (run / "install.log").read_text()
+    assert "screen: Summary: done" in log and "models: qwen: valid" in log and "models: third: NOT VALID" in log
+    everything = "".join(p.read_text() for p in run.iterdir())
+    assert KEY not in everything and "fjkcbvgt" not in everything  # not the key, and not what was typed to confirm it
+    assert "52:54:00" not in everything  # no network card addresses
+    assert "RTX" in (run / "hardware.txt").read_text() or "gpu" in (run / "hardware.txt").read_text()
+
+
+def test_a_failed_installation_shows_its_reference_and_where_the_log_is(console, tmp_path):
+    m = copy.deepcopy(MACHINE)
+    m["install"] = {"lines": ["install: checking qwen", "install: systemd-repart failed: No such device"], "exit": 1, "result": {}}
+    c = console(m)
+    to_summary(c)
+    c.type("ERASE")
+    c.press(ENTER)
+    c.wait("The installation failed")
+    (run,) = (tmp_path / "logs").iterdir()
+    s = " ".join(c.text.replace("│", " ").split())
+    assert f"Full log on the stick (SUVLOGS): {run.name}" in s
+    assert "The stick's installer and models are unchanged." in s and "Systemd-repart failed: No such device" in s
+    summary = json.loads((run / "summary.json").read_text())
+    assert summary["result"] == "failed" and summary["exit"] == 1 and "No such device" in summary["failure"]
+    assert "the installation failed (exit 1)" in (run / "install.log").read_text()
+
+
+def test_a_stick_whose_logs_partition_cant_be_used_still_installs_and_says_so(console):
+    m = copy.deepcopy(MACHINE)
+    m["logs"] = False
+    m["install"] = {"lines": ["install: systemd-repart failed: No such device"], "exit": 1, "result": {}}
+    c = console(m)
+    to_summary(c)
+    c.type("ERASE")
+    c.press(ENTER)
+    c.wait("The installation failed")
+    s = " ".join(c.text.replace("│", " ").split())
+    assert "The log couldn't be written to the stick: note the line above." in s and "SUVLOGS" not in s
+
+
+def test_a_machine_the_installer_refuses_leaves_its_record_too(console, tmp_path):
+    """The log opens before anything is asked: no graphics card, no installation, still a folder to analyse."""
+    m = copy.deepcopy(MACHINE)
+    m["hardware"]["gpu"] = None
+    c = console(m)
+    to_disks(c)
+    (run,) = (tmp_path / "logs").iterdir()
+    assert json.loads((run / "summary.json").read_text())["result"] == "started"
+    assert '"gpu": null' in (run / "hardware.txt").read_text()
+
+
 def test_a_failed_installation_says_so(console):
     m = copy.deepcopy(MACHINE)
     m["install"] = {"lines": ["install: checking qwen", "install: the bundle qwen isn't valid: model.gguf: its SHA-256 "

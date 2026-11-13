@@ -55,11 +55,13 @@ jobs:
         # sandbox wants python3-seccomp; the network mode wants dnsmasq and ip. Without them those tests skip
         # themselves and say so, which is what happened on every machine that ran them by hand (handbook,
         # testing/regression-gap-analysis.md: the appliance's findings were in exactly these parts). The console's
-        # screen tests want python3-pyte (a terminal to draw on) and skipped here without it.
+        # screen tests want python3-pyte (a terminal to draw on) and skipped here without it. The stick's
+        # partitions and the installer's log on a real FAT partition want sfdisk, mkfs.vfat and mtools (#144).
         run: |
           sudo apt-get update -qq
           pgvector=$(apt-cache search --names-only '^postgresql-[0-9]+-pgvector$' | awk '{print $1}' | sort -V | tail -1)
           sudo apt-get install -y -qq python3-pytest python3-yaml python3-seccomp python3-pyte age zstd dnsmasq iproute2 \
+            fdisk dosfstools mtools \
                                       postgresql postgresql-contrib "$pgvector"
           sudo systemctl start postgresql
           sudo -u postgres psql -c "select version()"

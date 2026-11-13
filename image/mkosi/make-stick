@@ -1,19 +1,22 @@
 #!/usr/bin/python3
-"""Make an installer stick: the release's disk image plus a partition with signed bundles (#36, #37).
+"""Make an installer stick: the release's disk image, a partition for the installer's logs and a
+partition with signed bundles (#36, #37, #144).
 
     sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX [--bundles DIR ...]
     sudo image/mkosi/make-stick suveryn-test_0.0.0.raw stick.raw --size 4G --fs vfat --bundles DIR ...
 
 The stick is the same system as an installed appliance (design note, "The installer"): its EFI
-partition, slot A and verity, block for block from the image. A fourth partition named
-suveryn-bundles fills the rest of the stick (exFAT, label SUVBUNDLES: exFAT allows 11 characters)
-and holds the bundles,
-each in a folder of its own. The stick has no data partition: that is how the system knows it runs
+partition, slot A and verity, block for block from the image. After them come two partitions:
+suveryn-logs (FAT, label SUVLOGS, 512 MiB unless --logs-size says otherwise), the only part of the
+stick the installer writes to: one folder per run, readable on any laptop (install-log, #144); and
+suveryn-bundles, which fills the rest of the stick (exFAT, label SUVBUNDLES: exFAT allows 11
+characters) and holds the bundles, each in a folder of its own. The installer never writes to it. The stick has no data partition: that is how the system knows it runs
 as the installer (suveryn-boot-mode, in the initrd).
 
 Everything on the target is erased. A file as target is made (or replaced) with --size; its
-bundles partition is attached as a loop device to format it. Needs root, sfdisk, losetup and mkfs.exfat
-(exfatprogs) or mkfs.vfat. vfat is for tests only: it can't hold files of 4 GiB or more.
+partitions are attached as loop devices to format them. Needs root, sfdisk, losetup, mkfs.vfat
+(dosfstools) and mkfs.exfat (exfatprogs). --fs vfat for the bundles is for tests only: it can't hold
+files of 4 GiB or more.
 """
 
 import argparse
@@ -27,6 +30,9 @@ from pathlib import Path
 
 BUNDLES_NAME = "suveryn-bundles"
 LINUX_DATA = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
+LOGS_NAME = "suveryn-logs"
+# "Microsoft basic data": the type under which Windows, macOS and Linux all show a FAT partition.
+BASIC_DATA = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
 
 
 def run(*cmd: str, **kw) -> str:
@@ -53,6 +59,7 @@ def main() -> int:
     ap.add_argument("--bundles", type=Path, nargs="*", default=[], help="bundle folders to put on the stick")
     ap.add_argument("--fs", choices=("exfat", "vfat"), default="exfat")
     ap.add_argument("--size", help="for a file: its size (e.g. 4G)")
+    ap.add_argument("--logs-size", default="512M", help="the logs partition's size (default 512M; tests use less)")
     a = ap.parse_args()
     if os.geteuid() != 0:
         sys.exit("make-stick: run as root")
@@ -79,23 +86,33 @@ def main() -> int:
     # The image's backup partition table sits at the image's end: move it to the stick's end, then
     # add the bundles partition in the space between.
     run("sfdisk", "--relocate", "gpt-bak-std", str(a.stick))
+    # The logs partition first, at its fixed size; the bundles partition takes what is left.
+    logs_mib = max(1, size(a.logs_size) // 2**20)
+    run("sfdisk", "--append", "--no-reread", str(a.stick), input=f"size={logs_mib}MiB, type={BASIC_DATA}, name={LOGS_NAME}\n")
     run("sfdisk", "--append", "--no-reread", str(a.stick), input=f"type={LINUX_DATA}, name={BUNDLES_NAME}\n")
 
-    loop = None
+    loops = []
+
+    def node_of(name: str) -> str:
+        """The partition with this name: its device node, or for a file a loop device at its offset."""
+        if is_device:
+            parts = json.loads(run("lsblk", "--json", "--paths", "-o", "NAME,PARTLABEL", str(a.stick)))
+            return next(c["name"] for c in parts["blockdevices"][0]["children"] if c.get("partlabel") == name)
+        table = json.loads(run("sfdisk", "--json", str(a.stick)))["partitiontable"]
+        part = next(p for p in table["partitions"] if p.get("name") == name)
+        sector = table.get("sectorsize", 512)
+        loops.append(run("losetup", "--find", "--show", f"--offset={part['start'] * sector}",
+                         f"--sizelimit={part['size'] * sector}", str(a.stick)).strip())
+        return loops[-1]
+
     try:
         if is_device:
             run("partprobe", str(a.stick)) if shutil.which("partprobe") else run("blockdev", "--rereadpt", str(a.stick))
             settle()
-            parts = json.loads(run("lsblk", "--json", "--paths", "-o", "NAME,PARTLABEL", str(a.stick)))
-            node = next(c["name"] for c in parts["blockdevices"][0]["children"] if c.get("partlabel") == BUNDLES_NAME)
-        else:
-            # The bundles partition alone, by its offset (no partition scan needed).
-            table = json.loads(run("sfdisk", "--json", str(a.stick)))["partitiontable"]
-            part = next(p for p in table["partitions"] if p.get("name") == BUNDLES_NAME)
-            sector = table.get("sectorsize", 512)
-            loop = run("losetup", "--find", "--show", f"--offset={part['start'] * sector}",
-                       f"--sizelimit={part['size'] * sector}", str(a.stick)).strip()
-            node = loop
+        logs = node_of(LOGS_NAME)
+        print(f"make-stick: formatting {logs} (the installer's logs, FAT)", flush=True)
+        run("mkfs.vfat", "-n", "SUVLOGS", logs)
+        node = node_of(BUNDLES_NAME)
         print(f"make-stick: formatting {node} ({a.fs})", flush=True)
         if a.fs == "exfat":
             run("mkfs.exfat", "-L", "SUVBUNDLES", node)
@@ -116,9 +133,9 @@ def main() -> int:
             finally:
                 run("umount", mnt)
     finally:
-        if loop:
+        for loop in loops:
             run("losetup", "--detach", loop)
-        print(f"make-stick: done: {a.stick} with {len(a.bundles)} bundle(s)")
+        print(f"make-stick: done: {a.stick} with {len(a.bundles)} bundle(s) and an empty logs partition")
     return 0
 
 

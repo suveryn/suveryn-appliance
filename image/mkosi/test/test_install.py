@@ -9,6 +9,8 @@ Installing itself is tested in the virtual machine (run-vm-tests, step 1).
 import argparse
 import importlib.machinery
 import importlib.util
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -102,6 +104,31 @@ def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
     args = argparse.Namespace(name="x", timezone="Europe/Brussels", disk="/dev/null")
     with pytest.raises(install.Refused, match="not as the installer"):
         install.install(args)
+
+
+def test_an_installation_that_is_refused_is_logged_with_how_it_ended(tmp_path, monkeypatch, capsys):
+    """suveryn-tracker#144: the engine logs its own lines and how it ended, also when started by hand (it then
+    opens a run of its own; here, with no stick, in memory)."""
+    if os.geteuid() != 0:
+        pytest.skip("install refuses to run except as root")
+    monkeypatch.setenv("SUVERYN_RUN", str(tmp_path))
+    monkeypatch.delenv("SUVERYN_INSTALL_LOG", raising=False)
+    monkeypatch.setattr(install, "RUN", tmp_path)
+    monkeypatch.setattr(install, "LOG", None)
+    monkeypatch.setattr(install, "LIB", TOOL.parent)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)  # main puts a copy to the log in its place: put it back afterwards
+    (tmp_path / "boot-mode").write_text("installer\n")
+    try:
+        assert install.main(["--disk", "/dev/null", "--name=-not-a-name"]) == 2
+    finally:
+        os.environ.pop("SUVERYN_INSTALL_LOG", None)
+    (run,) = (tmp_path / "install-log-in-memory").iterdir()
+    log = (run / "install.log").read_text()
+    assert "install: arguments: --disk /dev/null --name=-not-a-name" in log and "install: the name '-not-a-name' can't be used" in log
+    summary = json.loads((run / "summary.json").read_text())
+    assert summary["result"] == "refused" and summary["installation"] == {"result": "refused", "exit": 2}
+    assert summary["kept_on_the_stick"] is False
+    assert "can't be used" in capsys.readouterr().err  # and on the console as before
 
 
 # ---------------------------------------------------------------------------- the stick's bundles (C3)
