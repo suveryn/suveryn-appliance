@@ -62,7 +62,13 @@ def load(name: str):
 
 
 class Refused(Exception):
-    pass
+    """Nothing is installed or changed. The sentence is for the command line and the log; `code` and
+    `params` say the same to the console's screens, which word it in the reader's language
+    (installer-text.json) and never read the sentence."""
+
+    def __init__(self, detail: str, code: str = "", **params):
+        super().__init__(detail)
+        self.code, self.params = code, params
 
 
 def step(n: int, total: int, text: str) -> None:
@@ -77,7 +83,7 @@ def run(*cmd: str) -> str:
 def check_name(name: str) -> str:
     if not NAME.fullmatch(name or ""):
         raise Refused(f"the name {name!r} can't be used: letters, digits and hyphens, at most 63, "
-                      "not starting or ending with a hyphen")
+                      "not starting or ending with a hyphen", "name")
     return name
 
 
@@ -114,7 +120,7 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
     ports = interfaces() if ports is None else ports
     iface = args.interface or (next(iter(ports)) if ports else None)
     if iface not in ports:
-        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})")
+        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})", "port")
     mac = ports[iface]
     summary = {"interface": iface, "mac": mac}
     lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]",
@@ -125,18 +131,19 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
         lines.append("DHCP=yes")
         summary["address"] = "dhcp"
     else:
+        at = args.address  # the value being read, so a refusal can name it as it was typed
         try:
             addr = ipaddress.ip_interface(args.address)
-            gw = ipaddress.ip_address(args.gateway) if args.gateway else None
-            dns = [ipaddress.ip_address(d) for d in (args.dns or "").split(",") if d]
+            gw = ipaddress.ip_address(at := args.gateway) if args.gateway else None
+            dns = [ipaddress.ip_address(at := d) for d in (args.dns or "").split(",") if d]
         except ValueError as e:
-            raise Refused(f"unusable address: {e}") from None
+            raise Refused(f"unusable address: {e}", "address", value=at) from None
         if addr.network.prefixlen == addr.max_prefixlen or addr.ip == addr.network.network_address:
-            raise Refused(f"{args.address} isn't a host address with a network prefix (e.g. 192.168.1.50/24)")
+            raise Refused(f"{args.address} isn't a host address with a network prefix (e.g. 192.168.1.50/24)", "prefix")
         if gw and gw not in addr.network:
-            raise Refused(f"the gateway {gw} isn't in {addr.network}")
+            raise Refused(f"the gateway {gw} isn't in {addr.network}", "gateway", gateway=str(gw), network=str(addr.network))
         if not dns:
-            raise Refused("a fixed address needs a DNS server (--dns)")
+            raise Refused("a fixed address needs a DNS server (--dns)", "dns")
         lines.append(f"Address={addr}")
         if gw:
             lines.append(f"Gateway={gw}")
@@ -189,7 +196,7 @@ def list_models(folder: Path | None, kind: str = "model") -> list[dict]:
                         "description": r["description"], "description_nl": r["description_nl"],
                         "description_fr": r["description_fr"], "default": r["default"]})
         except bundle.Invalid as e:
-            out.append({"folder": d.name, "valid": False, "error": str(e)})
+            out.append({"folder": d.name, "valid": False, "error": str(e), "code": e.code})
     return out
 
 

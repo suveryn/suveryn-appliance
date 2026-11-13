@@ -209,7 +209,7 @@ def test_every_extra_tree_exists():
         found = trees(conf)
         assert found, conf
         for t in found:
-            if t in ("../../test/keys/public", "../../test/ui", "prebuilt"):  # made by test/make-test-keys, make-test-ui and prebuild-services, never committed
+            if t in ("../../test/keys/public", "../../test/ui", "../../test/core-messages", "prebuilt"):  # made by test/make-test-keys, make-test-ui and prebuild-services, never committed
                 continue
             assert (base / t).is_dir(), f"{conf.name}: {t}"
 

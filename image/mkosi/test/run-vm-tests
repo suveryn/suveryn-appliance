@@ -492,8 +492,9 @@ def main() -> int:
         bad(f"the identity changed between boots, or is missing ({identities})")
 
     note("4b. the web setup in a browser, through to Complete")
-    if not (HERE / "ui" / "setup.html").exists() or not (HERE / "keys" / "test-portal.key").exists():
-        bad("no chat UI or portal key in the test image: test/make-test-ui and test/make-test-keys, then build again")
+    if not (HERE / "ui" / "setup.html").exists() or not (HERE / "core-messages" / "messages.json").exists() \
+            or not (HERE / "keys" / "test-portal.key").exists():
+        bad("no chat UI, messages or portal key in the test image: test/make-test-ui and test/make-test-keys, then build again")
     else:
         out, prompts = boot(work, "web-setup", [target], tpm, work / "vars.fd", credential="suveryn.test=web-setup",
                             forward=WEB, beside=lambda: web_setup_test(work, identities[0] or ""))

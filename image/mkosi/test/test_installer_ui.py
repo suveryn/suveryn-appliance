@@ -45,7 +45,7 @@ MACHINE = {
                {"folder": "mistral", "valid": True, "name": "mistral-small", "title": "Mistral Small 3.2 24B",
                 "version": "1", "size": 15_000_000_000, "key": "0f61e8d1aa3bfa1a8e4c", "default": False,
                 "description": "20 to 40% faster. People choose it per conversation."},
-               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)"}],
+               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)", "code": "signature"}],
     "interfaces": [{"name": "eno1", "mac": "52:54:00:12:34:56", "model": "Intel I226-V", "carrier": True, "speed": 1000},
                    {"name": "eno2", "mac": "52:54:00:12:34:57", "model": "Intel I226-V", "carrier": False, "speed": -1}],
     "dhcp": {"eno1": {"address": "192.168.1.50/24", "gateway": "192.168.1.1", "dns": ["192.168.1.1"]}},
@@ -486,6 +486,52 @@ def _ui_module(monkeypatch):
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(mod)
     return mod
+
+
+def test_a_problem_is_worded_by_its_code_in_the_chosen_language_never_from_english(monkeypatch):
+    """Messages are codes (suveryn-tracker#141): the screens used to recognise the engine's English sentences, and
+    showed the sentence itself when they didn't."""
+    ui = _ui_module(monkeypatch)
+    source = UI.read_text(encoding="utf-8")
+    assert " in error" not in source and "error[:" not in source and "re.search(r\"the gateway" not in source
+    words = json.loads((LIB / "installer-text.json").read_text(encoding="utf-8"))
+    for lang in ("en", "nl", "fr"):
+        monkeypatch.setattr(ui, "LANG", lang)
+        assert ui.model_problem("changed") == words["c3_changed"][lang]
+        assert ui.model_problem("signature") == words["c3_bad_signature"][lang]
+        for other in ("invalid", "", "tomorrow's code"):
+            assert ui.model_problem(other) == words["c3_not_valid"][lang]
+        refused = ui.ENGINE.Refused
+        assert ui.network_problem(refused("English", "prefix")) == words["c4_need_prefix"][lang]
+        assert ui.network_problem(refused("English", "dns")) == words["c4_need_dns"][lang]
+        said = ui.network_problem(refused("English", "gateway", gateway="10.0.0.1", network="192.168.1.0/24"))
+        assert "10.0.0.1" in said and "192.168.1.0/24" in said and "English" not in said
+        said = ui.network_problem(refused("'300.1.1.1/24' does not appear to be an IPv4 or IPv6 interface", "address", value="300.1.1.1/24"))
+        assert "300.1.1.1/24" in said and "appear" not in said
+
+
+def test_the_bundle_check_says_why_as_a_code(tmp_path):
+    import importlib.machinery
+    import importlib.util
+    loader = importlib.machinery.SourceFileLoader("bundle_for_codes", str(LIB / "bundle"))
+    bundle = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    sys.dont_write_bytecode, before = True, sys.dont_write_bytecode
+    try:
+        loader.exec_module(bundle)
+    finally:
+        sys.dont_write_bytecode = before
+    assert bundle.Invalid("anything").code == "invalid"
+    (tmp_path / "manifest.json").write_text("{}")
+    with pytest.raises(bundle.Invalid) as e:
+        bundle.verify(tmp_path)  # no manifest.sig: not signed
+    assert e.value.code == "signature"
+    (tmp_path / "model.gguf").write_bytes(b"12345")
+    with pytest.raises(bundle.Invalid) as e:
+        bundle.hash_file(tmp_path / "model.gguf", 4)  # not the size the manifest says
+    assert e.value.code == "changed"
+    with pytest.raises(bundle.Invalid) as e:
+        bundle.check_files(tmp_path, {"files": [{"path": "gone.gguf", "size": 1, "sha256": "0" * 64}]})
+    assert e.value.code == "changed"
 
 
 def test_french_punctuation_never_starts_a_line(monkeypatch):
