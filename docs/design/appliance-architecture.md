@@ -110,7 +110,8 @@ The USB stick holds the **same** system and boot file as an installed appliance,
 | 1 | EFI system partition | The same boot file. The stick has no data partition, and that is what starts installer mode (`suveryn-boot-mode` in the initrd: `/var` in memory) |
 | 2 | System | Identical to an installed slot |
 | 3 | System verity | Its fingerprints |
-| 4 | `suveryn-bundles` (exFAT, label `SUVBUNDLES`; the rest of the stick) | Signed model bundles (#36) |
+| 4 | `suveryn-logs` (FAT, label `SUVLOGS`; 512 MiB) | The installer's log: one folder per run (#144). The only partition of the stick the installer writes to |
+| 5 | `suveryn-bundles` (exFAT, label `SUVBUNDLES`; the rest of the stick) | Signed model bundles (#36). Never written to |
 
 One release produces one system, used both to install and to run: nothing to keep in step between
 an "installer distribution" and the product. In installer mode the console installer (#37, C1 to C7)
@@ -129,6 +130,50 @@ is the only thing that starts. It:
 
 The `first-boot.env` file on the EFI partition, as used today, goes away: nothing the office sets
 ever touches the unencrypted EFI partition.
+
+### The installer's log (#144)
+
+**Every start of the installer leaves a folder on the stick, whether an installation follows, succeeds
+or fails**, so that it can be analysed afterwards on any laptop (decided 13 November 2026, before the
+first installation on real hardware). In installer mode `/var` is in memory and the journal goes with
+the restart; without this an installation left nothing behind but the last line on the screen.
+
+- **Its own partition.** `suveryn-logs`, FAT, between the system and the bundles, under the partition
+  type Windows, macOS and Linux all show. The bundles partition stays read-only: a power cut while
+  logging can't damage the models. FAT has no journal, so the partition is checked before it is
+  mounted (`fsck.vfat -a`), mounted with `flush`, and every line is forced onto the stick as written.
+- **One folder per run**, `0007_20261113-1432_7F3K-92QD`: a counter (a new machine's clock can be
+  wrong, and there is no network time), the clock, and the run's reference, which the screen shows.
+  A run is one start of the installer, opened before anything is asked: a machine the installer
+  refuses (no graphics card, no TPM) leaves its record too.
+
+  | File | Holds |
+  |---|---|
+  | `summary.json` | The result, the steps and when each began, the choices made, the image's version |
+  | `install.log` | Every line the installer and its tools said, with times; every command they ran, with its arguments, exit code, duration and standard error; what was chosen and refused at each screen |
+  | `system.log` | The kernel's and systemd's messages from this start, copied while the installer runs (8 MiB at most) |
+  | `hardware.txt` | The machine: maker and model, firmware, processor and memory, TPM, graphics card, disks, PCI devices, network ports |
+
+- **What never goes in.** The recovery key and the disk's temporary key; what is typed at the
+  console; serial numbers and network card addresses in what the installer writes itself (in
+  `system.log`, the kernel's own lines, serial numbers are masked). A command's standard output is
+  never logged (systemd-cryptenroll prints the recovery key there), and for the command that makes
+  the recovery key not its standard error either. Once the key is known, the run's files are checked
+  for it as a last defence. The tests plant the key in a stand-in's output and check it stays out.
+- **It never stops an installation.** A stick without the partition (made before #144), or one that
+  can't be mounted or written to, installs as before: the log is kept in memory and the screen says
+  the stick keeps no log.
+- **The last 20 runs are kept**; older ones are removed when a run starts. One stick often installs
+  several offices: an earlier office's run (its machine's name, addresses and hardware; no client
+  data exists at installation) stays on the stick until it falls off the end or the partner clears
+  the partition. Nothing is shown about earlier runs (decided 13 November 2026).
+- **Not covered.** A machine that doesn't start the stick at all leaves nothing. The installed
+  system's first start (unlocking the disk, the graphics driver) is the appliance's own journal, on
+  its data partition: the log is not copied onto the installed disk (decided 13 November 2026; the
+  installer destroys its copy of the disk key before its last steps).
+
+The tool is `install-log` (`/usr/lib/suveryn/`); `install-log list` at a shell on the stick names the
+runs. On a laptop the partition appears as a drive named SUVLOGS.
 
 ## First boot and provisioning
 

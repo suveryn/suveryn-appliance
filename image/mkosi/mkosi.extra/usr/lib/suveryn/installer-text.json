@@ -750,9 +750,19 @@
     "fr": "L'installation a échoué."
   },
   "c6_failed_note": {
-    "en": "Nothing on the stick changed. The disk {disk} may be partly written; installing again erases it anew.",
-    "nl": "Op de USB-stick is niets gewijzigd. De schijf {disk} kan gedeeltelijk beschreven zijn; een nieuwe installatie wist ze opnieuw.",
-    "fr": "Rien n'a changé sur la clé USB. Le disque {disk} peut être partiellement écrit ; une nouvelle installation l'efface à nouveau."
+    "en": "The stick's installer and models are unchanged. The disk {disk} may be partly written; installing again erases it anew.",
+    "nl": "De installatie en de modellen op de USB-stick zijn ongewijzigd. De schijf {disk} kan gedeeltelijk beschreven zijn; een nieuwe installatie wist ze opnieuw.",
+    "fr": "Le programme d'installation et les modèles de la clé USB sont inchangés. Le disque {disk} peut être partiellement écrit ; une nouvelle installation l'efface à nouveau."
+  },
+  "c6_log": {
+    "en": "Full log on the stick (SUVLOGS): {folder}",
+    "nl": "Logboek op de USB-stick (SUVLOGS): {folder}",
+    "fr": "Journal sur la clé USB (SUVLOGS) : {folder}"
+  },
+  "c6_log_none": {
+    "en": "This stick keeps no log of the installation: note the line above.",
+    "nl": "Deze USB-stick bewaart geen logboek van de installatie: noteer de regel hierboven.",
+    "fr": "Cette clé USB ne conserve pas de journal de l'installation : notez la ligne ci-dessus."
   },
   "c6_no_result": {
     "en": "the installer gave no result",
@@ -813,6 +823,11 @@
     "en": "Write it on paper and keep it with the office's other important documents, not with the appliance.",
     "nl": "Schrijf ze op papier en bewaar ze bij de andere belangrijke documenten van het kantoor, niet bij de appliance.",
     "fr": "Notez-la sur papier et conservez-la avec les autres documents importants du bureau, pas avec l'appliance."
+  },
+  "c7_log": {
+    "en": "Installation log on the stick: {folder}",
+    "nl": "Installatielogboek op de USB-stick: {folder}",
+    "fr": "Journal d'installation sur la clé USB : {folder}"
   },
   "c7_confirm": {
     "en": "Type the first group to confirm",

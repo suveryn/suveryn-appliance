@@ -272,6 +272,20 @@ def selftest(output: str) -> dict:
             "unlocked_by": value("unlocked-by "), "identity": value("identity ") or None}
 
 
+def stick_logs(stick: Path, into: Path) -> list[Path]:
+    """The runs on the stick's logs partition (#144), copied out of the raw stick as a laptop would read
+    them (mtools, no mount), oldest first."""
+    table = json.loads(subprocess.run(["sfdisk", "--json", str(stick)], check=True, capture_output=True, text=True).stdout)["partitiontable"]
+    part = next((p for p in table["partitions"] if p.get("name") == "suveryn-logs"), None)
+    if part is None:
+        return []
+    shutil.rmtree(into, ignore_errors=True)
+    into.mkdir(parents=True)
+    subprocess.run(["mcopy", "-s", "-n", "-i", f"{stick}@@{part['start'] * table.get('sectorsize', 512)}", "::", str(into)],
+                   capture_output=True)
+    return sorted(p for p in into.iterdir() if p.is_dir() and re.fullmatch(r"\d{4}_\d{8}-\d{4}_[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}", p.name))
+
+
 def make_stick(work: Path, image: Path) -> Path:
     """The installer stick (make-stick, vfat for the test) with three test bundles (#36), signed with the
     test keys (test/make-test-keys): good (plus a file its manifest doesn't list), changed (one byte of
@@ -298,7 +312,7 @@ def make_stick(work: Path, image: Path) -> Path:
     rel("sign", src / "untrusted", "--key-file", work / "untrusted.key")
     stick = work / "stick.raw"
     subprocess.run([sys.executable, str(MKOSI / "make-stick"), str(image), str(stick), "--size", "2G", "--fs", "vfat",
-                    "--bundles", str(good), str(src / "changed"), str(src / "untrusted")], check=True, capture_output=True)
+                    "--logs-size", "64M", "--bundles", str(good), str(src / "changed"), str(src / "untrusted")], check=True, capture_output=True)
     return stick
 
 
@@ -467,6 +481,21 @@ def main() -> int:
         bad(f"the console installer didn't finish: {ui.error if ui else 'no console'} (console: {work}/install.log)")
         print(f"\n{failed} FAILED (kept: {work})")
         return 1
+
+    note("2b. the installation's log is on the stick's own partition, and the recovery key is not in it")
+    runs = stick_logs(stick, work / "stick-logs")
+    last = runs[-1] if runs else None
+    summary = json.loads((last / "summary.json").read_text()) if last and (last / "summary.json").exists() else {}
+    text = "".join(p.read_text(errors="replace") for p in last.iterdir()) if last else ""
+    wanted = {"summary.json", "install.log", "system.log", "hardware.txt"}
+    if last and wanted <= {p.name for p in last.iterdir()} and summary.get("result") == "installed" \
+            and summary.get("choices", {}).get("name") and "ran systemd-repart" in text and "ran systemd-cryptenroll" in text \
+            and key not in text and key.replace("-", "") not in text and not summary.get("secret_masked") \
+            and "Linux version" in (last / "system.log").read_text(errors="replace"):
+        ok(f"run {last.name}: the summary says installed, every command and the kernel's messages are there, "
+           f"no recovery key ({len(runs)} run(s) on the stick, the refused ones of step 1 among them)")
+    else:
+        bad(f"the stick's log isn't as expected: runs {[r.name for r in runs]}, summary {summary} (copied to {work}/stick-logs)")
 
     machine_ids, identities = [], []
     for n in (3, 4):

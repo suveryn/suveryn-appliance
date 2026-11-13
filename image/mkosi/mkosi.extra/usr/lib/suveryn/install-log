@@ -1,0 +1,357 @@
+#!/usr/bin/python3
+"""The installer's log (suveryn-tracker#144): every start of the installer stick leaves a folder on the
+stick's own logs partition, whether an installation follows, succeeds or fails, so it can be analysed
+afterwards on any laptop.
+
+The stick has a small partition named ``suveryn-logs`` (FAT, label ``SUVLOGS``, made by make-stick).
+It is the only part of the stick the installer writes to: the bundles partition stays read-only, so a
+power cut while logging can never damage the models. Each run gets one folder::
+
+    0007_20261113-1432_7F3K-92QD/      counter _ the machine's clock (UTC) _ the run's reference
+        summary.json     what happened: the result, the steps and how long each took, the choices made
+        install.log      everything the installer and its tools said, line by line, with times
+        system.log       the kernel's and the system's own messages while the installer ran
+        hardware.txt     the machine: disks, graphics card, TPM, firmware, memory, network ports
+
+The counter orders the runs (a new machine's clock can be wrong, and there is no network time); the
+reference is what the screen shows. Every line is forced onto the stick as it is written: a hang or a
+power cut leaves everything up to that moment. The last ``KEEP`` runs are kept. English, as logs are.
+
+What never goes in: the disk's recovery key (it is shown once on the screen and stored nowhere), the
+disk's temporary key, what is typed at the console, and serial numbers. A command's standard output is
+never logged, only its arguments, exit code, duration and what it said on standard error; a command
+marked secret, not even that. ``Log.forbid`` checks the run's files for a secret once it is known and
+masks it, as a last line of defence; the tests check that the recovery key stays out.
+
+Without a logs partition (a stick made before #144), or when it can't be mounted, the log is kept in
+memory under /run and the screen says that this stick keeps no log: nothing here ever stops an
+installation. Python 3 standard library only.
+
+    install-log mount | unmount | list          for a person at a shell: where the logs are
+"""
+
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+RUN = Path(os.environ.get("SUVERYN_RUN", "/run/suveryn"))
+MOUNT = RUN / "install-logs"            # the logs partition, while the installer runs
+MEMORY = RUN / "install-log-in-memory"  # where a run goes when the stick has no logs partition
+ENV = "SUVERYN_INSTALL_LOG"             # the run's folder, handed from the screens to the tools they start
+PARTITION_NAME = "suveryn-logs"
+LABEL = "SUVLOGS"
+KEEP = 20
+SYSTEM_LOG_LIMIT = 8 * 2**20            # the system's messages for one run, at most: 20 runs fit on the partition
+NAME = re.compile(r"(\d{4})_\d{8}-\d{4}_[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}")
+# Serial numbers are not kept (decision of 13 November 2026): the kernel names them for USB devices and disks.
+SERIAL = re.compile(r"(?i)\b(serial ?(?:number|no\.?)?\s*[:=]\s*)(\S+)")
+START = time.monotonic()
+
+
+def reference() -> str:
+    """A short id for a run ("7F3K-92QD"), in the same form as suveryn-core's references: shown on the
+    screen, the end of the folder's name. No 0/O or 1/I: it is read aloud to support."""
+    raw = "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def partition() -> str | None:
+    """The stick's logs partition, as the initrd found it on the boot disk (suveryn-boot-mode)."""
+    try:
+        return (RUN / "logs-partition").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def mount() -> Path | None:
+    """The logs partition, mounted to write on (once); None when the stick has none or it can't be mounted."""
+    if os.path.ismount(MOUNT):
+        return MOUNT
+    node = partition()
+    if not node:
+        return None
+    try:
+        MOUNT.mkdir(parents=True, exist_ok=True)
+        if shutil.which("fsck.vfat"):  # after a power cut: repair what can be repaired, never ask
+            subprocess.run(["fsck.vfat", "-a", "-w", node], capture_output=True, timeout=120)
+        # flush: FAT writes its tables at once; nothing on it can be run as a program.
+        r = subprocess.run(["mount", "-t", "vfat", "-o", "flush,noexec,nosuid,nodev,umask=077", node, str(MOUNT)],
+                           capture_output=True, text=True, timeout=60)
+        return MOUNT if r.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def unmount() -> None:
+    if os.path.ismount(MOUNT):
+        subprocess.run(["sync"], capture_output=True)
+        subprocess.run(["umount", str(MOUNT)], capture_output=True)
+
+
+def runs(root: Path) -> list[Path]:
+    """The runs kept under root, oldest first (by their counter)."""
+    try:
+        found = [p for p in root.iterdir() if p.is_dir() and NAME.fullmatch(p.name)]
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: int(p.name[:4]))
+
+
+def _sync_dir(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+class Log:
+    """One run's folder. Every method swallows its own failures: a stick that can't be written to
+    never stops the installer (the screen has said whether the log is kept)."""
+
+    def __init__(self, folder: Path | None, persistent: bool = False):
+        self.folder, self.persistent = folder, persistent
+        self.name = folder.name if folder else ""
+        self.reference = self.name.rsplit("_", 1)[-1] if folder else ""
+        self._lock = threading.Lock()
+        self._follower: subprocess.Popen | None = None
+
+    # ------------------------------------------------------------------ opening
+    @classmethod
+    def open(cls, root: Path | None = None) -> "Log":
+        """A new run: on the stick's logs partition, else in memory. Older runs beyond KEEP are removed."""
+        persistent = True
+        if root is None:
+            root = mount()
+            if root is None:
+                root, persistent = MEMORY, False
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+            kept = runs(root)
+            for old in kept[:max(0, len(kept) - (KEEP - 1))]:
+                shutil.rmtree(old, ignore_errors=True)
+            counter = (int(kept[-1].name[:4]) + 1) if kept else 1
+            folder = root / f"{counter % 10000:04d}_{time.strftime('%Y%m%d-%H%M', time.gmtime())}_{reference()}"
+            folder.mkdir()
+            _sync_dir(root)
+        except OSError:
+            return cls(None)
+        log = cls(folder, persistent)
+        log.summary(reference=log.reference, run=counter, started=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    clock="the machine's own clock, not checked against any other", kept_on_the_stick=persistent,
+                    result="started")
+        os.environ[ENV] = str(folder)
+        return log
+
+    @classmethod
+    def attach(cls) -> "Log":
+        """The run the screens opened (its folder is in the environment), for a tool they started; a tool
+        started by hand opens a run of its own."""
+        folder = os.environ.get(ENV)
+        if folder and Path(folder).is_dir():
+            return cls(Path(folder), os.path.ismount(MOUNT) and Path(folder).parent == MOUNT)
+        return cls.open()
+
+    # ------------------------------------------------------------------ writing
+    def _append(self, file: str, text: str) -> None:
+        if not self.folder:
+            return
+        try:
+            with self._lock, open(self.folder / file, "a", encoding="utf-8", errors="replace") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError:
+            pass
+
+    def line(self, source: str, text: str) -> None:
+        """One line of install.log: the clock, the seconds since this program started, who says it, what."""
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for part in str(text).splitlines() or [""]:
+            self._append("install.log", f"{stamp} +{time.monotonic() - START:8.1f}s {source}: {part}\n")
+
+    def command(self, source: str, argv, code: int, seconds: float, stderr: str = "", secret: bool = False) -> None:
+        """A command a tool ran: its arguments, exit code and duration, and what it said on standard error.
+        Never its standard output (systemd-cryptenroll prints the recovery key there); for a secret
+        command, not its standard error either."""
+        self.line(source, f"ran {' '.join(str(a) for a in argv)}  [exit {code}, {seconds:.1f} s]")
+        if stderr and not secret:
+            for part in stderr.strip().splitlines()[-200:]:
+                self.line(source, f"  | {part}")
+
+    def summary(self, **changes) -> dict:
+        """summary.json with these fields changed; a list given for "steps" or "events" is added to the one there."""
+        if not self.folder:
+            return {}
+        path = self.folder / "summary.json"
+        with self._lock:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+            for key, value in changes.items():
+                if key in ("steps", "events") and isinstance(value, list):
+                    data.setdefault(key, []).extend(value)
+                else:
+                    data[key] = value
+            try:
+                tmp = path.with_suffix(".new")
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(json.dumps(data, indent=1, ensure_ascii=False, default=str) + "\n")
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, path)
+                _sync_dir(self.folder)
+            except OSError:
+                pass
+        return data
+
+    def step(self, name: str) -> None:
+        """A step of the installation begins: in install.log, and in the summary with when it began."""
+        self.line("step", name)
+        self.summary(steps=[{"step": name, "at_seconds": round(time.monotonic() - START, 1),
+                             "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}])
+
+    def event(self, what: str, **details) -> None:
+        """Something the person at the console did or met (a screen left, a choice refused): never what was typed."""
+        self.line("screen", what + (f" {json.dumps(details, ensure_ascii=False)}" if details else ""))
+
+    def hardware(self, text: str) -> None:
+        if self.folder:
+            try:
+                with self._lock, open(self.folder / "hardware.txt", "w", encoding="utf-8", errors="replace") as f:
+                    f.write(SERIAL.sub(r"\1(not kept)", text))
+                    f.flush()
+                    os.fsync(f.fileno())
+            except OSError:
+                pass
+
+    # ------------------------------------------------------------------ the system's own messages
+    def follow_system(self) -> None:
+        """system.log: the kernel's and systemd's messages since this start, and on while the installer runs."""
+        if not self.folder or self._follower or not shutil.which("journalctl"):
+            return
+        try:
+            self._follower = subprocess.Popen(["journalctl", "--boot", "--follow", "--no-pager", "--output=short-monotonic"],
+                                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
+        except OSError:
+            return
+
+        def copy(proc):
+            written = 0
+            for line in proc.stdout:
+                if written > SYSTEM_LOG_LIMIT:
+                    self._append("system.log", "(no more is kept for this run: the limit for one run is reached)\n")
+                    break
+                line = SERIAL.sub(r"\1(not kept)", line)
+                written += len(line)
+                self._append("system.log", line)
+        threading.Thread(target=copy, args=(self._follower,), daemon=True).start()
+
+    # ------------------------------------------------------------------ secrets
+    def forbid(self, secret: str) -> bool:
+        """A secret is known now (the recovery key): make sure no file of this run holds it. Returns
+        whether it had to be masked; that is a bug to report, and the summary says so."""
+        if not self.folder or not secret or len(secret) < 8:
+            return False
+        found = False
+        variants = {secret, secret.replace("-", "")}
+        try:
+            files = list(self.folder.iterdir())
+        except OSError:
+            return False
+        with self._lock:
+            for path in files:
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if any(v in text for v in variants):
+                    found = True
+                    for v in variants:
+                        text = text.replace(v, "(a secret that should never have been written here: masked)")
+                    try:
+                        with open(path, "w", encoding="utf-8") as f:
+                            f.write(text)
+                            f.flush()
+                            os.fsync(f.fileno())
+                    except OSError:
+                        pass
+        if found:
+            self.summary(secret_masked=True)
+        return found
+
+    # ------------------------------------------------------------------ closing
+    def flush(self) -> None:
+        """Everything written so far onto the stick now (the machine may be switched off at this screen)."""
+        if self.folder:
+            _sync_dir(self.folder)
+        subprocess.run(["sync"], capture_output=True)
+
+    def close(self, result: str | None = None, **details) -> None:
+        """The run ends (or the machine restarts): the result in the summary, everything on the stick."""
+        if result:
+            self.summary(result=result, ended=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                         seconds=round(time.monotonic() - START, 1), **details)
+            self.line("log", f"closed: {result}")
+        if self._follower:
+            time.sleep(0.3)  # the last messages
+            self._follower.terminate()
+            self._follower = None
+        if self.folder:
+            _sync_dir(self.folder)
+        subprocess.run(["sync"], capture_output=True)
+
+
+class Tee:
+    """Standard error for a tool: what it prints goes to the console as before, and line by line to the log."""
+
+    def __init__(self, stream, log: Log, source: str):
+        self.stream, self.log, self.source, self.rest = stream, log, source, ""
+
+    def write(self, text: str) -> int:
+        self.stream.write(text)
+        self.rest += text
+        while "\n" in self.rest:
+            line, self.rest = self.rest.split("\n", 1)
+            self.log.line(self.source, line)
+        return len(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def main(argv: list[str]) -> int:
+    what = argv[0] if argv else "list"
+    if what == "mount":
+        root = mount()
+        print(root if root else "install-log: this stick has no logs partition, or it can't be mounted")
+        return 0 if root else 1
+    if what == "unmount":
+        unmount()
+        return 0
+    root = mount() or MEMORY
+    for run in runs(root):
+        try:
+            s = json.loads((run / "summary.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            s = {}
+        print(f"{run.name}  {s.get('result', '?')}  {s.get('started', '')}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
