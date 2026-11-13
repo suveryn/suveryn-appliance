@@ -6,6 +6,7 @@ writes /etc/suveryn, /etc/nginx, /var/lib/suveryn and /opt/suveryn/ui.
 
     apt-get install nginx; pip install playwright; (chromium for Playwright)
     cd suveryn-core/packages/chat-ui && npm ci && npm run build && cp -r dist /opt/suveryn/ui
+    export SUVERYN_CORE=<that suveryn-core>   (the setup says core's messages; not needed where core is at /opt/suveryn/core)
     python3 setup/tests/browser_check.py [OUT_DIR]
 
 What stands in for the appliance: suveryn-provision (stand_in_provision.py: same steps, the real TLS and
@@ -163,6 +164,8 @@ def machine() -> dict:
     check_tool = run_from / "network-mode-check"
     check_tool.write_text("#!/bin/sh\necho '{\"passed\": true, \"summary\": \"only approved destinations reachable (stand-in)\"}'\n")
     check_tool.chmod(0o755)
+    if os.environ.get("SUVERYN_CORE"):  # one list of messages, core's: where this machine has no /opt/suveryn/core
+        os.environ["SUVERYN_CORE_MESSAGES"] = str(Path(os.environ["SUVERYN_CORE"]) / "packages/harness/src/suveryn_harness/messages.py")
     env = {**os.environ, "SUVERYN_PROVISION": str(HERE / "stand_in_provision.py"),
            "SUVERYN_NETWORK_MODE_TOOL": str(check_tool), "STAND_IN_FAIL_AT": "Keycloak", "SUVERYN_SETUP_SEEN_DONE_WAIT": "60"}
     if REAL:  # the real suveryn-provision first-boot and outgoing-traffic check, as a test machine

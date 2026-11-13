@@ -32,7 +32,7 @@ cd image/mkosi
 sudo ./prebuild-services             # the appliance's sūveryn services, built on this host into prebuilt/ (#47)
 sudo mkosi -f build                  # the appliance: linux-generic and firmware, the services, slot A of 32 GiB
 test/make-test-keys                  # once: the test system's bundle and portal keys (#36, #37), never committed
-test/make-test-ui                    # the chat UI's build for the test system's web setup (#37), never committed
+test/make-test-ui                    # the chat UI's build and core's messages for the test system's web setup (#37, #141), never committed
 sudo mkosi -f --profile test build   # the test system: the same layout, small (for run-vm-tests)
 ```
 
@@ -179,6 +179,16 @@ case mid-sentence). Sizes follow the language (17,0 GB; 17,0 Go), and the confir
 engine's own messages (a failed step's detail) stay in English. The Dutch and French copy is a
 first version: to be read by a native speaker before release.
 
+**What can't be done, as a code.** The console is not a server, so its messages aren't in suveryn-core's
+registry: its text file's keys are its codes. Its engine (`install`, `bundle`) speaks English on the
+command line and in its log, and gives the screens a code with the values (`Refused.code` and `.params`,
+`Invalid.code`: `changed`, `signature` or `invalid`), which the screens word in the chosen language; they
+never recognise or show the English sentence (suveryn-tracker#141). Two places still show a technical
+line as it is, under a sentence in the chosen language: an installation that failed (`c6_failed`, the
+installer's last line) and network settings that couldn't be applied (`c8_apply_failed`). Nobody planned
+for those, and the stick has no log to look a reference up in: the line on the screen is what the partner
+needs.
+
 ### The unlock screen (C8b)
 
 When the TPM can't open the data partition, `unlock-screen` (in the initrd) shows the design's
@@ -227,7 +237,7 @@ nginx, the setup service and its units, at `/opt/suveryn/appliance`. It opens at
 installed appliance, writes `setup-cert.pem` while open and `setup-complete` when it closes. Its
 provisioning runs the sūveryn services, which are in this image since #47; the VM tests still run it
 with a stand-in for provisioning (`run-vm-tests` step 4b, which has no GPU) and carry their own build
-of the chat UI (`test/make-test-ui`).
+of the chat UI and their own copy of core's messages (`test/make-test-ui`).
 
 ## The appliance's identity and system state (#35)
 

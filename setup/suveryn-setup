@@ -24,9 +24,13 @@ Three parts, so that nothing reachable from the network runs as root:
   the setup locations leave nginx, `/etc/suveryn/setup-complete` is written, the answers' secrets
   are deleted and these units are disabled.
 
-The API is the contract at the top of suveryn-core's packages/chat-ui/src/setup/api.ts. Refusals
-are 422 with `{"errors": {field: code}}` or `{"error": code}`; the codes are shown in the office's
-language (text.ts, `errors`). Python 3 standard library, openssl, ip and lsblk only.
+The API is the contract at the top of suveryn-core's packages/chat-ui/src/setup/api.ts. What isn't
+the answer asked for is a code of suveryn-core's registry of messages (its `setup` area; core's
+docs/design/messages.md), never a sentence, in the gateway's shape: Problem Details with `kind`,
+`code` and `params`, and `fields` when an answer is refused field by field. The registry is read
+from the core on this appliance: there is one list, and it is core's. The screens word each
+code in the office's language. Anything unplanned is `system.internal` with a reference, which the
+log has. Python 3 standard library, openssl, ip and lsblk only.
 """
 
 import base64
@@ -44,6 +48,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -112,6 +117,7 @@ def load(name: str, path: Path):
     loader = importlib.machinery.SourceFileLoader(name, str(path))
     spec = importlib.util.spec_from_loader(name, loader)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # a module that defines dataclasses is looked up by its name
     loader.exec_module(mod)
     return mod
 
@@ -119,12 +125,43 @@ def load(name: str, path: Path):
 manifests = load("suveryn_manifest", REPO / "support" / "suveryn-manifest")
 
 
-class Refused(Exception):
-    """An answer the appliance won't take: codes by field (`_` for the whole step)."""
+# ---------------------------------------------------------------------------- messages are codes
+# One list, in suveryn-core: its registry of messages (messages.json) and the module that is the one
+# way to use it (suveryn_harness/messages.py, standard library only). This service loads that module
+# from the core on this appliance, the pinned one, and keeps no list of its own: a code this core
+# doesn't list can't be said. Without it setup can't say what went wrong, so it doesn't start.
+CORE_MESSAGES = Path(ENV("SUVERYN_CORE_MESSAGES", "/opt/suveryn/core/packages/harness/src/suveryn_harness/messages.py"))
+try:
+    messages = load("suveryn_core_messages", CORE_MESSAGES)
+except (OSError, ValueError, KeyError, SyntaxError) as e:
+    raise SystemExit(f"suveryn-setup: suveryn-core's messages can't be loaded from {CORE_MESSAGES} ({type(e).__name__}): "
+                     "setup needs the core on this appliance") from None
+if "setup" not in messages.AREAS:
+    raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the web setup's "
+                     "messages (suveryn-tracker#141): this appliance needs a newer core")
+message = messages.message      # {kind, code, params} for a listed code: inside an answer, or stored
+reference = messages.reference  # a short id for an unplanned failure ("7F3K-92QD")
 
-    def __init__(self, codes: dict[str, str]):
-        super().__init__(", ".join(f"{k}: {v}" for k, v in codes.items()))
-        self.codes = codes
+
+def problem(msg: dict, fields: dict[str, dict] | None = None) -> tuple[int, dict]:
+    """The status and the Problem Details (RFC 9457) for a message that takes the answer's place,
+    exactly as suveryn-core's gateway answers them; `fields` when it is refused field by field."""
+    body = messages.problem(msg["code"], **msg["params"])
+    return body["status"], {**body, **({"fields": fields} if fields else {})}
+
+
+class Refused(Exception):
+    """An answer the appliance won't take: a code, or a message with parameters, by field (`_` for
+    the whole step)."""
+
+    def __init__(self, codes: dict[str, str | dict]):
+        self.fields = {k: v if isinstance(v, dict) else message(v) for k, v in codes.items()}
+        super().__init__(", ".join(f"{k}: {v['code']}" for k, v in self.fields.items()))
+
+    def problem(self) -> tuple[int, dict]:
+        if list(self.fields) == ["_"]:
+            return problem(self.fields["_"])
+        return problem(message("request.invalid"), self.fields)
 
 
 # ---------------------------------------------------------------------------- files
@@ -260,25 +297,25 @@ def personal_words(*values: str) -> list[str]:
 
 def check_network(a) -> dict:
     if not isinstance(a, dict) or a.get("mode") not in ("connected", "air-gapped") or a.get("outgoing") not in ("approved", "all"):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     return {"mode": a["mode"], "outgoing": a["outgoing"] if a["mode"] == "connected" else "approved"}
 
 
 def check_administrator(a, appliance_name: str) -> dict:
     if not isinstance(a, dict) or not all(isinstance(a.get(k), str) for k in ("name", "email", "password")):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     name, email, password = " ".join(a["name"].split()), a["email"].strip(), a["password"]
     errors = {}
     if not name or len(name) > 200:
-        errors["name"] = "name_missing"
+        errors["name"] = "setup.name_missing"
     if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
-        errors["email"] = "email_invalid"
+        errors["email"] = "setup.email_invalid"
     if len(password) < MIN_PASSWORD or len(password) > 512:
-        errors["password"] = "password_short"
+        errors["password"] = message("setup.password_short", min=MIN_PASSWORD)
     elif is_common_password(password):
-        errors["password"] = "password_common"
+        errors["password"] = "setup.password_common"
     elif any(w in password.lower() for w in personal_words(name, email.split("@")[0], appliance_name)):
-        errors["password"] = "password_personal"
+        errors["password"] = "setup.password_personal"
     if errors:
         raise Refused(errors)
     return {"name": name, "email": email, "password": password}
@@ -332,7 +369,7 @@ def covers(names: list[str], host: str) -> bool:
 def check_certificate(a, host: str) -> tuple[dict, dict[str, bytes]]:
     """The answer to show and save, and the PEM files to keep (own certificate only)."""
     if not isinstance(a, dict) or a.get("kind") not in ("self-signed", "own"):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     if a["kind"] == "self-signed":
         return {"kind": "self-signed", "names": [host, *([ip] if (ip := network()["address"].split("/")[0]) else [])]}, {}
     errors = {}
@@ -342,19 +379,19 @@ def check_certificate(a, host: str) -> tuple[dict, dict[str, bytes]]:
         if field == "chain" and not value:
             continue
         if not isinstance(value, str) or len(value.encode()) > MAX_PEM:
-            errors[field] = "not_a_certificate" if kind else "not_a_key"
+            errors[field] = "setup.not_a_certificate" if kind else "setup.not_a_key"
             continue
         texts[field] = value
     cert_blocks = pem_blocks(texts.get("certificate", ""), "CERTIFICATE")
     if "certificate" in texts and len(cert_blocks) < 1:
-        errors["certificate"] = "not_a_certificate"
+        errors["certificate"] = "setup.not_a_certificate"
     key_block = re.search(r"-----BEGIN (RSA |EC )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END (RSA |EC )?PRIVATE KEY-----",
                           texts.get("key", ""))
     if "key" in texts and not key_block:
-        errors["key"] = "not_a_key"
+        errors["key"] = "setup.not_a_key"
     chain_blocks = pem_blocks(texts.get("chain", ""), "CERTIFICATE")
     if texts.get("chain") and not chain_blocks:
-        errors["chain"] = "not_a_certificate"
+        errors["chain"] = "setup.not_a_certificate"
     if errors:
         raise Refused(errors)
     # The first certificate is the appliance's; any others in the same file are its chain.
@@ -363,21 +400,21 @@ def check_certificate(a, host: str) -> tuple[dict, dict[str, bytes]]:
     key = key_block.group(0).encode() + b"\n"
     facts = certificate_facts(leaf)
     if facts is None:
-        raise Refused({"certificate": "not_a_certificate"})
+        raise Refused({"certificate": "setup.not_a_certificate"})
     code, key_pub = openssl("pkey", "-in", "@k", "-passin", "pass:", "-pubout", files={"k": key})
     if code != 0:
-        raise Refused({"key": "not_a_key"})
+        raise Refused({"key": "setup.not_a_key"})
     _, cert_pub = openssl("x509", "-in", "@c", "-noout", "-pubkey", files={"c": leaf})
     if key_pub.strip() != cert_pub.strip():
-        raise Refused({"key": "key_mismatch"})
+        raise Refused({"key": "setup.key_mismatch"})
     if openssl("x509", "-in", "@c", "-noout", "-checkend", "0", files={"c": leaf})[0] != 0:
-        raise Refused({"certificate": "expired"})
+        raise Refused({"certificate": "setup.certificate_expired"})
     if not covers(facts["names"], host):
-        raise Refused({"certificate": "name_not_covered"})
+        raise Refused({"certificate": "setup.name_not_covered"})
     if chain:
         code, _ = openssl("verify", "-partial_chain", "-CAfile", "@ch", "@c", files={"ch": chain, "c": leaf})
         if code != 0:
-            raise Refused({"chain": "chain_invalid"})
+            raise Refused({"chain": "setup.chain_invalid"})
     answer = {"kind": "own", "names": facts["names"], "issuer": facts["issuer"], "not_after": facts["not_after"]}
     return answer, {"certificate.pem": leaf + chain, "key.pem": key}
 
@@ -414,18 +451,18 @@ def test_share(a) -> dict:
     """Whether the appliance can reach the share's server on the office's network. Reachability only:
     signing in and writing a test file need the backup service's mount (tracker #33)."""
     if not isinstance(a, dict):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     host = share_host(a.get("protocol"), a.get("address"))
     if host is None:
-        return {"ok": False, "error": "address"}
+        return {"ok": False, "message": message("setup.share_address")}
     try:
         infos = socket.getaddrinfo(host, 445 if a["protocol"] == "smb" else 2049, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
-        return {"ok": False, "error": "unreachable"}
+        return {"ok": False, "message": message("setup.share_unreachable")}
     for family, kind, proto, _, addr in infos:
         ip = ipaddress.ip_address(addr[0])
         if not (ip.is_private or ip.is_link_local) or ip.is_loopback:
-            return {"ok": False, "error": "not_local"}
+            return {"ok": False, "message": message("setup.share_not_local")}
     for family, kind, proto, _, addr in infos:
         try:
             with socket.socket(family, kind, proto) as s:
@@ -434,30 +471,30 @@ def test_share(a) -> dict:
                 return {"ok": True}
         except OSError:
             continue
-    return {"ok": False, "error": "unreachable"}
+    return {"ok": False, "message": message("setup.share_unreachable")}
 
 
 def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]:
     """The answer to save and, for a share, its password (kept apart, 0600)."""
     if not isinstance(a, dict) or a.get("target") not in ("usb", "share", "later"):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     if a["target"] == "later":
         return {"target": "later"}, None
     if a.get("retention_days") not in RETENTION or not isinstance(a.get("recipient"), str) \
             or not bech32_valid(a["recipient"], "age") or len(a["recipient"]) != 62:
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     common = {"retention_days": a["retention_days"], "recipient": a["recipient"]}
     if a["target"] == "usb":
         if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
-            raise Refused({"disk": "disk_gone"})
+            raise Refused({"disk": "setup.disk_gone"})
         return {"target": "usb", "disk": a["disk"], **common}, None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "address"})
+        raise Refused({"address": "setup.share_address"})
     user = a.get("user") or None
     password = a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
             (password is not None and (not isinstance(password, str) or len(password) > 512)):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     return {"target": "share", "protocol": a["protocol"], "address": a["address"].strip(), "user": user, **common}, password
 
 
@@ -465,22 +502,22 @@ def check_restore(a, disks: list[dict] | None = None) -> tuple[dict, str, str | 
     """Where the office's backups are and its recovery key (#56): the answer to save (no secrets), the key,
     and a share's password. The same targets as the Backups step, without a retention or a public key."""
     if not isinstance(a, dict) or a.get("target") not in ("usb", "share"):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     key = a.get("key")
     key = key.strip() if isinstance(key, str) else ""
     m = AGE_SECRET.search(key)  # the file setup made holds comments around it
     if not m:
-        raise Refused({"key": "key_invalid"})
+        raise Refused({"key": "setup.key_invalid"})
     if a["target"] == "usb":
         if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
-            raise Refused({"disk": "disk_gone"})
+            raise Refused({"disk": "setup.disk_gone"})
         return {"target": "usb", "disk": a["disk"]}, m.group(0), None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "address"})
+        raise Refused({"address": "setup.share_address"})
     user, password = a.get("user") or None, a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
             (password is not None and (not isinstance(password, str) or len(password) > 512)):
-        raise Refused({"_": "invalid"})
+        raise Refused({"_": "request.invalid"})
     return {"target": "share", "protocol": a["protocol"], "address": a["address"].strip(), "user": user}, m.group(0), password
 
 
@@ -491,11 +528,11 @@ def manifest_for_screen(m: dict) -> dict:
 def check_manifest(raw: bytes, facts: dict) -> dict:
     appliance = (facts.get("appliance") or {}).get("id")
     if not appliance:
-        raise Refused({"_": "manifest_other_appliance"})
+        raise Refused({"_": "setup.manifest_other_appliance"})
     try:
         return manifest_for_screen(manifests.check(raw, appliance))
     except manifests.Refused as e:
-        raise Refused({"_": e.code}) from None
+        raise Refused({"_": f"setup.{e.code}"}) from None
 
 
 # ---------------------------------------------------------------------------- progress
@@ -561,10 +598,10 @@ class App:
         """Answers can't change once provisioning or a restore has started, unless it failed."""
         p = progress()
         if p and p["state"] in ("running", "done"):
-            raise Refused({"_": "provisioning_started"})
+            raise Refused({"_": "setup.provisioning_started"})
         r = restore_progress()
         if r and r["state"] in ("checking", "restoring", "done"):
-            raise Refused({"_": "restore_started"})
+            raise Refused({"_": "setup.restore_started"})
 
     def start_restore(self, data) -> dict:
         """The restore starts, of the backup the office chose among those the check found for its key (the
@@ -574,12 +611,12 @@ class App:
             if r and r["state"] in ("restoring", "done"):
                 return r
             if not r or r["state"] != "checked":
-                raise Refused({"_": "not_checked"})
+                raise Refused({"_": "setup.not_checked"})
             file = data.get("file") if isinstance(data, dict) else None
             if file is None:
                 file = (r.get("backup") or {}).get("file")
             if not any(c.get("file") == file for c in r.get("choices") or [] if isinstance(c, dict)):
-                raise Refused({"file": "invalid"})
+                raise Refused({"file": "request.invalid"})
             write_file(ANSWERS / "restore-start", json.dumps({"file": file}), 0o644)
             return restore_progress()
 
@@ -601,17 +638,17 @@ class App:
                 (ANSWERS / "seen-done").touch()  # Complete is on screen: provisioning may close setup now
             return 200, p
         if route not in WRITES:
-            return 404, {"error": "not_found"}
+            return problem(message("request.not_found"))
         # A body must say what it is (a cross-site form can't send these types without the browser
         # asking first); POST provision and POST restore/start have none.
         if route == "POST manifest" and content_type != "application/octet-stream":
-            return 415, {"error": "octet_stream_only"}
+            return problem(message("request.unsupported"))
         if route != "POST manifest" and (body or route not in ("POST provision", "POST restore/start")) and content_type != "application/json":
-            return 415, {"error": "json_only"}
+            return problem(message("request.unsupported"))
         try:
             data = json.loads(body) if route != "POST manifest" and body else None
         except ValueError:
-            return 400, {"error": "invalid_json"}
+            return problem(message("request.invalid"))
         if route == "POST backups/test":
             return 200, test_share(data)
         if route == "POST provision":
@@ -651,7 +688,7 @@ class App:
             return 200, m
         elif route == "PUT answers/support":
             if not isinstance(data, dict) or data.get("skipped") is not True:
-                raise Refused({"_": "invalid"})
+                raise Refused({"_": "request.invalid"})
             remove(ANSWERS / "manifest.yaml")
             self.save("support", None)
         elif route == "PUT answers/backups":
@@ -681,7 +718,7 @@ def complete(a: dict, folder: Path) -> None:
     if "administrator" in a and read_file(folder / "administrator-password") is None:
         missing.append("administrator")
     if missing:
-        raise Refused({"_": "not_answered"})
+        raise Refused({"_": "setup.not_answered"})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -696,7 +733,7 @@ class Handler(BaseHTTPRequestHandler):
         body = b"" if payload is None and status == 204 else json.dumps(payload, ensure_ascii=False).encode()
         self.send_response(status)
         if status != 204:
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", "application/problem+json" if status >= 400 else "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -706,26 +743,31 @@ class Handler(BaseHTTPRequestHandler):
     def dispatch(self, method: str) -> None:
         path = self.path.split("?")[0]
         if not path.startswith("/setup/v1/"):
-            return self.send(404, {"error": "not_found"})
+            return self.send(*problem(message("request.not_found")))
         # Another site in the office's browsers can't drive setup: a request that says where it comes
         # from must come from this appliance's own page.
         origin = self.headers.get("Origin")
         if origin is not None and origin != f"https://{self.headers.get('Host', '')}":
-            return self.send(403, {"error": "cross_origin"})
+            return self.send(*problem(message("request.forbidden")))
         if self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
-            return self.send(403, {"error": "cross_origin"})
+            return self.send(*problem(message("request.forbidden")))
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY or length < 0:
-            return self.send(413, {"error": "too_large"})
+            return self.send(*problem(message("request.too_large")))
         body = self.rfile.read(length) if length else b""
         ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         try:
             status, payload = self.app.handle(method, path[len("/setup/v1/"):], body, ctype)
         except Refused as e:
-            status, payload = 422, ({"error": e.codes["_"]} if list(e.codes) == ["_"] else {"errors": e.codes})
+            status, payload = e.problem()
         except Exception as e:  # noqa: BLE001: one failed request never stops setup
-            sys.stderr.write(f"suveryn-setup: {method} {path}: {type(e).__name__}\n")
-            status, payload = 500, {"error": "unexpected"}
+            # Nobody planned for it: the screen gets a reference, the log the same reference with the
+            # request, the exception's type and where it was raised. Never the exception's message,
+            # which may quote what the office entered (a password, a key).
+            ref = reference()
+            where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
+            sys.stderr.write(f"suveryn-setup: internal {ref}: {method} {path}: {type(e).__name__} at {where}\n")
+            status, payload = problem(message("system.internal", ref=ref))
         self.send(status, payload)
 
     def do_GET(self):
@@ -819,12 +861,11 @@ class Progress:
     def write(self) -> None:
         write_file(STATE / "progress.json", json.dumps(self.p, indent=1), 0o644)
 
-    def step(self, ident: str, state: str, error: str | None = None) -> None:
+    def step(self, ident: str, state: str, failure: dict | None = None) -> None:
         for s in self.p["steps"]:
             if s["id"] == ident:
                 s["state"] = state
-                if error:
-                    s["error"] = error
+                s.update(failure or {})
             elif state == "running" and STEPS.index(s["id"]) < STEPS.index(ident) and s["state"] != "done":
                 s["state"] = "done"
         self.write()
@@ -832,8 +873,11 @@ class Progress:
     def current(self) -> str:
         return next((s["id"] for s in self.p["steps"] if s["state"] == "running"), "database")
 
-    def fail(self, error: str) -> None:
-        self.step(self.current(), "failed", error)
+    def fail(self, msg: dict | None = None, detail: str = "") -> None:
+        """The step that was running failed: a message for the screen (by default, that provisioning
+        stopped at this step) and, for whoever reads progress.json, provisioning's own last line."""
+        at = self.current()
+        self.step(at, "failed", {"message": msg or message("setup.provisioning_failed", step=at), **({"detail": detail} if detail else {})})
         self.p["state"] = "failed"
         self.write()
 
@@ -857,7 +901,7 @@ def read_answers() -> tuple[dict, dict]:
         answer, files = check_certificate({"kind": "own", "certificate": cert.decode(), "key": key.decode()}, host)
         out["certificate"] = answer
     elif out["certificate"]["kind"] != "self-signed":
-        raise Refused({"certificate": "invalid"})
+        raise Refused({"certificate": "request.invalid"})
     raw = read_file(ANSWERS / "manifest.yaml", manifests.MAX_SIZE)
     if a.get("support") is not None and raw is not None:
         out["support"] = check_manifest(raw, facts)
@@ -886,7 +930,7 @@ def provision() -> int:
         answers, files = read_answers()
     except (Refused, KeyError, TypeError, ValueError, AttributeError) as e:
         log.write(f"the saved answers are incomplete or not valid: {e}\n")
-        prog.fail("answers")
+        prog.fail(message("request.invalid"))
         return 1
     facts = read_json(STATE / "facts.json", {}) or {}
     host = f"{facts['name']}.local"
@@ -939,7 +983,7 @@ def provision() -> int:
             run("umount", models)
     if code != 0:
         log.write(f"suveryn-provision first-boot failed ({code})\n")
-        prog.fail(re.sub(r"[^\w .,:/()'-]", "", last)[:200] or f"exit {code}")
+        prog.fail(detail=re.sub(r"[^\w .,:/()'-]", "", last)[:200] or f"exit {code}")
         return 1
     prog.step("outgoing", "running")
     code, out = run(NETWORK_MODE_TOOL, "check", "--json", timeout=120)
@@ -971,7 +1015,7 @@ def restore_inputs(work: Path) -> list[str]:
     a = (read_json(ANSWERS / "answers.json", {}) or {}).get("restore")
     key = read_file(ANSWERS / "recovery-key")
     if not isinstance(a, dict) or key is None:
-        raise Refused({"_": "not_answered"})
+        raise Refused({"_": "setup.not_answered"})
     password = read_file(ANSWERS / "restore-share-password")
     answer, _, _ = check_restore({**a, "key": key.decode(errors="replace"), "password": password.decode() if password else None},
                                  disks=[{"id": a.get("disk")}])
@@ -993,8 +1037,8 @@ def restore_work() -> Path:
 NAME_OF_BACKUP = re.compile(r"suveryn-backup_[a-z0-9-]+_\d{8}T\d{6}Z\.tar\.zst\.age")
 HOST_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 # "version": a backup from a newer PostgreSQL than this appliance's, e.g. a 26.04 appliance's onto 24.04 (#57).
-CHECK_ERRORS = {"decrypt": "wrong_key", "read": "damaged", "check": "damaged", "settings": "invalid", "database": "damaged",
-                "version": "newer"}
+CHECK_ERRORS = {"decrypt": "setup.restore_wrong_key", "read": "setup.restore_damaged", "check": "setup.restore_damaged",
+                "settings": "request.invalid", "database": "setup.restore_damaged", "version": "setup.restore_newer"}
 
 
 def forget_restore_secrets(work: Path | None = None) -> None:
@@ -1018,7 +1062,7 @@ def restore_check() -> int:
     try:
         opts = restore_inputs(work)
     except Refused:
-        write_file(RESTORE, json.dumps({"state": "failed", "error": "invalid"}), 0o644)
+        write_file(RESTORE, json.dumps({"state": "failed", "message": message("request.invalid")}), 0o644)
         forget_restore_secrets(work)
         return 1
     code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "find", "--json", "--identity", ANSWERS / "recovery-key",
@@ -1043,9 +1087,9 @@ def restore_check() -> int:
         result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
                   "choices": choices}
     else:
-        error = ("no_backup" if "no backup" in str(r.get("message", "")) else "unreachable") if r.get("step") == "target" \
-            else CHECK_ERRORS.get(r.get("step"), "damaged")
-        result = {"state": "failed", "error": error}
+        code = ("setup.restore_no_backup" if "no backup" in str(r.get("message", "")) else "setup.restore_unreachable") \
+            if r.get("step") == "target" else CHECK_ERRORS.get(r.get("step"), "setup.restore_damaged")
+        result = {"state": "failed", "message": message(code)}
         forget_restore_secrets()  # the screen asks for them again
     write_file(RESTORE, json.dumps(result, indent=1), 0o644)
     return 0 if r.get("usable") else 1
@@ -1076,7 +1120,7 @@ def restore_run() -> int:
         opts = restore_inputs(work)
     except Refused:
         forget_restore_secrets(work)
-        r["state"], r["error"] = "failed", "invalid"
+        r["state"], r["message"] = "failed", message("request.invalid")
         step("database", "failed")
         return 1
     cmd = [sys.executable, str(PROVISION), "restore", *opts, "--identity", str(ANSWERS / "recovery-key"),
@@ -1095,7 +1139,7 @@ def restore_run() -> int:
     forget_restore_secrets(work)
     if code != 0:
         log.write(f"suveryn-provision restore failed ({code})\n")
-        r["state"], r["error"] = "failed", "restore"
+        r["state"], r["message"] = "failed", message("setup.restore_failed")
         step(current, "failed")
         return 1
     step("services", "done")

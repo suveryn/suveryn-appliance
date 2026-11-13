@@ -419,6 +419,11 @@
     "nl": "Handtekening ongeldig.",
     "fr": "Signature non valide."
   },
+  "c3_not_valid": {
+    "en": "Not a valid model bundle.",
+    "nl": "Geen geldige modelbundel.",
+    "fr": "Paquet de modèle non valide."
+  },
   "c3_not_installed": {
     "en": "Not installed. Ask your partner for a new copy.",
     "nl": "Niet geïnstalleerd. Vraag uw partner om een nieuw exemplaar.",

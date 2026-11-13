@@ -79,6 +79,25 @@ def test_unusable_network_settings(monkeypatch, kw, message):
         network(monkeypatch, **kw)
 
 
+@pytest.mark.parametrize("kw,code,params", [
+    ({"interface": "eth9"}, "port", {}),
+    ({"address": "192.168.1.50"}, "prefix", {}),
+    ({"address": "192.168.1.50/24", "gateway": "10.0.0.1", "dns": "1.1.1.1"}, "gateway", {"gateway": "10.0.0.1", "network": "192.168.1.0/24"}),
+    ({"address": "192.168.1.50/24", "gateway": "192.168.1.1"}, "dns", {}),
+    ({"address": "300.1.1.1/24", "dns": "1.1.1.1"}, "address", {"value": "300.1.1.1/24"}),
+    ({"address": "192.168.1.50/24", "gateway": "192.168.1.x", "dns": "1.1.1.1"}, "address", {"value": "192.168.1.x"}),
+    ({"address": "192.168.1.50/24", "dns": "1.1.1.1,not-an-ip"}, "address", {"value": "not-an-ip"}),
+])
+def test_a_refusal_the_console_words_says_a_code_and_the_value_never_a_sentence_to_recognise(monkeypatch, kw, code, params):
+    """Messages are codes (suveryn-tracker#141): the console's screens word a refusal by its code and parameters."""
+    with pytest.raises(install.Refused) as e:
+        network(monkeypatch, **kw)
+    assert (e.value.code, e.value.params) == (code, params)
+    with pytest.raises(install.Refused) as e:
+        install.check_name("-office")
+    assert e.value.code == "name"
+
+
 def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
     monkeypatch.setattr(install, "RUN", tmp_path)
     (tmp_path / "boot-mode").write_text("installed\n")

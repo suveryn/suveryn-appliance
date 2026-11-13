@@ -757,12 +757,10 @@ class Hardware(Screen):
         self.app.answers.update(disk=d["name"], disk_size=d["size"], disk_model=d["model"], hardware=self.hw)
 
 
-def model_problem(error: str) -> str:
-    if "SHA-256" in error or "bytes, the manifest says" in error or "missing" in error:
-        return t("c3_changed")
-    if "trust" in error or "signature" in error or "signed" in error:
-        return t("c3_bad_signature")
-    return error[:60]
+def model_problem(code: str) -> str:
+    """Why a model on the stick can't be installed, in the chosen language: by the bundle check's code,
+    never from its English sentence."""
+    return t({"changed": "c3_changed", "signature": "c3_bad_signature"}.get(code, "c3_not_valid"))
 
 
 class Models(Screen):
@@ -793,7 +791,7 @@ class Models(Screen):
             else:
                 items.append({"folder": m["folder"], "label": m["folder"], "middle": "",
                               "right": f"{WARN} {t('c3_skipped')}", "right_style": "accent", "enabled": False,
-                              "checked": False, "note": [(model_problem(m.get("error", "")) + " ", "accent"),
+                              "checked": False, "note": [(model_problem(m.get("code", "")) + " ", "accent"),
                                                          (t("c3_not_installed"), "dim")]})
         self.list = Checklist(items)
 
@@ -946,7 +944,7 @@ class Network(Screen):
         try:
             ENGINE.network_file(args, ports={p["name"]: p["mac"] for p in self.ports})
         except ENGINE.Refused as e:
-            return network_problem(str(e), args)
+            return network_problem(e)
         self.app.answers.update(interface=self.port.value, name=self.name.value, address_mode=self.mode.value,
                                 fixed_address=self.ip.value.strip(), fixed_gateway=self.gw.value.strip(),
                                 fixed_dns=self.dns.value.strip(), lease=self.lease)
@@ -959,16 +957,18 @@ class Network(Screen):
         return False
 
 
-def network_problem(error: str, args) -> str:
-    """The installer's check of a fixed address, in the chosen language."""
-    if "network prefix" in error:
+def network_problem(e) -> str:
+    """The installer's check of the network answers, in the chosen language: by the refusal's code and
+    parameters (install's Refused), never from its English sentence."""
+    if e.code == "prefix":
         return t("c4_need_prefix")
-    m = re.search(r"the gateway (\S+) isn't in (\S+)", error)
-    if m:
-        return t("c4_gateway_outside", gw=m.group(1), net=m.group(2))
-    if "DNS server" in error:
+    if e.code == "gateway":
+        return t("c4_gateway_outside", gw=e.params["gateway"], net=e.params["network"])
+    if e.code == "dns":
         return t("c4_need_dns")
-    return t("c4_bad_address", detail=error.removeprefix("unusable address: "))
+    if e.code == "port":
+        return t("c4_no_port")
+    return t("c4_bad_address", detail=e.params.get("value") or "")  # the value as it was typed
 
 
 class Summary(Screen):
