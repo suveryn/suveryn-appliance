@@ -100,7 +100,7 @@ class Refused(Exception):
     """Nothing is installed or changed. The sentence is for the command line and the log; `code` (a code of
     core's registry: `network.gateway_outside`) and `params` say the same to the console's screens, which
     word it in the reader's language (installer-text.json) and never read the sentence. Without a code:
-    nothing a screen lets happen, so nobody planned a sentence for it."""
+    nothing a screen lets happen (an unknown time zone, a bundle that isn't on the stick): the command line's."""
 
     def __init__(self, detail: str, code: str = "", **params):
         super().__init__(detail)
@@ -131,7 +131,7 @@ def run(*cmd: str) -> str:
 def check_name(name: str) -> str:
     if not NAME.fullmatch(name or ""):
         raise Refused(f"the name {name!r} can't be used: letters, digits and hyphens, at most 63, "
-                      "not starting or ending with a hyphen")
+                      "not starting or ending with a hyphen", "network.name_invalid")
     return name
 
 

@@ -102,9 +102,7 @@ def test_a_refusal_the_console_words_says_a_code_and_the_value_never_a_sentence_
     assert (e.value.code, e.value.params) == (code, params)
     with pytest.raises(install.Refused) as e:
         install.check_name("-office")
-    # the name's check has no code of the registry: the screen asks it as its own form check (c4_bad_name), so the
-    # engine refuses it only on the command line, with its sentence
-    assert e.value.code == ""
+    assert e.value.code == "network.name_invalid"
 
 
 def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
@@ -135,7 +133,7 @@ def test_an_installation_that_is_refused_is_logged_with_how_it_ended(tmp_path, m
     log = (run / "install.log").read_text()
     assert "install: arguments: --disk /dev/null --name=-not-a-name" in log and "install: the name '-not-a-name' can't be used" in log
     summary = json.loads((run / "summary.json").read_text())
-    assert summary["result"] == "refused" and summary["installation"] == {"result": "refused", "exit": 2, "code": "request.invalid"}
+    assert summary["result"] == "refused" and summary["installation"] == {"result": "refused", "exit": 2, "code": "network.name_invalid"}
     assert summary["kept_on_the_stick"] is False
     assert "can't be used" in capsys.readouterr().err  # and on the console as before
 
@@ -188,8 +186,12 @@ def test_a_failed_installation_tells_the_screens_why_as_a_message_never_a_senten
     """suveryn-tracker#160: the screens showed the engine's last English line. With --json the engine answers a
     message on standard output: its code where a screen can meet it, else `system.internal` with a reference
     that is in the log's line too."""
+    if os.geteuid() != 0:
+        pytest.skip("install refuses to run except as root")
     monkeypatch.setenv("SUVERYN_RUN", str(tmp_path))
+    monkeypatch.delenv("SUVERYN_INSTALL_LOG", raising=False)
     monkeypatch.setattr(install, "RUN", tmp_path)
+    monkeypatch.setattr(install, "LOG", None)
     monkeypatch.setattr(install, "LIB", TOOL.parent)
     monkeypatch.setattr(sys, "stderr", sys.stderr)
     (tmp_path / "boot-mode").write_text("installer\n")

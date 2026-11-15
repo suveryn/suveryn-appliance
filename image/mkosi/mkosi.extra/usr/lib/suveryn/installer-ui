@@ -933,8 +933,8 @@ class Network(Screen):
     def leave(self):
         try:
             ENGINE.check_name(self.name.value)
-        except ENGINE.Refused:
-            return t("c4_bad_name")
+        except ENGINE.Refused as e:
+            return network_problem(e)
         if not self.port.value:
             return t("network.port_missing")
         args = Namespace(interface=self.port.value, address="dhcp", gateway=None, dns=None)

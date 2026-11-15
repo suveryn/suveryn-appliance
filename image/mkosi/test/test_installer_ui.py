@@ -587,6 +587,7 @@ def test_a_problem_is_worded_by_its_code_in_the_chosen_language_never_from_engli
         assert ui.network_problem(refused("English", "network.prefix_missing")) == words["network.prefix_missing"][lang]
         assert ui.network_problem(refused("English", "network.dns_missing")) == words["network.dns_missing"][lang]
         assert ui.network_problem(refused("English", "network.port_missing")) == words["network.port_missing"][lang]
+        assert ui.network_problem(refused("English", "network.name_invalid")) == words["network.name_invalid"][lang]
         said = ui.network_problem(refused("English", "network.gateway_outside", gateway="10.0.0.1", network="192.168.1.0/24"))
         assert "10.0.0.1" in said and "192.168.1.0/24" in said and "English" not in said
         # a code newer than this screen, or a screen entry that isn't a code, is never shown as a sentence of its own

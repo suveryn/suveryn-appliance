@@ -197,7 +197,6 @@ recognise or show the English sentence.
   also shows the engine's last line as it is, as a technical line under the sentence.
 - **Network settings that couldn't be applied** on the installed appliance's console: a sentence with a
   reference; the detail is in the journal (`journalctl -u suveryn-console`, the same reference).
-- **The appliance's name** is the screen's own form check (`c4_bad_name`); the registry has no code for it.
 
 ### The unlock screen (C8b)
 
