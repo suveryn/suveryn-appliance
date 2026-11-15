@@ -230,21 +230,21 @@ def test_backups_need_a_real_recovery_key_and_a_disk_or_share_that_exists(s):
     assert s.check_backups({"target": "later"}) == ({"target": "later"}, None)
     assert s.check_backups({**share, "protocol": "nfs", "address": "nas01:/export/backups", "user": None, "password": None})[1] is None
     broken = RECIPIENT[:-1] + ("q" if RECIPIENT[-1] != "q" else "p")
-    for answer, codes in [({**usb, "disk": "usb-Gone_1"}, {"disk": "setup.disk_gone"}),
+    for answer, codes in [({**usb, "disk": "usb-Gone_1"}, {"disk": "backup.disk_gone"}),
                           ({**usb, "recipient": broken}, {"_": "request.invalid"}),
                           ({**usb, "recipient": "age1" + "q" * 10}, {"_": "request.invalid"}),
                           ({**usb, "retention_days": 7}, {"_": "request.invalid"}),
-                          ({**share, "address": "nas01/backups"}, {"address": "setup.share_address"})]:
+                          ({**share, "address": "nas01/backups"}, {"address": "backup.share_address"})]:
         with pytest.raises(s.Refused) as e:
             s.check_backups(answer)
         assert said(e) == codes, answer
 
 
 def test_the_share_test_stays_on_the_offices_network(s):
-    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_address", "params": {}}}
-    assert s.test_share({"protocol": "smb", "address": "\\\\8.8.8.8\\share"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_not_local", "params": {}}}
-    assert s.test_share({"protocol": "nfs", "address": "127.0.0.1:/x"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_not_local", "params": {}}}
-    assert s.test_share({"protocol": "nfs", "address": "10.255.255.1:/export"}) == {"ok": False, "message": {"kind": "refused", "code": "setup.share_unreachable", "params": {}}}
+    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_address", "params": {}}}
+    assert s.test_share({"protocol": "smb", "address": "\\\\8.8.8.8\\share"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_not_local", "params": {}}}
+    assert s.test_share({"protocol": "nfs", "address": "127.0.0.1:/x"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_not_local", "params": {}}}
+    assert s.test_share({"protocol": "nfs", "address": "10.255.255.1:/export"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_unreachable", "params": {}}}
 
 
 # ---------------------------------------------------------------------------- files
@@ -601,9 +601,9 @@ def test_where_the_backups_are_and_the_key_are_checked(s):
     answer, key, password = s.check_restore({"target": "share", "protocol": "smb", "address": "\\\\nas\\backups",
                                              "user": "bk", "password": "pw", "key": KEY}, disks)
     assert answer["protocol"] == "smb" and "key" not in answer and password == "pw"
-    for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "setup.key_invalid"}),
-                      ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "setup.disk_gone"}),
-                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "setup.share_address"}),
+    for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "backup.not_a_key"}),
+                      ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "backup.disk_gone"}),
+                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "backup.share_address"}),
                       ({"target": "later", "key": KEY}, {"_": "request.invalid"})):
         with pytest.raises(s.Refused) as e:
             s.check_restore(bad, disks)
@@ -664,14 +664,14 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
 
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
-    for step, message, code in (("decrypt", "age: no identity matched", "restore_wrong_key"), ("target", "there is no backup on the target", "restore_no_backup"),
-                                ("target", "the backup disk isn't connected", "restore_unreachable"), ("read", "damaged", "restore_damaged"),
-                                ("version", "the backup was made with PostgreSQL 18, newer than this appliance's 16", "restore_newer")):
-        s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'step': {step!r}, 'message': {message!r}}})); raise SystemExit(1)\n")
+    # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
+    for code in ("backup.wrong_key", "backup.none_found", "backup.target_unreachable", "backup.damaged", "backup.newer_version"):
+        said = {"code": code, "params": {}}
+        s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'failure': {said!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
         assert s.restore_check() == 1
         assert api("GET", "restore")[1] == {"state": "failed", "message": {
-            "kind": "unavailable" if code == "restore_unreachable" else "refused", "code": f"setup.{code}", "params": {}}}
+            "kind": "unavailable" if code == "backup.target_unreachable" else "refused", "code": code, "params": {}}}
         assert not (s.ANSWERS / "recovery-key").exists()  # asked for again, not kept
     assert api("POST", "restore/start") == refused("setup.not_checked", 409)
 

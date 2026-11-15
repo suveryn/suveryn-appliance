@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""suveryn-core's messages, for the appliance's own services (suveryn-tracker#141, #154).
+
+What sūveryn says when something is refused, down, broken or to be checked is a code of one list:
+suveryn-core's registry (messages.json) and the module that is the one way to use it
+(suveryn_harness/messages.py, standard library only; core's docs/design/messages.md). The appliance's
+services say those codes and keep no list of their own: the web setup (setup/), the backup service
+(backup/) and the clock's helper (clock/) load core's module through this file, from the core on this
+appliance, the pinned one.
+
+    core = load()                    # core's module, or None where it can't be read
+    said("backup.disk_full")         # {kind, code, params}, as core's `message` gives it
+
+A service decides what a missing core means: the web setup doesn't start without it; a backup still runs,
+and writes its code as it is (`said`): the gateway reads every helper's message against its own registry
+anyway (core's `messages.stored`), so nothing unlisted reaches a screen.
+"""
+
+import importlib.machinery
+import importlib.util
+import os
+import sys
+from pathlib import Path
+
+CORE_MESSAGES = Path(os.environ.get("SUVERYN_CORE_MESSAGES", "/opt/suveryn/core/packages/harness/src/suveryn_harness/messages.py"))
+_core = None
+problem_loading = ""  # why core's module couldn't be read, for the service's log
+
+
+def load():
+    """Core's messages module, read once; None where it can't be (``problem_loading`` says why)."""
+    global _core, problem_loading
+    if _core is None and not problem_loading:
+        name = "suveryn_core_messages"
+        try:
+            loader = importlib.machinery.SourceFileLoader(name, str(CORE_MESSAGES))
+            spec = importlib.util.spec_from_loader(name, loader)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[name] = mod  # a module that defines dataclasses is looked up by its name
+            loader.exec_module(mod)
+            _core = mod
+        except (OSError, ValueError, KeyError, SyntaxError) as e:
+            sys.modules.pop(name, None)
+            problem_loading = type(e).__name__
+    return _core
+
+
+def said(code: str, **params) -> dict:
+    """The message for a code: ``{kind, code, params}`` from core's registry. Where core can't be read, or
+    doesn't list the code (an older core), the code and its parameters as given: the reader decides."""
+    core = load()
+    if core is not None:
+        try:
+            return core.message(code, **params)
+        except (KeyError, ValueError, TypeError):
+            pass
+    return {"code": code, "params": params}
+
+
+def reference() -> str:
+    """A short id for a failure nobody planned for ("7F3K-92QD"): in the message, and in the service's log."""
+    core = load()
+    if core is not None:
+        return core.reference()
+    import secrets
+    return secrets.token_hex(4).upper()

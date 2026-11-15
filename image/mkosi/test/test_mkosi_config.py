@@ -329,6 +329,8 @@ def test_the_web_setup_runs_on_the_installed_appliance_from_the_image():
     assert "rm -f /etc/nginx/sites-enabled/default" in POSTINST and "ConditionPathExists=/etc/nginx/sites-enabled/suveryn" in POSTINST
     conf = (MKOSI / "mkosi.conf.d" / "20-web-setup.conf").read_text()
     assert "nginx" in conf and "../../setup:/opt/suveryn/appliance/setup" in conf
+    # what the setup, the backup service and the clock's helper load core's messages through (suveryn-tracker#154)
+    assert "../../messages:/opt/suveryn/appliance/messages" in conf
     for unit in ("suveryn-setup.service", "suveryn-setup-provision.service", "suveryn-setup-provision.path"):
         text = (MKOSI.parent.parent / "setup" / "systemd" / unit).read_text()
         assert "ConditionPathExists=!/run/suveryn/installer-mode" in text, unit

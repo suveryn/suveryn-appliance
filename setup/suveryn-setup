@@ -130,15 +130,15 @@ manifests = load("suveryn_manifest", REPO / "support" / "suveryn-manifest")
 # way to use it (suveryn_harness/messages.py, standard library only). This service loads that module
 # from the core on this appliance, the pinned one, and keeps no list of its own: a code this core
 # doesn't list can't be said. Without it setup can't say what went wrong, so it doesn't start.
-CORE_MESSAGES = Path(ENV("SUVERYN_CORE_MESSAGES", "/opt/suveryn/core/packages/harness/src/suveryn_harness/messages.py"))
-try:
-    messages = load("suveryn_core_messages", CORE_MESSAGES)
-except (OSError, ValueError, KeyError, SyntaxError) as e:
-    raise SystemExit(f"suveryn-setup: suveryn-core's messages can't be loaded from {CORE_MESSAGES} ({type(e).__name__}): "
-                     "setup needs the core on this appliance") from None
-if "setup" not in messages.AREAS:
-    raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the web setup's "
-                     "messages (suveryn-tracker#141): this appliance needs a newer core")
+core_messages = load("suveryn_messages", REPO / "messages" / "suveryn-messages")  # the one way the appliance's services load it
+CORE_MESSAGES = core_messages.CORE_MESSAGES
+messages = core_messages.load()
+if messages is None:
+    raise SystemExit(f"suveryn-setup: suveryn-core's messages can't be loaded from {CORE_MESSAGES} ({core_messages.problem_loading}): "
+                     "setup needs the core on this appliance")
+if not {"setup", "backup"} <= set(messages.AREAS):
+    raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the web setup's and the "
+                     "backup service's messages (suveryn-tracker#141, #154): this appliance needs a newer core")
 message = messages.message      # {kind, code, params} for a listed code: inside an answer, or stored
 reference = messages.reference  # a short id for an unplanned failure ("7F3K-92QD")
 
@@ -454,15 +454,15 @@ def test_share(a) -> dict:
         raise Refused({"_": "request.invalid"})
     host = share_host(a.get("protocol"), a.get("address"))
     if host is None:
-        return {"ok": False, "message": message("setup.share_address")}
+        return {"ok": False, "message": message("backup.share_address")}
     try:
         infos = socket.getaddrinfo(host, 445 if a["protocol"] == "smb" else 2049, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
-        return {"ok": False, "message": message("setup.share_unreachable")}
+        return {"ok": False, "message": message("backup.share_unreachable")}
     for family, kind, proto, _, addr in infos:
         ip = ipaddress.ip_address(addr[0])
         if not (ip.is_private or ip.is_link_local) or ip.is_loopback:
-            return {"ok": False, "message": message("setup.share_not_local")}
+            return {"ok": False, "message": message("backup.share_not_local")}
     for family, kind, proto, _, addr in infos:
         try:
             with socket.socket(family, kind, proto) as s:
@@ -471,7 +471,7 @@ def test_share(a) -> dict:
                 return {"ok": True}
         except OSError:
             continue
-    return {"ok": False, "message": message("setup.share_unreachable")}
+    return {"ok": False, "message": message("backup.share_unreachable")}
 
 
 def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]:
@@ -486,10 +486,10 @@ def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]
     common = {"retention_days": a["retention_days"], "recipient": a["recipient"]}
     if a["target"] == "usb":
         if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
-            raise Refused({"disk": "setup.disk_gone"})
+            raise Refused({"disk": "backup.disk_gone"})
         return {"target": "usb", "disk": a["disk"], **common}, None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "setup.share_address"})
+        raise Refused({"address": "backup.share_address"})
     user = a.get("user") or None
     password = a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
@@ -507,13 +507,13 @@ def check_restore(a, disks: list[dict] | None = None) -> tuple[dict, str, str | 
     key = key.strip() if isinstance(key, str) else ""
     m = AGE_SECRET.search(key)  # the file setup made holds comments around it
     if not m:
-        raise Refused({"key": "setup.key_invalid"})
+        raise Refused({"key": "backup.not_a_key"})
     if a["target"] == "usb":
         if not isinstance(a.get("disk"), str) or a["disk"] not in {d["id"] for d in (usb_disks() if disks is None else disks)}:
-            raise Refused({"disk": "setup.disk_gone"})
+            raise Refused({"disk": "backup.disk_gone"})
         return {"target": "usb", "disk": a["disk"]}, m.group(0), None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "setup.share_address"})
+        raise Refused({"address": "backup.share_address"})
     user, password = a.get("user") or None, a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
             (password is not None and (not isinstance(password, str) or len(password) > 512)):
@@ -1036,9 +1036,6 @@ def restore_work() -> Path:
 
 NAME_OF_BACKUP = re.compile(r"suveryn-backup_[a-z0-9-]+_\d{8}T\d{6}Z\.tar\.zst\.age")
 HOST_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
-# "version": a backup from a newer PostgreSQL than this appliance's, e.g. a 26.04 appliance's onto 24.04 (#57).
-CHECK_ERRORS = {"decrypt": "setup.restore_wrong_key", "read": "setup.restore_damaged", "check": "setup.restore_damaged",
-                "settings": "request.invalid", "database": "setup.restore_damaged", "version": "setup.restore_newer"}
 
 
 def forget_restore_secrets(work: Path | None = None) -> None:
@@ -1075,21 +1072,21 @@ def restore_check() -> int:
                for b in found.get("backups") or [] if isinstance(b, dict) and NAME_OF_BACKUP.fullmatch(str(b.get("file")))
                and isinstance(b.get("size"), int) and HOST_LABEL.fullmatch(str(b.get("appliance")))][:MAX_CHOICES]
     if not found.get("found") or not choices:
-        r = {"usable": False, "step": found.get("step", "check"), "message": found.get("message", "")}
+        r = {"usable": False, "failure": found.get("failure")}
     else:
         code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", choices[0]["file"], "--on-target", "--json",
                         "--identity", ANSWERS / "recovery-key", timeout=1800)
         try:
             r = json.loads(out.strip().splitlines()[-1])
         except (ValueError, IndexError):
-            r = {"usable": False, "step": "check"}
+            r = {"usable": False}
     if r.get("usable"):
         result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
                   "choices": choices}
     else:
-        code = ("setup.restore_no_backup" if "no backup" in str(r.get("message", "")) else "setup.restore_unreachable") \
-            if r.get("step") == "target" else CHECK_ERRORS.get(r.get("step"), "setup.restore_damaged")
-        result = {"state": "failed", "message": message(code)}
+        # why, as the backup service says it: a code of the registry (backup.wrong_key, backup.none_found,
+        # backup.damaged, backup.newer_version, backup.target_unreachable), passed on as it is (#154)
+        result = {"state": "failed", "message": messages.why(r.get("failure"))}
         forget_restore_secrets()  # the screen asks for them again
     write_file(RESTORE, json.dumps(result, indent=1), 0o644)
     return 0 if r.get("usable") else 1
@@ -1139,7 +1136,7 @@ def restore_run() -> int:
     forget_restore_secrets(work)
     if code != 0:
         log.write(f"suveryn-provision restore failed ({code})\n")
-        r["state"], r["message"] = "failed", message("setup.restore_failed")
+        r["state"], r["message"] = "failed", message("backup.restore_failed")
         step(current, "failed")
         return 1
     step("services", "done")

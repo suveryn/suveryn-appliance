@@ -44,9 +44,10 @@ The contract is at the top of suveryn-core's
 decision *Messages are codes*, suveryn-core's
 [`docs/design/messages.md`](https://github.com/suveryn/suveryn-core/blob/main/docs/design/messages.md)).
 **There is one list, and it is core's.** The codes are defined in suveryn-core's registry
-(`messages.json`, its `setup` area), and this service keeps no list of its own: it loads core's module
-(`suveryn_harness/messages.py`, standard library only) from the core on the appliance, the pinned one
-at `/opt/suveryn/core`, and says its codes through it. A code that core doesn't list can't be said.
+(`messages.json`, its `setup` area, and its `backup` area for a share's test and a restore), and this
+service keeps no list of its own: it loads core's module (`suveryn_harness/messages.py`, standard library
+only) from the core on the appliance, the pinned one at `/opt/suveryn/core`, through
+[`messages/suveryn-messages`](../messages/README.md), and says its codes through it. A code that core doesn't list can't be said.
 Without that core, or with one from before the setup's messages, the service doesn't start and says
 why in its journal (`journalctl -u suveryn-setup`); systemd tries again, and it starts once the core
 is there. So a change that needs a new code is merged in core first, and reaches the appliance when
@@ -92,9 +93,10 @@ with a reference for a failure nobody planned for.
 - **check**: `suveryn-backup --settings <target> find --json --identity <key>` (the backups that key opens,
   under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
   offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
-  the result says `checked` with the backup, or `failed` with a `message`: `setup.restore_wrong_key`,
-  `setup.restore_no_backup`, `setup.restore_unreachable`, `setup.restore_damaged`, `setup.restore_newer`
-  (made with a newer PostgreSQL than this appliance's, #57) or `request.invalid`.
+  the result says `checked` with the backup, or `failed` with a `message`, the backup service's own, passed
+  on as it is: `backup.wrong_key`, `backup.none_found`, `backup.target_unreachable`, `backup.damaged`,
+  `backup.newer_version` (made with a newer PostgreSQL than this appliance's, #57) or
+  `backup.settings_invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its
   `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old
   appliance's network mode and name) and **services**. The key and the share's password are deleted
