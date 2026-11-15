@@ -17,6 +17,13 @@ from pathlib import Path
 import pytest
 
 TOOL = Path(__file__).resolve().parent.parent / "mkosi.extra" / "usr" / "lib" / "suveryn" / "install"
+
+# The engine says suveryn-core's codes through messages/suveryn-messages (suveryn-tracker#160): from this checkout,
+# and with a suveryn-core checkout (SUVERYN_CORE, as CI has) through core's registry; without one a code goes out
+# as it is, and these tests hold either way.
+os.environ.setdefault("SUVERYN_MESSAGES", str(Path(__file__).resolve().parents[3] / "messages" / "suveryn-messages"))
+if os.environ.get("SUVERYN_CORE"):
+    os.environ.setdefault("SUVERYN_CORE_MESSAGES", str(Path(os.environ["SUVERYN_CORE"]) / "packages" / "harness" / "src" / "suveryn_harness" / "messages.py"))
 sys.dont_write_bytecode = True
 _loader = importlib.machinery.SourceFileLoader("install_under_test", str(TOOL))
 install = importlib.util.module_from_spec(importlib.util.spec_from_loader("install_under_test", _loader))
@@ -80,13 +87,13 @@ def test_unusable_network_settings(monkeypatch, kw, message):
 
 
 @pytest.mark.parametrize("kw,code,params", [
-    ({"interface": "eth9"}, "port", {}),
-    ({"address": "192.168.1.50"}, "prefix", {}),
-    ({"address": "192.168.1.50/24", "gateway": "10.0.0.1", "dns": "1.1.1.1"}, "gateway", {"gateway": "10.0.0.1", "network": "192.168.1.0/24"}),
-    ({"address": "192.168.1.50/24", "gateway": "192.168.1.1"}, "dns", {}),
-    ({"address": "300.1.1.1/24", "dns": "1.1.1.1"}, "address", {"value": "300.1.1.1/24"}),
-    ({"address": "192.168.1.50/24", "gateway": "192.168.1.x", "dns": "1.1.1.1"}, "address", {"value": "192.168.1.x"}),
-    ({"address": "192.168.1.50/24", "dns": "1.1.1.1,not-an-ip"}, "address", {"value": "not-an-ip"}),
+    ({"interface": "eth9"}, "network.port_missing", {}),
+    ({"address": "192.168.1.50"}, "network.prefix_missing", {}),
+    ({"address": "192.168.1.50/24", "gateway": "10.0.0.1", "dns": "1.1.1.1"}, "network.gateway_outside", {"gateway": "10.0.0.1", "network": "192.168.1.0/24"}),
+    ({"address": "192.168.1.50/24", "gateway": "192.168.1.1"}, "network.dns_missing", {}),
+    ({"address": "300.1.1.1/24", "dns": "1.1.1.1"}, "network.address_invalid", {"value": "300.1.1.1/24"}),
+    ({"address": "192.168.1.50/24", "gateway": "192.168.1.x", "dns": "1.1.1.1"}, "network.address_invalid", {"value": "192.168.1.x"}),
+    ({"address": "192.168.1.50/24", "dns": "1.1.1.1,not-an-ip"}, "network.address_invalid", {"value": "not-an-ip"}),
 ])
 def test_a_refusal_the_console_words_says_a_code_and_the_value_never_a_sentence_to_recognise(monkeypatch, kw, code, params):
     """Messages are codes (suveryn-tracker#141): the console's screens word a refusal by its code and parameters."""
@@ -95,7 +102,7 @@ def test_a_refusal_the_console_words_says_a_code_and_the_value_never_a_sentence_
     assert (e.value.code, e.value.params) == (code, params)
     with pytest.raises(install.Refused) as e:
         install.check_name("-office")
-    assert e.value.code == "name"
+    assert e.value.code == "network.name_invalid"
 
 
 def test_it_runs_only_on_the_installer(tmp_path, monkeypatch):
@@ -126,7 +133,7 @@ def test_an_installation_that_is_refused_is_logged_with_how_it_ended(tmp_path, m
     log = (run / "install.log").read_text()
     assert "install: arguments: --disk /dev/null --name=-not-a-name" in log and "install: the name '-not-a-name' can't be used" in log
     summary = json.loads((run / "summary.json").read_text())
-    assert summary["result"] == "refused" and summary["installation"] == {"result": "refused", "exit": 2}
+    assert summary["result"] == "refused" and summary["installation"] == {"result": "refused", "exit": 2, "code": "network.name_invalid"}
     assert summary["kept_on_the_stick"] is False
     assert "can't be used" in capsys.readouterr().err  # and on the console as before
 
@@ -173,3 +180,38 @@ def test_c3_lists_the_models_and_the_packs_are_installed_without_a_choice(tmp_pa
     r = bundle.install(packs and stick / packs[0]["folder"], target / "lib/suveryn/bundles")
     assert r["current"] == str(target / "lib/suveryn/packs/be-test")
     assert (target / "lib/suveryn/packs/be-test/text/nl.json").read_text() == "{}"
+
+
+def test_a_failed_installation_tells_the_screens_why_as_a_message_never_a_sentence(monkeypatch, tmp_path, capsys):
+    """suveryn-tracker#160: the screens showed the engine's last English line. With --json the engine answers a
+    message on standard output: its code where a screen can meet it, else `system.internal` with a reference
+    that is in the log's line too."""
+    if os.geteuid() != 0:
+        pytest.skip("install refuses to run except as root")
+    monkeypatch.setenv("SUVERYN_RUN", str(tmp_path))
+    monkeypatch.delenv("SUVERYN_INSTALL_LOG", raising=False)
+    monkeypatch.setattr(install, "RUN", tmp_path)
+    monkeypatch.setattr(install, "LOG", None)
+    monkeypatch.setattr(install, "LIB", TOOL.parent)
+    monkeypatch.setattr(sys, "stderr", sys.stderr)
+    (tmp_path / "boot-mode").write_text("installer\n")
+    try:
+        monkeypatch.setattr(install, "interfaces", lambda: {"eth0": "02:00:00:00:00:01"})
+        code = install.main(["--disk", "/dev/null", "--name", "office", "--address", "192.168.1.50/24", "--gateway", "10.0.0.1",
+                             "--dns", "1.1.1.1", "--json"])
+        out = json.loads(capsys.readouterr().out)
+        assert code == 2 and out["failure"]["code"] == "network.gateway_outside"
+        assert out["failure"]["params"] == {"gateway": "10.0.0.1", "network": "192.168.1.0/24"}
+
+        def stops(_args):
+            raise install.subprocess.CalledProcessError(1, ["systemd-repart", "--dry-run=no"], stderr="No such device")
+        monkeypatch.setattr(install, "install", stops)
+        code = install.main(["--disk", "/dev/null", "--name", "office", "--json"])
+        out = json.loads(capsys.readouterr().out)
+        assert code == 1 and out["failure"]["code"] == "system.internal" and "No such device" not in json.dumps(out)
+        ref = out["failure"]["params"]["ref"]
+    finally:
+        os.environ.pop("SUVERYN_INSTALL_LOG", None)
+    logs = "".join((run / "install.log").read_text() for run in (tmp_path / "install-log-in-memory").iterdir())
+    assert f"reference {ref}" in logs and "No such device" in logs  # the reference leads to the detail
+

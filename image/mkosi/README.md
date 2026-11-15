@@ -179,15 +179,24 @@ case mid-sentence). Sizes follow the language (17,0 GB; 17,0 Go), and the confir
 engine's own messages (a failed step's detail) stay in English. The Dutch and French copy is a
 first version: to be read by a native speaker before release.
 
-**What can't be done, as a code.** The console is not a server, so its messages aren't in suveryn-core's
-registry: its text file's keys are its codes. Its engine (`install`, `bundle`) speaks English on the
-command line and in its log, and gives the screens a code with the values (`Refused.code` and `.params`,
-`Invalid.code`: `changed`, `signature` or `invalid`), which the screens word in the chosen language; they
-never recognise or show the English sentence (suveryn-tracker#141). Two places still show a technical
-line as it is, under a sentence in the chosen language: an installation that failed (`c6_failed`, the
-installer's last line) and network settings that couldn't be applied (`c8_apply_failed`). Nobody planned
-for those, and the stick has no log to look a reference up in: the line on the screen is what the partner
-needs.
+**What can't be done, as a code.** The console says codes of suveryn-core's registry of messages, as every
+other part of sūveryn does (suveryn-tracker#160; [`messages`](../../messages/README.md)): the areas `network`
+(a network setting it refuses) and `bundle` (a bundle on the stick it can't trust), named for what they are
+about, since the installer and the installed appliance's console meet the same situations. Its engine
+(`install`, `bundle`) speaks English on the command line and in its log, and gives the screens a code with the
+values (`Refused.code` and `.params`, `Invalid.code`); the screens word it in the chosen language from
+`installer-text.json`, where the entry for a code has the code as its key (`network.dns_missing`). They never
+recognise or show the English sentence.
+
+- **An installation that fails** answers the screens with a message (`{"failure": …}` on standard output):
+  its code where there is one (`bundle.changed`: the stick's model changed while it was copied), else
+  `system.internal` with a reference. The screen says the sentence for it, with the reference, and where the
+  log is; the reference and the engine's last line are in that log (`install.log`, `summary.json`), which is
+  where the partner looks the detail up.
+- **When the log couldn't be written to the stick** there is nothing to look a reference up in, so the screen
+  also shows the engine's last line as it is, as a technical line under the sentence.
+- **Network settings that couldn't be applied** on the installed appliance's console: a sentence with a
+  reference; the detail is in the journal (`journalctl -u suveryn-console`, the same reference).
 
 ### The unlock screen (C8b)
 

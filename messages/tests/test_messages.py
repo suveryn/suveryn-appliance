@@ -23,6 +23,9 @@ needs_core = pytest.mark.skipif(not CORE_MESSAGES.exists() or '"backup"' not in 
                                 reason=f"no suveryn-core with the backup service's messages at {CORE} (set SUVERYN_CORE)")
 # The services that say codes: the web setup, the backup service, the clock's helper.
 SERVICES = [REPO / "setup" / "suveryn-setup", REPO / "backup" / "suveryn-backup", REPO / "clock" / "suveryn-clock"]
+# The console (suveryn-tracker#160): its engine, the bundle check and its two screens.
+CONSOLE = REPO / "image" / "mkosi" / "mkosi.extra" / "usr" / "lib" / "suveryn"
+CONSOLE_TOOLS = [CONSOLE / name for name in ("install", "bundle", "installer-ui", "console-ui")]
 
 
 def said_by(code_path: Path, snippet: str) -> str:
@@ -57,10 +60,10 @@ def test_without_core_a_helper_still_says_its_code(tmp_path):
 def test_every_code_a_service_names_is_one_the_registry_lists():
     registry = json.loads(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"))
     areas = "|".join(map(re.escape, registry["areas"]))
-    for service in SERVICES:
+    for service in [*SERVICES, *CONSOLE_TOOLS]:
         named = set(re.findall(rf'"((?:{areas})\.[a-z_]+)"', service.read_text(encoding="utf-8")))
         named -= {"request.json"}  # a file's name, not a code
-        assert named, service.name
+        assert named or service.name == "console-ui", service.name  # that screen names none: it words the engine's
         unknown = sorted(named - set(registry["codes"]))
         assert not unknown, f"{service.name} names codes suveryn-core's registry doesn't list: {unknown}"
 
@@ -70,3 +73,25 @@ def test_no_service_keeps_a_word_of_its_own_for_a_failure():
     for service in SERVICES[1:]:
         text = service.read_text(encoding="utf-8")
         assert not re.search(r'"step": e\.|(?<![a-z_])error=|"errors":|\.step\b', text), service.name
+
+
+@needs_core
+def test_the_console_has_words_in_every_language_for_every_code_it_can_say():
+    """The console's language file (installer-text.json) words the registry's `network` and `bundle` areas and
+    an unplanned failure, each entry under its code and with the code's own values, and names no other code."""
+    registry = json.loads(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"))["codes"]
+    text = json.loads((CONSOLE / "installer-text.json").read_text(encoding="utf-8"))
+    said = {code for code in registry if code.split(".")[0] in ("network", "bundle")} | {"system.internal"}
+    assert len(said) >= 9
+    assert {key for key in text if "." in key} == said
+    for code in said:
+        for lang in ("en", "nl", "fr"):
+            sentence = text[code][lang]
+            assert set(re.findall(r"\{(\w+)\}", sentence)) == set(registry[code].get("params", {})), f"{code} {lang}"
+
+
+def test_the_console_shows_no_sentence_of_its_engine():
+    # what it did before: the engine's last line with its first letter put in upper case, and str(e) in a sentence
+    ui = (CONSOLE / "installer-ui").read_text(encoding="utf-8") + (CONSOLE / "console-ui").read_text(encoding="utf-8")
+    assert ".upper() + self.failed" not in ui and "detail=str(e)" not in ui
+

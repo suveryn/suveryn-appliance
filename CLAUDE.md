@@ -27,7 +27,7 @@ The handbook's [design principles](https://github.com/suveryn/suveryn-handbook/b
 - **The reader sandbox is mandatory in production**: core refuses to read documents without `SUVERYN_EXTRACT_WRAPPER` unless told it is a development machine.
 - **A unit, a service or a script says how it comes back** after a restart, a reboot or a full disk (`Restart=`, ordering, what Status shows), and its folder's tests restart it.
 - **The accessibility principle covers the appliance's screens too**: the web setup, the sign-in and account pages, the console installer.
-- **Copy** (Keycloak theme, installer, setup) follows the brand's [Wording and spelling](https://github.com/suveryn/suveryn-brand/blob/main/guidelines/brand-guidelines.md#wording-and-spelling); the brand's tokens and type scale come through the same pinning as core's chat UI, and a pixel literal fails a test. Each language has its own messages file, except the console installer's `installer-text.json`, which keeps the languages side by side because the installer's small reader needs one file.
+- **Copy** (Keycloak theme, installer, setup) follows the brand's [Wording and spelling](https://github.com/suveryn/suveryn-brand/blob/main/guidelines/brand-guidelines.md#wording-and-spelling); the brand's tokens and type scale come through the same pinning as core's chat UI, and a pixel literal fails a test. Each language has its own messages file, except the console installer's `installer-text.json`, which keeps the languages side by side because the installer's small reader needs one file. What a service or the console says when something is refused or fails is a code of suveryn-core's registry, never a word of its own ([`messages`](messages/README.md)).
 
 ## Verify
 

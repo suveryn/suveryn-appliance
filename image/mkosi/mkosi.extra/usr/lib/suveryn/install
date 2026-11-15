@@ -61,10 +61,46 @@ def load(name: str):
     return mod
 
 
+# ---------------------------------------------------------------------------- messages are codes
+# What the console's screens are told is a code of suveryn-core's registry of messages (its `network` and
+# `bundle` areas; core's docs/design/messages.md), never a word of this tool's own (suveryn-tracker#160). The
+# installer runs from the same system as the appliance, so core's list is on the stick; where it can't be
+# read the code goes out as it is (messages/suveryn-messages), and an installation never depends on it.
+MESSAGES = Path(os.environ.get("SUVERYN_MESSAGES", "/opt/suveryn/appliance/messages/suveryn-messages"))
+
+
+def _messages():
+    try:
+        loader = importlib.machinery.SourceFileLoader("suveryn_messages", str(MESSAGES))
+        module = importlib.util.module_from_spec(importlib.util.spec_from_loader("suveryn_messages", loader))
+        before, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = before
+        return module
+    except (OSError, SyntaxError, ImportError):
+        return None
+
+
+messages = _messages()
+
+
+def said(code: str, **params) -> dict:
+    """The message for a code, {kind, code, params} as core's registry has it; the code as given without core."""
+    return messages.said(code, **params) if messages else {"code": code, "params": params}
+
+
+def reference() -> str:
+    """A short id for a failure nobody planned for: on the screen, and in the installer's log with the detail."""
+    return messages.reference() if messages else secrets.token_hex(4).upper()
+
+
 class Refused(Exception):
-    """Nothing is installed or changed. The sentence is for the command line and the log; `code` and
-    `params` say the same to the console's screens, which word it in the reader's language
-    (installer-text.json) and never read the sentence."""
+    """Nothing is installed or changed. The sentence is for the command line and the log; `code` (a code of
+    core's registry: `network.gateway_outside`) and `params` say the same to the console's screens, which
+    word it in the reader's language (installer-text.json) and never read the sentence. Without a code:
+    nothing a screen lets happen (an unknown time zone, a bundle that isn't on the stick): the command line's."""
 
     def __init__(self, detail: str, code: str = "", **params):
         super().__init__(detail)
@@ -95,7 +131,7 @@ def run(*cmd: str) -> str:
 def check_name(name: str) -> str:
     if not NAME.fullmatch(name or ""):
         raise Refused(f"the name {name!r} can't be used: letters, digits and hyphens, at most 63, "
-                      "not starting or ending with a hyphen", "name")
+                      "not starting or ending with a hyphen", "network.name_invalid")
     return name
 
 
@@ -132,7 +168,7 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
     ports = interfaces() if ports is None else ports
     iface = args.interface or (next(iter(ports)) if ports else None)
     if iface not in ports:
-        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})", "port")
+        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})", "network.port_missing")
     mac = ports[iface]
     summary = {"interface": iface, "mac": mac}
     lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]",
@@ -149,13 +185,13 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
             gw = ipaddress.ip_address(at := args.gateway) if args.gateway else None
             dns = [ipaddress.ip_address(at := d) for d in (args.dns or "").split(",") if d]
         except ValueError as e:
-            raise Refused(f"unusable address: {e}", "address", value=at) from None
+            raise Refused(f"unusable address: {e}", "network.address_invalid", value=at) from None
         if addr.network.prefixlen == addr.max_prefixlen or addr.ip == addr.network.network_address:
-            raise Refused(f"{args.address} isn't a host address with a network prefix (e.g. 192.168.1.50/24)", "prefix")
+            raise Refused(f"{args.address} isn't a host address with a network prefix (e.g. 192.168.1.50/24)", "network.prefix_missing")
         if gw and gw not in addr.network:
-            raise Refused(f"the gateway {gw} isn't in {addr.network}", "gateway", gateway=str(gw), network=str(addr.network))
+            raise Refused(f"the gateway {gw} isn't in {addr.network}", "network.gateway_outside", gateway=str(gw), network=str(addr.network))
         if not dns:
-            raise Refused("a fixed address needs a DNS server (--dns)", "dns")
+            raise Refused("a fixed address needs a DNS server (--dns)", "network.dns_missing")
         lines.append(f"Address={addr}")
         if gw:
             lines.append(f"Gateway={gw}")
@@ -243,7 +279,7 @@ def install(args) -> dict:
             try:
                 r = bundle.verify(c)
             except bundle.Invalid as e:
-                raise Refused(f"the bundle {c.name} isn't valid: {e}") from None
+                raise Refused(f"the bundle {c.name} isn't valid: {e}", e.code) from None
             if r["kind"] != "model":
                 raise Refused(f"{c.name} is a {r['kind']} bundle, not a model")
 
@@ -276,14 +312,14 @@ def install(args) -> dict:
                     try:
                         r = bundle.install(c, target / "lib/suveryn/bundles")
                     except bundle.Invalid as e:
-                        raise Refused(f"the bundle {c.name} failed its check while it was copied: {e}") from None
+                        raise Refused(f"the bundle {c.name} failed its check while it was copied: {e}", e.code) from None
                     models.append({"name": r["name"], "version": r["version"], "size": r["size"]})
                 for c in pack_bundles:
                     print(f"install: copying {c.name}", file=sys.stderr, flush=True)
                     try:
                         r = bundle.install(c, target / "lib/suveryn/bundles")
                     except bundle.Invalid as e:
-                        raise Refused(f"the bundle {c.name} failed its check while it was copied: {e}") from None
+                        raise Refused(f"the bundle {c.name} failed its check while it was copied: {e}", e.code) from None
                     packs.append({"name": r["name"], "version": r["version"], "size": r["size"]})
                 rel = load("system-state").os_release()
                 record = {"image": rel.get("IMAGE_ID"), "version": rel.get("IMAGE_VERSION"), "name": name,
@@ -359,17 +395,33 @@ def main(argv: list[str]) -> int:
     LOG = log_tool.Log.attach()
     sys.stderr = log_tool.Tee(sys.stderr, LOG, "install")
     LOG.line("install", "arguments: " + " ".join(argv))
+    def failed(failure: dict) -> None:
+        """Why, for the screens: a message on standard output, never the sentence (it is in the log)."""
+        if a.json:
+            print(json.dumps({"failure": failure}))
+
+    def unplanned() -> tuple[str, dict]:
+        """A failure nobody planned for: its reference, in the log's line and in the message."""
+        ref = reference()
+        LOG.line("install", f"reference {ref}")
+        return ref, said("system.internal", ref=ref)
+
     try:
         result = install(a)
     except Refused as e:
         print(f"install: {e}", file=sys.stderr)
-        LOG.summary(installation={"result": "refused", "exit": 2})
+        # with its code where a screen can meet it; else what was asked isn't valid (the command line's own checks)
+        failure = said(e.code, **e.params) if e.code else said("request.invalid")
+        LOG.summary(installation={"result": "refused", "exit": 2, "code": failure["code"]})
+        failed(failure)
         if own_run:
             LOG.close("refused")
         return 2
     except subprocess.CalledProcessError as e:
         print(f"install: {' '.join(e.cmd)} failed: {(e.stderr or '').strip()[-500:]}", file=sys.stderr)
-        LOG.summary(installation={"result": "failed", "exit": 1, "command": e.cmd[0]})
+        ref, failure = unplanned()
+        LOG.summary(installation={"result": "failed", "exit": 1, "command": e.cmd[0], "reference": ref})
+        failed(failure)
         if own_run:
             LOG.close("failed")
         return 1
@@ -377,7 +429,9 @@ def main(argv: list[str]) -> int:
         import traceback
         where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-4:]))
         LOG.line("install", f"stopped by {type(e).__name__} at {where}")
-        LOG.summary(installation={"result": "failed", "exit": 1, "stopped_by": type(e).__name__})
+        ref, failure = unplanned()
+        LOG.summary(installation={"result": "failed", "exit": 1, "stopped_by": type(e).__name__, "reference": ref})
+        failed(failure)
         if own_run:
             LOG.close("failed")
         raise

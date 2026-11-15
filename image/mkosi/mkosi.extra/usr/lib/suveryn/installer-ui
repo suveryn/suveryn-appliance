@@ -760,7 +760,7 @@ class Hardware(Screen):
 def model_problem(code: str) -> str:
     """Why a model on the stick can't be installed, in the chosen language: by the bundle check's code,
     never from its English sentence."""
-    return t({"changed": "c3_changed", "signature": "c3_bad_signature"}.get(code, "c3_not_valid"))
+    return t(code if code in ("bundle.changed", "bundle.signature") else "bundle.invalid")
 
 
 class Models(Screen):
@@ -933,10 +933,10 @@ class Network(Screen):
     def leave(self):
         try:
             ENGINE.check_name(self.name.value)
-        except ENGINE.Refused:
-            return t("c4_bad_name")
+        except ENGINE.Refused as e:
+            return network_problem(e)
         if not self.port.value:
-            return t("c4_no_port")
+            return t("network.port_missing")
         args = Namespace(interface=self.port.value, address="dhcp", gateway=None, dns=None)
         if self.mode.value == "fixed":
             args = Namespace(interface=self.port.value, address=self.ip.value.strip(),
@@ -958,17 +958,21 @@ class Network(Screen):
 
 
 def network_problem(e) -> str:
-    """The installer's check of the network answers, in the chosen language: by the refusal's code and
-    parameters (install's Refused), never from its English sentence."""
-    if e.code == "prefix":
-        return t("c4_need_prefix")
-    if e.code == "gateway":
-        return t("c4_gateway_outside", gw=e.params["gateway"], net=e.params["network"])
-    if e.code == "dns":
-        return t("c4_need_dns")
-    if e.code == "port":
-        return t("c4_no_port")
-    return t("c4_bad_address", detail=e.params.get("value") or "")  # the value as it was typed
+    """The installer's check of the network answers, in the chosen language: by the refusal's code (one of
+    suveryn-core's registry, its `network` area) and parameters, never from its English sentence."""
+    return worded({"code": e.code, "params": e.params}) or t("network.address_invalid", value=e.params.get("value") or "")
+
+
+def worded(message: dict | None) -> str | None:
+    """A message, {code, params}, in the chosen language: the text file's entry of that code, with the code's
+    parameters. None for a code the file has no words for, or when a value its sentence needs wasn't given."""
+    code = (message or {}).get("code")
+    if not isinstance(code, str) or "." not in code or code not in TEXT:
+        return None
+    try:
+        return t(code, **{k: v for k, v in ((message or {}).get("params") or {}).items() if isinstance(k, str)})
+    except (KeyError, IndexError):
+        return None
 
 
 class Summary(Screen):
@@ -1023,7 +1027,7 @@ class Installing(Screen):
         self.items = [t("c6_check_models"), t("c6_partition", disk=a["disk"]), t("c6_encrypt"), t("c6_copy_models"),
                       t("c6_settings"), t("c6_tpm"), t("c6_boot")]
         self.at, self.detail, self.percent = 0, "", 0.0
-        self.failed, self.result, self.lines = None, None, []
+        self.failed, self.technical, self.result, self.lines = None, "", None, []
         self.done = False
         args = ["--disk", f"/dev/{a['disk']}", "--name", a["name"], "--language", a["language"],
                 "--keyboard", a["keyboard"], "--timezone", a["timezone"], "--interface", a["interface"]]
@@ -1047,22 +1051,33 @@ class Installing(Screen):
         out = self.proc.stdout.read()
         code = self.proc.wait()
         log = self.app.log
-        if code == 0:
-            try:
-                self.result = json.loads(out)
-                self.at, self.percent = len(self.items), 100.0
-            except ValueError:
-                self.failed = t("c6_no_result")
+        try:
+            answer = json.loads(out) if out.strip() else {}
+        except ValueError:
+            answer = {}
+        if code == 0 and answer:
+            self.result = answer
+            self.at, self.percent = len(self.items), 100.0
         else:
+            # Why, in the chosen language: the engine's message by its code, a sentence of this file's. What nobody
+            # planned for has a reference, which the log has too; the engine's last line is the technical detail:
+            # for the log, and for the screen only when no log could be written (suveryn-tracker#160).
             last = [ln for ln in self.lines if not ln.startswith(("bundle:", "step ", "install-disk ["))]
-            self.failed = (last[-1] if last else f"exit {code}").removeprefix("install: ")
+            self.technical = (last[-1] if last else f"exit {code}").removeprefix("install: ")
+            failure = answer.get("failure") if isinstance(answer, dict) else None
+            self.failed = worded(failure) if (failure or {}).get("code") != "system.internal" else None
+            reference = {}
+            if not self.failed:
+                ref = ((failure or {}).get("params") or {}).get("ref") or ENGINE.reference()
+                log.line("installer", f"reference {ref}")
+                self.failed, reference = t("system.internal", ref=ref), {"reference": ref}
         if self.result and not self.failed:
             # The recovery key is on the next screen and nowhere else: make sure of it.
             log.forbid(self.result.get("recovery_key", ""))
             log.summary(result="installed, waiting for the restart")
         else:
-            log.line("installer", f"the installation failed (exit {code}): {self.failed}")
-            log.summary(result="failed", failure=self.failed, exit=code)
+            log.line("installer", f"the installation failed (exit {code}): {self.technical}")
+            log.summary(result="failed", failure=self.technical, exit=code, **reference)
             log.flush()  # everything onto the stick now: the machine may be switched off at this screen
         self.done = True
 
@@ -1118,9 +1133,13 @@ class Installing(Screen):
         c.blank()
         if self.failed:
             c.add((f"{WARN} ", "accent"), (t("c6_failed"), "strong"))
-            c.wrap(self.failed[:1].upper() + self.failed[1:], "accent", indent=2)
+            c.wrap(self.failed, "accent", indent=2)
             log = self.app.log
-            c.wrap(t("c6_log", folder=log.name) if log.persistent else t("c6_log_none"), "text", indent=2)
+            if log.persistent:
+                c.wrap(t("c6_log", folder=log.name), "text", indent=2)
+            else:  # no log to look anything up in: the technical line, as it is, is what the partner needs
+                c.wrap(t("c6_log_none"), "text", indent=2)
+                c.wrap(self.technical, "dim", indent=2)
             c.wrap(t("c6_failed_note", disk=self.app.answers["disk"]), "dim", indent=2)
         else:
             c.wrap(t("c6_duration"), "text")
