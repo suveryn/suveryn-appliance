@@ -12,7 +12,7 @@ the web setup saved there, encrypted for the office's recovery key.
 | **Encrypted** | With [age](https://age-encryption.org) to the recovery key made in the browser during setup. The appliance has only the public half (`age1…`): it writes backups and can't read them. The office keeps the private half (`AGE-SECRET-KEY-1…`) offline |
 | **Kept** | The retention chosen in setup (14, 30, 90 or 365 days). Older ones are deleted before a backup is written and again after; the newest is always kept |
 | **Changed** | After setup, in Administration › Backups (suveryn-core docs/design/admin.md): *Back up now*, the hour, the target (a USB disk, or a share whose test signs in and writes), the retention and a new recovery key. The gateway can't change them itself: it leaves a request in `/run/suveryn/backup-requests` and `suveryn-backup request` (root, `suveryn-backup-request.path`) checks it as the web setup did, saves it and answers in `request-result.json`, never with a password. Old backups stay where they were |
-| **Seen** | `/var/lib/suveryn/backup/status.json`: the last success, the last failure and its step, the backups on the target. The gateway shows it to the administrator |
+| **Seen** | `/var/lib/suveryn/backup/status.json`: the last success, the last failure and why (`failure`: a code of suveryn-core's registry, [`messages`](../messages/README.md), never a sentence; the journal has the detail), the backups on the target. The gateway shows it to the administrator |
 
 ```bash
 sudo suveryn-backup run                                   # now (the timer runs run --scheduled)
@@ -31,8 +31,8 @@ sudo suveryn-backup request                               # the administrator's 
 | Unit | What it does |
 |---|---|
 | `suveryn-backup.timer` | Hourly: `suveryn-backup run --scheduled`, which backs up only at the office's hour |
-| `suveryn-backup-key-test.path` | The administrator's key test. The gateway leaves the recovery key and a request in `/run/suveryn/backup-key-test` (in memory). The path unit starts `key-test`: the key must open this appliance's newest backup, and every part of it must be there. Nothing is restored. The key is deleted whatever happens. The result goes to `/var/lib/suveryn/backup/key-test.json`, with no secrets, and the gateway shows it. A wrong file (step `key`) keeps the last test that passed (`last_ok`), so it doesn't mark the office's key as failing |
-| `suveryn-backup-request.path` | The administrator's other requests from Administration › Backups: back up now, the USB disks connected, a share's test, new settings. The gateway leaves `request.json` in `/run/suveryn/backup-requests`. The path unit starts `request`, which deletes it at once and answers in `request-result.json`, never with a password |
+| `suveryn-backup-key-test.path` | The administrator's key test. The gateway leaves the recovery key and a request in `/run/suveryn/backup-key-test` (in memory). The path unit starts `key-test`: the key must open this appliance's newest backup, and every part of it must be there. Nothing is restored. The key is deleted whatever happens. The result goes to `/var/lib/suveryn/backup/key-test.json`, with no secrets, and the gateway shows it. A wrong file (`backup.wrong_key`) keeps the last test that passed (`last_ok`), so it doesn't mark the office's key as failing |
+| `suveryn-backup-request.path` | The administrator's other requests from Administration › Backups: back up now, the USB disks connected, a share's test, new settings. The gateway leaves `request.json` in `/run/suveryn/backup-requests`. The path unit starts `request`, which deletes it at once and answers in `request-result.json`, never with a password; what it refuses is `failure`, or `fields` (a message per field of the settings form), in the registry's codes |
 
 (On the appliance the tool is `/opt/suveryn/appliance/backup/suveryn-backup`.)
 

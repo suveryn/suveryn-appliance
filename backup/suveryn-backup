@@ -39,7 +39,7 @@ in ``/run``, never on a command line.
 
 **How long.** ``retention_days`` (14, 30, 90 or 365): those older than that are deleted before a backup
 is written and again after, but the newest one is always kept. Then, if tonight's backup won't fit
-(the last one's size and a quarter more), the run stops with "the backup disk is full" (step ``space``)
+(the last one's size and a quarter more), the run stops with "the backup disk is full" (``backup.disk_full``)
 rather than half-writing it. Backups are the
 outer bound of "deleted" in the data lifecycle (suveryn-docs ``administration/data-lifecycle.md``).
 
@@ -82,7 +82,7 @@ aside, the restored ones into their place), then the folders renamed into place,
 replaced is dropped. A failure before the swap leaves the appliance as it was and says so.
 
 **What the administrator sees.** ``/var/lib/suveryn/backup/status.json`` (0644, no secrets), which the
-gateway shows: the last success, the last failure and its step, and the backups on the target.
+gateway shows: the last success, the last failure and why (a code of core's registry), and the backups on the target.
 
 Python 3 standard library; needs ``age``, ``zstd``, PostgreSQL's client tools, and for a share
 ``mount.cifs`` or ``mount.nfs``. Run as root.
@@ -93,6 +93,8 @@ import datetime as dt
 import fcntl
 import ipaddress
 import json
+import importlib.machinery
+import importlib.util
 import os
 import pwd
 import re
@@ -142,12 +144,38 @@ NAME = re.compile(r"suveryn-backup_(?P<name>[a-z0-9-]+)_(?P<when>\d{8}T\d{6}Z)\.
 AGE_RECIPIENT = re.compile(r"age1[02-9ac-hj-np-z]{58}")
 
 
-class Failed(Exception):
-    """A step that failed: ``step`` names it for the status file and the administrator."""
+# ---------------------------------------------------------------------------- messages are codes
+# What went wrong is a code of suveryn-core's registry of messages (its `backup` area; core's
+# docs/design/messages.md), never a word of this tool's own: the status file, a key test's result and a
+# request's answer carry `failure`, {kind, code, params}, which the gateway passes on and the page words.
+# The sentence beside it in this file is for the journal, never for a screen (suveryn-tracker#154).
+def _messages():
+    path = Path(__file__).resolve().parent.parent / "messages" / "suveryn-messages"
+    loader = importlib.machinery.SourceFileLoader("suveryn_messages", str(path))
+    module = importlib.util.module_from_spec(importlib.util.spec_from_loader("suveryn_messages", loader))
+    loader.exec_module(module)
+    return module
 
-    def __init__(self, step: str, message: str):
+
+messages = _messages()
+
+
+class Failed(Exception):
+    """What failed: ``code`` is a code of core's registry (``backup.disk_full``), the message says it for the
+    journal. ``system.internal``: nobody planned for it; it gets a reference the journal has with the detail."""
+
+    def __init__(self, code: str, message: str):
         super().__init__(message)
-        self.step = step
+        self.code = code
+        self.ref = messages.reference() if code == "system.internal" else None
+
+    def failure(self) -> dict:
+        """The message for the gateway: {kind, code, params}."""
+        return messages.said(self.code, **({"ref": self.ref} if self.ref else {}))
+
+    def where(self) -> str:
+        """The code, and the reference when there is one: for the journal's line."""
+        return f"{self.code} {self.ref}" if self.ref else self.code
 
 
 def now() -> str:
@@ -165,11 +193,11 @@ def as_pg(cmd: list[str]) -> list[str]:
     return cmd
 
 
-def run(step: str, cmd: list, **kw) -> str:
+def run(code: str, cmd: list, **kw) -> str:
     r = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, **kw)
     if r.returncode != 0:
         lines = (r.stderr or r.stdout).strip().splitlines()
-        raise Failed(step, f"{Path(str(cmd[0])).name} failed: {' / '.join(lines[-3:]) or r.returncode}")
+        raise Failed(code, f"{Path(str(cmd[0])).name} failed: {' / '.join(lines[-3:]) or r.returncode}")
     return r.stdout
 
 
@@ -184,17 +212,17 @@ def settings(for_writing: bool = True) -> dict | None:
     if not isinstance(c, dict) or c.get("target") in (None, "later"):
         return None
     if c.get("target") == "folder" and ENV("SUVERYN_BACKUP_ALLOW_FOLDER") != "1":
-        raise Failed("settings", "a folder target is for tests only")
+        raise Failed("backup.settings_invalid", "a folder target is for tests only")
     if c.get("target") not in ("usb", "share", "folder"):
-        raise Failed("settings", f"unknown target {c.get('target')!r}")
+        raise Failed("backup.settings_invalid", f"unknown target {c.get('target')!r}")
     if not for_writing:
         return c
     if not AGE_RECIPIENT.fullmatch(str(c.get("recipient", ""))):
-        raise Failed("settings", "no valid recovery key (recipient) in the backup settings")
+        raise Failed("backup.settings_invalid", "no valid recovery key (recipient) in the backup settings")
     if c.get("retention_days") not in RETENTION:
-        raise Failed("settings", "the retention period isn't one of 14, 30, 90 or 365 days")
+        raise Failed("backup.settings_invalid", "the retention period isn't one of 14, 30, 90 or 365 days")
     if "hour" in c and (type(c["hour"]) is not int or not 0 <= c["hour"] <= 23):
-        raise Failed("settings", "the backup's hour isn't one from 0 to 23")
+        raise Failed("backup.settings_invalid", "the backup's hour isn't one from 0 to 23")
     return c
 
 
@@ -289,7 +317,7 @@ def usb_partition(chosen: str) -> Path:
     for dev, label in usb_candidates(lsblk_usb()):
         if label == chosen:
             return dev
-    raise Failed("target", "the backup disk isn't connected")
+    raise Failed("backup.target_unreachable", "the backup disk isn't connected")
 
 
 class Target:
@@ -318,7 +346,7 @@ class Target:
             MOUNT = self.mount
             MOUNT.mkdir(mode=0o700, parents=True, exist_ok=True)
             if os.path.ismount(MOUNT):
-                run("target", ["umount", MOUNT])
+                run("backup.target_unreachable", ["umount", MOUNT])
             opts = "nosuid,nodev,noexec"
             if s["target"] == "usb":
                 self.disk = self._usb(opts)
@@ -331,10 +359,10 @@ class Target:
                         SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
                     f.write(f"username={s.get('user') or 'guest'}\npassword={password}\n")
                 # vers=3: the highest SMB 3 dialect both sides speak (a NAS may allow 3.1.1 only)
-                run("target", ["mount", "-t", "cifs", address, MOUNT,
+                run("backup.target_unreachable", ["mount", "-t", "cifs", address, MOUNT,
                                "-o", f"{opts},credentials={creds},vers=3,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
             else:
-                run("target", ["mount", "-t", "nfs", s["address"], MOUNT, "-o", f"{opts},soft,timeo=150"])
+                run("backup.target_unreachable", ["mount", "-t", "nfs", s["address"], MOUNT, "-o", f"{opts},soft,timeo=150"])
             self.mounted = True
             base = MOUNT
         folder = base / "suveryn-backups" / appliance_name()
@@ -345,7 +373,7 @@ class Target:
                 if not mark.is_symlink() and (not mark.exists() or mark.read_text().strip() != s["recipient"]):
                     mark.write_text(s["recipient"] + "\n")
         except OSError as e:
-            raise Failed("target", f"can't write to the backup target: {e.strerror}") from None
+            raise Failed("backup.target_unreachable", f"can't write to the backup target: {e.strerror}") from None
         return folder
 
     def _usb(self, opts: str) -> str:
@@ -366,22 +394,22 @@ class Target:
                                   text=True).stdout.strip()
             if kind not in ("ext4", "exfat", "vfat", "ntfs"):
                 if chosen:
-                    raise Failed("target", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
+                    raise Failed("backup.target_unreachable", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
                 continue
             # NTFS through the kernel's own driver (ntfs3): there is no ntfs-3g on the appliance. Another
             # disk is looked at read-only first.
             fs = ["-t", "ntfs3" if kind == "ntfs" else kind]
             if chosen:
-                run("target", ["mount", *fs, "-o", opts, dev, MOUNT])
+                run("backup.target_unreachable", ["mount", *fs, "-o", opts, dev, MOUNT])
                 return label
             if subprocess.run(["mount", *fs, "-o", f"{opts},ro", str(dev), str(MOUNT)], capture_output=True).returncode != 0:
                 continue
             ours = office_disk(MOUNT / "suveryn-backups", s["recipient"])
             subprocess.run(["umount", str(MOUNT)], capture_output=True)
             if ours:
-                run("target", ["mount", *fs, "-o", opts, dev, MOUNT])
+                run("backup.target_unreachable", ["mount", *fs, "-o", opts, dev, MOUNT])
                 return label
-        raise Failed("target", "the backup disk isn't connected")
+        raise Failed("backup.target_unreachable", "the backup disk isn't connected")
 
     def __exit__(self, *exc) -> None:
         if self.creds:
@@ -436,7 +464,7 @@ def versions() -> dict:
 
 def postgres_major() -> int:
     """This appliance's PostgreSQL major version: 16 on Ubuntu 24.04, 18 on 26.04 (#57)."""
-    return int(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SHOW server_version_num"])).strip()) // 10000
+    return int(run("system.internal", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SHOW server_version_num"])).strip()) // 10000
 
 
 def make(s: dict) -> dict:
@@ -451,7 +479,7 @@ def make(s: dict) -> dict:
         dumps = []
         for db in DATABASES:
             out = work / f"{db}.dump"
-            run("database", as_pg(["pg_dump", "--format=custom", "--file", out, db]))
+            run("system.internal", as_pg(["pg_dump", "--format=custom", "--file", out, db]))
             dumps.append(out)
         manifest = {"format": FORMAT, "created": started.strftime("%Y-%m-%dT%H:%M:%SZ"), "appliance": name,
                     "databases": DATABASES, "files": [f for f in FILES if (VAR / f).exists()], "versions": versions(),
@@ -461,8 +489,8 @@ def make(s: dict) -> dict:
         # written without complaint and then couldn't be read (VM regression of 29 October, finding 12).
         for f in manifest["files"]:
             if (bad := unsafe_link(VAR / f)) is not None:
-                # its own step, so the page says what it is (VM regression e0f2e26, finding 5: "an unexpected error")
-                raise Failed("link", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
+                # its own code, so the page says what it is (VM regression e0f2e26, finding 5: "an unexpected error")
+                raise Failed("backup.unsafe_link", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
         target = Target(s)
         with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
@@ -474,14 +502,14 @@ def make(s: dict) -> dict:
             need = room_needed(folder, [*dumps, *(VAR / f for f in manifest["files"])])
             free = free_space(folder)
             if free < need:
-                raise Failed("space", f"the backup disk is full: tonight's backup needs about {need // 2**20:,} MB and "
+                raise Failed("backup.disk_full", f"the backup disk is full: tonight's backup needs about {need // 2**20:,} MB and "
                                       f"{free // 2**20:,} MB is free; keep backups for fewer days, or use a larger disk")
             digest = write_backup(partial, s["recipient"], work / "manifest.json", dumps, manifest["files"])
             # Read back from the disk itself, not the cache: a failing USB disk is found tonight, not on the
             # day of a restore. The checksum stays beside the backup, for check and restore to compare.
             if read_back(partial) != digest:
                 partial.unlink(missing_ok=True)
-                raise Failed("verify", "the backup disk didn't give back what was written; the disk may be failing")
+                raise Failed("backup.verify_failed", "the backup disk didn't give back what was written; the disk may be failing")
             (folder / f"{final.name}.sha256").write_text(f"{digest}  {final.name}\n")
             size = partial.stat().st_size
             os.replace(partial, final)
@@ -598,7 +626,7 @@ def write_backup(partial: Path, recipient: str, manifest: Path, dumps: list[Path
             age.kill()
             copier.join()
             partial.unlink(missing_ok=True)
-            raise Failed("write", f"writing the backup failed: {e}") from None
+            raise Failed("backup.target_unreachable", f"writing the backup failed: {e}") from None
         zstd_err, age_err = zstd.wait(), age.wait()
         copier.join()
         try:
@@ -610,11 +638,11 @@ def write_backup(partial: Path, recipient: str, manifest: Path, dumps: list[Path
         partial.unlink(missing_ok=True)
         e = problem[0]
         if getattr(e, "errno", None) == 28:  # ENOSPC
-            raise Failed("space", "the backup disk ran full while writing; keep backups for fewer days, or use a larger disk")
-        raise Failed("write", f"writing the backup failed: {e.strerror or e}")
+            raise Failed("backup.disk_full", "the backup disk ran full while writing; keep backups for fewer days, or use a larger disk")
+        raise Failed("backup.target_unreachable", f"writing the backup failed: {e.strerror or e}")
     if zstd_err or age_err:
         partial.unlink(missing_ok=True)
-        raise Failed("encrypt", f"compressing or encrypting failed: {(age.stderr.read() or b'').decode().strip()[-200:]}")
+        raise Failed("system.internal", f"compressing or encrypting failed: {(age.stderr.read() or b'').decode().strip()[-200:]}")
     if ENV("SUVERYN_BACKUP_TEST") == "1" and ENV("SUVERYN_BACKUP_TEST_CORRUPT") == "1":
         with open(partial, "r+b") as f:  # the tests: a disk that gives back something else
             f.seek(100)
@@ -695,9 +723,9 @@ def make_and_record() -> int:
         s = settings()
     except Failed as e:
         s, status["configured"] = None, True
-        status.update(last_attempt=now(), last_error={"at": now(), "step": e.step, "message": str(e)})
+        status.update(last_attempt=now(), last_error={"at": now(), "failure": e.failure()})
         write_status(status)
-        say(f"backup failed ({e.step}): {e}")
+        say(f"backup failed ({e.where()}): {e}")
         return 1
     if s is None:
         status.update(configured=False, last_attempt=now())
@@ -709,9 +737,9 @@ def make_and_record() -> int:
     try:
         done = make(s)
     except Failed as e:
-        status["last_error"] = {"at": now(), "step": e.step, "message": str(e)}
+        status["last_error"] = {"at": now(), "failure": e.failure()}
         write_status(status)
-        say(f"backup failed ({e.step}): {e}")
+        say(f"backup failed ({e.where()}): {e}")
         return 1
     status["last_success"] = done
     status.pop("last_error", None)
@@ -733,7 +761,7 @@ def cmd_status(a) -> int:
         say(f"set up: {'yes' if s.get('configured') else 'no'}")
         say(f"last success: {ok['at']} ({ok['file']}, {ok['size']} bytes)" if ok else "last success: none")
         if err:
-            say(f"last failure: {err['at']} at {err['step']}: {err['message']}")
+            say(f"last failure: {err['at']}: {(err.get('failure') or {}).get('code')} (the journal has the detail)")
     return 0
 
 
@@ -769,7 +797,7 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     if sidecar.is_file() and not sidecar.is_symlink():
         expected = (sidecar.read_text(errors="replace").split() or [""])[0]
         if read_back(file) != expected:
-            raise Failed("read", "the backup isn't what was written: its checksum doesn't match; the disk may be failing")
+            raise Failed("backup.damaged", "the backup isn't what was written: its checksum doesn't match; the disk may be failing")
     age = subprocess.Popen(["age", "--decrypt", "--identity", str(identity), str(file)], stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
     zstd = subprocess.Popen(["zstd", "-q", "-d", "-c"], stdin=age.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -779,15 +807,15 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
         with tarfile.open(fileobj=zstd.stdout, mode="r|") as tar:
             for member in tar:
                 if not expected_entry(member):
-                    raise Failed("read", f"unexpected entry in the backup: {member.name[:120]!r}")
+                    raise Failed("backup.damaged", f"unexpected entry in the backup: {member.name[:120]!r}")
                 entries, total = entries + 1, total + max(member.size, 0)
                 folders += max(member.size, 0) if member.name.startswith("files/") else 0
                 if entries > MAX_ENTRIES:
-                    raise Failed("read", f"the backup holds more than {MAX_ENTRIES} entries")
+                    raise Failed("backup.damaged", f"the backup holds more than {MAX_ENTRIES} entries")
                 if folders > MAX_FOLDER_BYTES:
-                    raise Failed("read", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
+                    raise Failed("backup.damaged", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
                 if total > budget:
-                    raise Failed("read", "the backup unpacks to more than this appliance has room for")
+                    raise Failed("backup.damaged", "the backup unpacks to more than this appliance has room for")
                 tar.extract(member, dest, filter="data")
     except (tarfile.TarError, OSError) as e:
         problem = str(e)
@@ -795,24 +823,24 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
         zstd.stdout.close()
     if age.wait() != 0:  # the wrong key, or not an age file: say that, not what reading the rest made of it
         zstd.wait()
-        raise Failed("decrypt", f"age: {age_error(age.stderr.read())}")
+        raise Failed("backup.wrong_key", f"age: {age_error(age.stderr.read())}")
     if problem:
         zstd.wait()
-        raise Failed("read", f"the backup can't be read: {problem}")
+        raise Failed("backup.damaged", f"the backup can't be read: {problem}")
     if zstd.wait() != 0:
-        raise Failed("read", "the backup is damaged (zstd)")
+        raise Failed("backup.damaged", "the backup is damaged (zstd)")
     try:
         manifest = checked_manifest(json.loads((dest / "manifest.json").read_text()))
     except (OSError, ValueError):
-        raise Failed("read", "the backup has no manifest") from None
+        raise Failed("backup.damaged", "the backup has no manifest") from None
     for db in manifest["databases"]:
         dump = dest / "db" / f"{db}.dump"
         if dump.is_symlink() or not dump.is_file():
-            raise Failed("read", f"the backup lacks the {db} database")
+            raise Failed("backup.damaged", f"the backup lacks the {db} database")
     for f in manifest["files"]:
         folder = dest / "files" / f
         if folder.is_symlink() or not folder.is_dir():
-            raise Failed("read", f"the backup lacks the {f} folder")
+            raise Failed("backup.damaged", f"the backup lacks the {f} folder")
     # PostgreSQL's superuser reads the dumps, whatever umask unpacked them (VM check of #33: with umask
     # 077 the db folder was 0700, and the restore failed after the database was already dropped).
     os.chmod(dest / "db", 0o755)
@@ -842,23 +870,23 @@ def checked_manifest(m) -> dict:
     appliance's (their owners are taken from here), its folders among ``FILES``, its name a host name and
     its date a UTC time. A backup's own words are never a path, an owner or a name in SQL."""
     if not isinstance(m, dict):
-        raise Failed("read", "the backup's manifest isn't readable")
+        raise Failed("backup.damaged", "the backup's manifest isn't readable")
     if m.get("format") != FORMAT:
-        raise Failed("read", f"backup format {str(m.get('format'))[:20]} isn't one this appliance reads")
+        raise Failed("backup.damaged", f"backup format {str(m.get('format'))[:20]} isn't one this appliance reads")
     dbs, files = m.get("databases"), m.get("files")
     if not isinstance(dbs, dict) or set(dbs) != set(DATABASES):
-        raise Failed("read", "the backup's databases aren't this appliance's")
+        raise Failed("backup.damaged", "the backup's databases aren't this appliance's")
     if not isinstance(files, list) or not all(isinstance(f, str) and f in FILES for f in files) or len(set(files)) != len(files):
-        raise Failed("read", "the backup names folders this appliance doesn't back up")
+        raise Failed("backup.damaged", "the backup names folders this appliance doesn't back up")
     name, created = m.get("appliance"), m.get("created")
     if not isinstance(name, str) or not HOST_NAME.match(name) or not isinstance(created, str) or not UTC_TIME.match(created):
-        raise Failed("read", "the backup's name or date isn't one")
+        raise Failed("backup.damaged", "the backup's name or date isn't one")
     pg = m.get("postgresql")  # absent in backups made before #57: those were all PostgreSQL 16
     if pg is not None and (type(pg) is not int or not 9 <= pg <= 99):
-        raise Failed("read", "the backup's PostgreSQL version isn't one")
+        raise Failed("backup.damaged", "the backup's PostgreSQL version isn't one")
     zone = m.get("time_zone")  # absent where the appliance had none (no read-only system's link)
     if zone is not None and (not isinstance(zone, str) or not ZONE_NAME.fullmatch(zone)):
-        raise Failed("read", "the backup's time zone isn't one")
+        raise Failed("backup.damaged", "the backup's time zone isn't one")
     return {"format": FORMAT, "created": created, "appliance": name, "databases": dict(DATABASES),
             "files": [f for f in FILES if f in files], "versions": m.get("versions") if isinstance(m.get("versions"), dict) else {},
             "postgresql": pg or 16, "time_zone": zone}
@@ -884,7 +912,7 @@ def hand_dumps_to_postgres(dest: Path) -> None:
     try:
         pg = pwd.getpwnam(PG_USER)
     except KeyError as e:
-        raise Failed("check", f"no {PG_USER} user on this appliance") from e
+        raise Failed("system.internal", f"no {PG_USER} user on this appliance") from e
     os.chown(dest, 0, pg.pw_gid)
     os.chmod(dest, 0o710)
     db = dest / "db"
@@ -903,11 +931,11 @@ def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
     hand_dumps_to_postgres(dest)
     here = postgres_major()
     if manifest["postgresql"] > here:
-        raise Failed("version", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
+        raise Failed("backup.newer_version", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
                                 f"appliance's {here}; restore it on an appliance with PostgreSQL {manifest['postgresql']} or later")
     out = {}
     for db in manifest["databases"]:
-        listing = run("check", as_pg(["pg_restore", "--list", dest / "db" / f"{db}.dump"]))
+        listing = run("backup.damaged", as_pg(["pg_restore", "--list", dest / "db" / f"{db}.dump"]))
         out[db] = sum(1 for line in listing.splitlines() if line and not line.startswith(";"))
     return out
 
@@ -919,13 +947,13 @@ def on_target(a, act) -> int:
         return act(a.file)
     s = settings(for_writing=False)
     if s is None:
-        raise Failed("settings", "no backup target in the settings")
+        raise Failed("backup.none_found", "no backup target in the settings")
     with Target(s) as own:
         mine = backups_for_key(own, a.identity)
         name = mine[0]["file"] if str(a.file) == "newest" else str(a.file)
         chosen = next((b for b in mine if b["file"] == name), None)
         if chosen is None:
-            raise Failed("target", f"no backup {name} on the target that this recovery key opens")
+            raise Failed("backup.none_found", f"no backup {name} on the target that this recovery key opens")
         return act(own.parent / chosen["appliance"] / chosen["file"])
 
 
@@ -939,10 +967,10 @@ def backups_for_key(own: Path, identity: Path) -> list[dict]:
     name only, never links. ``Failed`` when there are none, or none the key opens (``decrypt``)."""
     found = [dict(b, appliance=f.name) for f in sorted({own, *appliance_folders(own.parent)}) for b in backups_in(f)]
     if not found:
-        raise Failed("target", "there is no backup on the target")
+        raise Failed("backup.none_found", "there is no backup on the target")
     mine = [b for b in found if opens(own.parent / b["appliance"] / b["file"], identity)]
     if not mine:
-        raise Failed("decrypt", "the recovery key opens none of the backups on the target")
+        raise Failed("backup.wrong_key", "the recovery key opens none of the backups on the target")
     return sorted(mine, key=lambda b: b["when"], reverse=True)
 
 
@@ -972,7 +1000,7 @@ def cmd_key_test(_a) -> int:
     Restores nothing. The key is deleted at the end whatever happened; the result goes to key-test.json
     (no secrets), which the gateway shows.
 
-    A wrong file (step ``key``: another appliance's key, an old one) says nothing about the office's key:
+    A wrong file (``backup.wrong_key``: another appliance's key, an old one) says nothing about the office's key:
     the last test that passed is kept in ``last_ok``, so one wrong file doesn't mark the key as failing on
     Status (VM regression 03c8f74, finding 4)."""
     key, result = KEY_TEST / "key", {"at": now()}
@@ -984,23 +1012,24 @@ def cmd_key_test(_a) -> int:
     try:
         (KEY_TEST / "request").unlink(missing_ok=True)
         if not key.is_file() or key.is_symlink():
-            raise Failed("settings", "no recovery key was given")
+            raise Failed("backup.settings_invalid", "no recovery key was given")
         s = settings()
         if s is None:
-            raise Failed("settings", "backups aren't set up")
+            raise Failed("backup.settings_invalid", "backups aren't set up")
         if recipient_of(key) != s["recipient"]:
-            raise Failed("key", "this isn't this appliance's recovery key: it opens none of its backups")
+            raise Failed("backup.wrong_key", "this isn't this appliance's recovery key: it opens none of its backups")
         with Target(s) as folder:
             found = backups_in(folder)
             if not found:
-                raise Failed("target", "there is no backup on the target yet")
+                raise Failed("backup.none_found", "there is no backup on the target yet")
             STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="check-", dir=STATE) as d:
                 manifest = unpack(folder / found[0]["file"], key, Path(d))
                 check_dumps(Path(d), manifest)
         result.update(ok=True, file=found[0]["file"], created=manifest["created"])
     except Failed as e:
-        result.update(ok=False, step=e.step, message=str(e)[:300])
+        result.update(ok=False, failure=e.failure())
+        say(f"key test failed ({e.where()}): {e}")
         if isinstance(last_ok, dict) and isinstance(last_ok.get("at"), str):
             result["last_ok"] = {k: str(last_ok[k])[:40] for k in ("at", "created") if k in last_ok}
     finally:
@@ -1010,7 +1039,8 @@ def cmd_key_test(_a) -> int:
         tmp.write_text(json.dumps(result, indent=1) + "\n")
         os.chmod(tmp, 0o644)  # the gateway shows it; no secrets
         os.replace(tmp, STATE / "key-test.json")
-    say(f"key test: {'the key opens the newest backup, and every part of it is there' if result['ok'] else result['message']}")
+    if result["ok"]:
+        say("key test: the key opens the newest backup, and every part of it is there")
     return 0 if result["ok"] else 1
 
 
@@ -1033,16 +1063,16 @@ def share_host(protocol, address) -> str | None:
 
 
 def reachable(protocol: str, host: str) -> str | None:
-    """None when the share's server answers on the office's network; else why not: ``not_local`` (an address
-    outside it: backups never leave the office) or ``unreachable``."""
+    """None when the share's server answers on the office's network; else why not: ``backup.share_not_local`` (an
+    address outside it: backups never leave the office) or ``backup.share_unreachable``."""
     try:
         infos = socket.getaddrinfo(host, 445 if protocol == "smb" else 2049, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
-        return "unreachable"
+        return "backup.share_unreachable"
     for *_, addr in infos:
         ip = ipaddress.ip_address(addr[0])
         if not (ip.is_private or ip.is_link_local) or ip.is_loopback:
-            return "not_local"
+            return "backup.share_not_local"
     for family, kind, proto, _, addr in infos:
         try:
             with socket.socket(family, kind, proto) as sock:
@@ -1051,16 +1081,17 @@ def reachable(protocol: str, host: str) -> str | None:
                 return None
         except OSError:
             continue
-    return "unreachable"
+    return "backup.share_unreachable"
 
 
 def test_share(r: dict) -> str | None:
     """None when the appliance signs in to the share and may write there, as the backup will; else why not:
-    ``address``, ``not_local``, ``unreachable``, ``login`` (the user or password) or ``write``. The web setup
+    a code of the registry: ``backup.share_address``, ``backup.share_not_local``, ``backup.share_unreachable``,
+    ``backup.share_login`` (the user or password) or ``backup.share_write``. The web setup
     could only see whether the server answered; a wrong password showed at the first backup."""
     host = share_host(r.get("protocol"), r.get("address"))
     if host is None:
-        return "address"
+        return "backup.share_address"
     if problem := reachable(r["protocol"], host):
         return problem
     password = r.get("password")
@@ -1074,10 +1105,10 @@ def test_share(r: dict) -> str | None:
             probe.unlink()
     except Failed as e:
         text = str(e).lower()
-        return "login" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
-            "write" if "can't write" in text else "unreachable"
+        return "backup.share_login" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
+            "backup.share_write" if "can't write" in text else "backup.share_unreachable"
     except OSError:
-        return "write"
+        return "backup.share_write"
     return None
 
 
@@ -1090,37 +1121,37 @@ def valid_recipient(recipient) -> bool:
 
 def new_settings(r: dict, current: dict | None) -> tuple[dict, str | None, list[str]]:
     """The settings to save from the administrator's request, the share's password to keep (None: none), and
-    what is wrong ({field: code} as the setup's, as a list of "field:code"). A recovery key left out keeps the
+    what is wrong (a list of "field:code", each a code of the registry). A recovery key left out keeps the
     current one; a password left out for the same share and user keeps the current one."""
     errors = []
     current = current or {}
     target = r.get("target")
     if target not in ("usb", "share"):
-        return {}, None, ["target:invalid"]
+        return {}, None, ["target:request.invalid"]
     retention, hour = r.get("retention_days"), r.get("hour", current.get("hour", DEFAULT_HOUR))
     if retention not in RETENTION:
-        errors.append("retention_days:invalid")
+        errors.append("retention_days:request.invalid")
     if type(hour) is not int or not 0 <= hour <= 23:
-        errors.append("hour:invalid")
+        errors.append("hour:request.invalid")
     recipient = r.get("recipient") or current.get("recipient")
     if not valid_recipient(recipient):
-        errors.append("recipient:invalid")
+        errors.append("recipient:request.invalid")
     out = {"target": target, "retention_days": retention, "hour": hour, "recipient": recipient}
     password = None
     if target == "usb":
         disk = r.get("disk")
         if not isinstance(disk, str) or (disk not in {d["id"] for d in usb_disks()} and disk != current.get("disk")):
-            errors.append("disk:disk_gone")
+            errors.append("disk:backup.disk_gone")
         out["disk"] = disk
     else:
         protocol, user = r.get("protocol"), r.get("user") or None
         if share_host(protocol, r.get("address")) is None:
-            errors.append("address:address")
+            errors.append("address:backup.share_address")
         if user is not None and (not isinstance(user, str) or len(user) > 256 or "\n" in user):
-            errors.append("user:invalid")
+            errors.append("user:request.invalid")
         given = r.get("password")
         if given is not None and (not isinstance(given, str) or len(given) > 512 or "\n" in given):
-            errors.append("password:invalid")
+            errors.append("password:request.invalid")
         same = current.get("target") == "share" and current.get("address") == str(r.get("address", "")).strip() \
             and current.get("user") == user
         if protocol == "smb":
@@ -1132,7 +1163,7 @@ def new_settings(r: dict, current: dict | None) -> tuple[dict, str | None, list[
 def write_private(path: Path, text: str, mode: int) -> None:
     """Replace a file at once (a temporary file beside it, then a rename), never through a link."""
     if path.is_symlink():
-        raise Failed("settings", f"{path.name} is a link; it is left alone")
+        raise Failed("system.internal", f"{path.name} is a link; it is left alone")
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as f:
@@ -1150,7 +1181,7 @@ def apply_settings(r: dict) -> dict:
         current = None
     new, password, errors = new_settings(r, current)
     if errors:
-        return {"ok": False, "errors": dict(e.split(":", 1) for e in errors)}
+        return {"ok": False, "fields": {field: messages.said(code) for field, code in (e.split(":", 1) for e in errors)}}
     write_private(CONFIG, json.dumps(new, indent=1) + "\n", 0o644)  # the gateway shows it; no secret in it
     if password:
         write_private(SHARE_SECRET, password, 0o600)
@@ -1194,19 +1225,20 @@ def cmd_request(_a) -> int:
             result.update(ok=True, disks=usb_disks())
         elif r.get("kind") == "test-share":
             problem = test_share(r)
-            result.update(ok=problem is None, **({"error": problem} if problem else {}))
+            result.update(ok=problem is None, **({"failure": messages.said(problem)} if problem else {}))
         elif r.get("kind") == "settings":
             result.update(apply_settings(r))
         else:
-            result.update(ok=False, error="invalid")
+            result.update(ok=False, failure=messages.said("request.invalid"))
     except Failed as e:
-        result.update(ok=False, error="failed", message=str(e)[:300])
+        result.update(ok=False, failure=e.failure())
+        say(f"request {result['kind']} failed ({e.where()}): {e}")
     STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
     tmp = STATE / ".request-result.json.tmp"
     tmp.write_text(json.dumps(result, indent=1) + "\n")
     os.chmod(tmp, 0o644)  # the gateway reads it; never a password
     os.replace(tmp, STATE / "request-result.json")
-    say(f"request {result['kind']}: {'done' if result.get('ok') else result.get('error') or result.get('errors')}")
+    say(f"request {result['kind']}: {'done' if result.get('ok') else (result.get('failure') or {}).get('code') or sorted(result.get('fields') or {})}")
     return 0 if result.get("ok") else 1
 
 
@@ -1215,11 +1247,11 @@ def cmd_find(a) -> int:
     s = settings(for_writing=False)
     try:
         if s is None:
-            raise Failed("settings", "no backup target in the settings")
+            raise Failed("backup.none_found", "no backup target in the settings")
         with Target(s) as own:
             mine = backups_for_key(own, a.identity)
     except Failed as e:
-        print(json.dumps({"found": False, "step": e.step, "message": str(e)}) if a.json else f"find failed ({e.step}): {e}")
+        print(json.dumps({"found": False, "failure": e.failure()}) if a.json else f"find failed ({e.where()}): {e}")
         return 1
     out = [{k: v for k, v in b.items() if k != "when"} for b in mine]
     print(json.dumps({"found": True, "backups": out}, indent=1) if a.json
@@ -1235,9 +1267,9 @@ def cmd_check(a) -> int:
                 counts = check_dumps(Path(d), manifest)
             except Failed as e:
                 if a.json:
-                    print(json.dumps({"usable": False, "step": e.step, "message": str(e)}))
+                    print(json.dumps({"usable": False, "failure": e.failure()}))
                 else:
-                    say(f"not usable ({e.step}): {e}")
+                    say(f"not usable ({e.where()}): {e}")
                 return 1
         if a.json:
             print(json.dumps({"usable": True, "file": file.name, "created": manifest["created"],
@@ -1250,7 +1282,7 @@ def cmd_check(a) -> int:
         return on_target(a, act)
     except Failed as e:
         if a.json:
-            print(json.dumps({"usable": False, "step": e.step, "message": str(e)}))
+            print(json.dumps({"usable": False, "failure": e.failure()}))
             return 1
         raise
 
@@ -1304,28 +1336,28 @@ def restore_file(a, file: Path) -> int:
             manifest = unpack(file, a.identity, dest)
             check_dumps(dest, manifest)
             if systemd and (running := existing(SERVICES)):
-                run("services", ["systemctl", "stop", *running])
+                run("system.internal", ["systemctl", "stop", *running])
             # Everything is restored beside what is live first (the module's notes); nothing live changes
             # until all of it has worked.
             try:
                 for db, owner in manifest["databases"].items():
                     incoming = f"{db}_restoring"
-                    run("database", as_pg(["dropdb", "--if-exists", "--force", incoming]))
-                    run("database", as_pg(["createdb", "--owner", owner, incoming]))
-                    run("database", as_pg(["pg_restore", "--exit-on-error", "--dbname", incoming, dest / "db" / f"{db}.dump"]))
+                    run("system.internal", as_pg(["dropdb", "--if-exists", "--force", incoming]))
+                    run("system.internal", as_pg(["createdb", "--owner", owner, incoming]))
+                    run("system.internal", as_pg(["pg_restore", "--exit-on-error", "--dbname", incoming, dest / "db" / f"{db}.dump"]))
                 for f in manifest["files"]:
                     if folder_beside(f, None).is_symlink():
-                        raise Failed("files", f"the live {f} folder is a link; it is left alone")
+                        raise Failed("system.internal", f"the live {f} folder is a link; it is left alone")
                     staged = folder_beside(f, "restoring")
                     if staged.exists() or staged.is_symlink():
                         shutil.rmtree(staged) if staged.is_dir() and not staged.is_symlink() else staged.unlink()
                     try:
                         shutil.copytree(dest / "files" / f, staged, symlinks=True)
                     except OSError as e:
-                        raise Failed("files", f"copying the {f} folder failed: {e.strerror or e}") from None
+                        raise Failed("system.internal", f"copying the {f} folder failed: {e.strerror or e}") from None
             except Failed as e:
                 discard_staged(manifest)
-                raise Failed(e.step, f"{e}; nothing on this appliance was changed") from None
+                raise Failed(e.code, f"{e}; nothing on this appliance was changed") from None
             try:
                 swap_databases(manifest["databases"])  # one transaction: all of them or none
             except Failed:
@@ -1341,7 +1373,7 @@ def restore_file(a, file: Path) -> int:
                 set_role_passwords(manifest)
             except Failed as e:
                 put_back(manifest, moved)
-                raise Failed(e.step, f"{e}; the appliance was put back as it was") from None
+                raise Failed(e.code, f"{e}; the appliance was put back as it was") from None
             set_time_zone(manifest["time_zone"] if manifest["time_zone"] and (ZONEINFO / manifest["time_zone"]).is_file() else zone_here)
             for f in manifest["files"]:  # done: what was replaced goes
                 shutil.rmtree(folder_beside(f, "replaced"), ignore_errors=True)
@@ -1351,8 +1383,8 @@ def restore_file(a, file: Path) -> int:
             if systemd:  # the office's services run again on what is there
                 subprocess.run(["systemctl", "restart", *existing(["suveryn-llm", *reversed(SERVICES), "nginx"])], check=False)
             if not isinstance(e, Failed):  # its message could name a path; the type says enough
-                e = Failed("restore", f"unexpected {type(e).__name__}")
-            say(f"restore failed ({e.step}): {e}")
+                e = Failed("system.internal", f"unexpected {type(e).__name__}")
+            say(f"restore failed ({e.where()}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
         f"{', '.join(manifest['databases'])} and {', '.join(manifest['files'])}")
@@ -1371,10 +1403,10 @@ def folder_beside(f: str, suffix: str | None) -> Path:
     """One of the office's folders on the data partition, or the copy beside it (``.restoring``, ``.replaced``).
     ``f`` is one of ``FILES``, never a name from a backup; checked again here, before anything is deleted."""
     if f not in FILES:
-        raise Failed("files", "not one of the office's folders")
+        raise Failed("system.internal", "not one of the office's folders")
     path = VAR / (f if suffix is None else f"{f}.{suffix}")
     if path.parent.resolve() != VAR.resolve():
-        raise Failed("files", "a folder outside the data partition")
+        raise Failed("system.internal", "a folder outside the data partition")
     return path
 
 
@@ -1405,7 +1437,7 @@ def swap_folders(files: list[str], moved: list[tuple[str, bool]]) -> None:
                 raise OSError(5, "a failure the tests make")
             os.rename(staged, target)
         except OSError as e:
-            raise Failed("files", f"putting the restored {f} folder in place failed: {e.strerror or e}") from None
+            raise Failed("system.internal", f"putting the restored {f} folder in place failed: {e.strerror or e}") from None
 
 
 def set_role_passwords(manifest: dict) -> None:
@@ -1418,7 +1450,7 @@ def set_role_passwords(manifest: dict) -> None:
         r = subprocess.run(as_pg(["psql", "-q", "-1", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input=sql,
                            capture_output=True, text=True)
         if r.returncode != 0:
-            raise Failed("database", "setting the roles' passwords failed")
+            raise Failed("system.internal", "setting the roles' passwords failed")
 
 
 def put_back(manifest: dict, moved: list[tuple[str, bool]]) -> None:
@@ -1431,7 +1463,7 @@ def put_back(manifest: dict, moved: list[tuple[str, bool]]) -> None:
         if had and replaced.exists():
             os.rename(replaced, target)
     names = ", ".join("'" + n.replace("'", "''") + "'" for db in manifest["databases"] for n in (db, f"{db}_replaced"))
-    live = set(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
+    live = set(run("system.internal", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
     quote = lambda name: '"' + name.replace('"', '""') + '"'  # noqa: E731 - names are this appliance's own (DATABASES)
     sql = [f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ({names}) AND pid <> pg_backend_pid();",
            "BEGIN;"]
@@ -1443,7 +1475,7 @@ def put_back(manifest: dict, moved: list[tuple[str, bool]]) -> None:
     r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input="\n".join(sql) + "\n",
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise Failed("database", "putting the old databases back failed: they are kept as <name>_replaced")
+        raise Failed("system.internal", "putting the old databases back failed: they are kept as <name>_replaced")
     discard_staged(manifest)
 
 
@@ -1452,8 +1484,8 @@ def swap_databases(databases: dict) -> None:
     each restored one to ``<db>``. PostgreSQL renames databases transactionally, so a failure leaves every
     one as it was. Leftovers of an earlier attempt are dropped first."""
     for db in databases:
-        run("database", as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]))
-    live = set(run("database", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
+        run("system.internal", as_pg(["dropdb", "--if-exists", "--force", f"{db}_replaced"]))
+    live = set(run("system.internal", as_pg(["psql", "-qAt", "-d", "postgres", "-c", "SELECT datname FROM pg_database"])).split())
     quote = lambda name: '"' + name.replace('"', '""') + '"'  # noqa: E731 - names are this appliance's own (DATABASES)
     # The services are stopped; a session still open would stop a rename, so it goes, as dropdb --force did.
     names = ", ".join("'" + n.replace("'", "''") + "'" for db in databases for n in (db, f"{db}_restoring"))
@@ -1469,7 +1501,7 @@ def swap_databases(databases: dict) -> None:
     r = subprocess.run(as_pg(["psql", "-q", "-v", "ON_ERROR_STOP=1", "-d", "postgres"]), input="\n".join(sql) + "\n",
                        capture_output=True, text=True)
     if r.returncode != 0:
-        raise Failed("database", "swapping in the restored databases failed; nothing on this appliance was changed")
+        raise Failed("system.internal", "swapping in the restored databases failed; nothing on this appliance was changed")
 
 
 def main() -> int:
@@ -1508,7 +1540,7 @@ def main() -> int:
         return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore,
                 "find": cmd_find, "key-test": cmd_key_test, "request": cmd_request}[a.command](a)
     except Failed as e:
-        say(f"{a.command} failed ({e.step}): {e}")
+        say(f"{a.command} failed ({e.where()}): {e}")
         return 1
 
 
