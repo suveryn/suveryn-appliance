@@ -306,12 +306,16 @@ def check_administrator(a, appliance_name: str) -> dict:
         raise Refused({"_": "request.invalid"})
     name, email, password = " ".join(a["name"].split()), a["email"].strip(), a["password"]
     errors = {}
-    if not name or len(name) > 200:
+    if not name:
         errors["name"] = "setup.name_missing"
+    elif len(name) > 200:  # not missing: what was sent isn't valid (the screen is to limit the field: suveryn-tracker#163)
+        errors["name"] = "request.invalid"
     if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         errors["email"] = "setup.email_invalid"
-    if len(password) < MIN_PASSWORD or len(password) > 512:
-        errors["password"] = message("setup.password_short", min=MIN_PASSWORD)
+    if len(password) < MIN_PASSWORD:
+        errors["password"] = message("setup.password_too_short", min=MIN_PASSWORD)
+    elif len(password) > 512:  # as for the name: not too short, not valid
+        errors["password"] = "request.invalid"
     elif is_common_password(password):
         errors["password"] = "setup.password_common"
     elif any(w in password.lower() for w in personal_words(name, email.split("@")[0], appliance_name)):
@@ -410,7 +414,7 @@ def check_certificate(a, host: str) -> tuple[dict, dict[str, bytes]]:
     if openssl("x509", "-in", "@c", "-noout", "-checkend", "0", files={"c": leaf})[0] != 0:
         raise Refused({"certificate": "setup.certificate_expired"})
     if not covers(facts["names"], host):
-        raise Refused({"certificate": "setup.name_not_covered"})
+        raise Refused({"certificate": "setup.certificate_name_mismatch"})
     if chain:
         code, _ = openssl("verify", "-partial_chain", "-CAfile", "@ch", "@c", files={"ch": chain, "c": leaf})
         if code != 0:
@@ -454,7 +458,7 @@ def test_share(a) -> dict:
         raise Refused({"_": "request.invalid"})
     host = share_host(a.get("protocol"), a.get("address"))
     if host is None:
-        return {"ok": False, "message": message("backup.share_address")}
+        return {"ok": False, "message": message("backup.share_address_invalid")}
     try:
         infos = socket.getaddrinfo(host, 445 if a["protocol"] == "smb" else 2049, type=socket.SOCK_STREAM)
     except (socket.gaierror, UnicodeError):
@@ -489,7 +493,7 @@ def check_backups(a, disks: list[dict] | None = None) -> tuple[dict, str | None]
             raise Refused({"disk": "backup.disk_gone"})
         return {"target": "usb", "disk": a["disk"], **common}, None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "backup.share_address"})
+        raise Refused({"address": "backup.share_address_invalid"})
     user = a.get("user") or None
     password = a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
@@ -513,7 +517,7 @@ def check_restore(a, disks: list[dict] | None = None) -> tuple[dict, str, str | 
             raise Refused({"disk": "backup.disk_gone"})
         return {"target": "usb", "disk": a["disk"]}, m.group(0), None
     if share_host(a.get("protocol"), a.get("address")) is None:
-        raise Refused({"address": "backup.share_address"})
+        raise Refused({"address": "backup.share_address_invalid"})
     user, password = a.get("user") or None, a.get("password") or None
     if (user is not None and (not isinstance(user, str) or len(user) > 256)) or \
             (password is not None and (not isinstance(password, str) or len(password) > 512)):
@@ -611,7 +615,7 @@ class App:
             if r and r["state"] in ("restoring", "done"):
                 return r
             if not r or r["state"] != "checked":
-                raise Refused({"_": "setup.not_checked"})
+                raise Refused({"_": "setup.backup_not_checked"})
             file = data.get("file") if isinstance(data, dict) else None
             if file is None:
                 file = (r.get("backup") or {}).get("file")
@@ -718,7 +722,7 @@ def complete(a: dict, folder: Path) -> None:
     if "administrator" in a and read_file(folder / "administrator-password") is None:
         missing.append("administrator")
     if missing:
-        raise Refused({"_": "setup.not_answered"})
+        raise Refused({"_": "setup.answers_missing"})
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1015,7 +1019,7 @@ def restore_inputs(work: Path) -> list[str]:
     a = (read_json(ANSWERS / "answers.json", {}) or {}).get("restore")
     key = read_file(ANSWERS / "recovery-key")
     if not isinstance(a, dict) or key is None:
-        raise Refused({"_": "setup.not_answered"})
+        raise Refused({"_": "setup.answers_missing"})
     password = read_file(ANSWERS / "restore-share-password")
     answer, _, _ = check_restore({**a, "key": key.decode(errors="replace"), "password": password.decode() if password else None},
                                  disks=[{"id": a.get("disk")}])
@@ -1084,8 +1088,8 @@ def restore_check() -> int:
         result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
                   "choices": choices}
     else:
-        # why, as the backup service says it: a code of the registry (backup.wrong_key, backup.none_found,
-        # backup.damaged, backup.newer_version, backup.target_unreachable), passed on as it is (#154)
+        # why, as the backup service says it: a code of the registry (backup.key_mismatch, backup.not_found,
+        # backup.damaged, backup.version_too_new, backup.target_unreachable), passed on as it is (#154)
         result = {"state": "failed", "message": messages.why(r.get("failure"))}
         forget_restore_secrets()  # the screen asks for them again
     write_file(RESTORE, json.dumps(result, indent=1), 0o644)

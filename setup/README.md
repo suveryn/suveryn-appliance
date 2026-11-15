@@ -55,8 +55,8 @@ the pin moves. The screens word each code in the office's language.
 
 | What happened | What the service answers |
 |---|---|
-| An answer is refused as a whole | Its code as Problem Details, exactly the gateway's shape: `{"type": "urn:suveryn:problem:setup.not_answered", "title": …, "status": 409, "detail": …, "kind": "refused", "code": "setup.not_answered", "params": {}}` (`title` and `detail` are the registry's English, for developers) |
-| An answer is refused field by field | `request.invalid` (422) with `fields`: `{"password": {"kind": "refused", "code": "setup.password_short", "params": {"min": 15}}}` |
+| An answer is refused as a whole | Its code as Problem Details, exactly the gateway's shape: `{"type": "urn:suveryn:problem:setup.answers_missing", "title": …, "status": 409, "detail": …, "kind": "refused", "code": "setup.answers_missing", "params": {}}` (`title` and `detail` are the registry's English, for developers) |
+| An answer is refused field by field | `request.invalid` (422) with `fields`: `{"password": {"kind": "refused", "code": "setup.password_too_short", "params": {"min": 15}}}` |
 | A request the screens never send (another site's, a wrong type, too large, an unknown path) | The general code of its status: `request.forbidden`, `request.unsupported`, `request.too_large`, `request.not_found` |
 | A result inside an answer, or stored | A message, `{kind, code, params}`: `POST backups/test` gives `{"ok": false, "message": …}`; a restore that failed and the step where provisioning stopped carry `message` |
 | Something nobody planned for | `system.internal` (500) with a reference in `params.ref`, such as `7F3K-92QD`. The log (`journalctl -u suveryn-setup`) has the line `internal 7F3K-92QD: PUT /setup/v1/… : <the exception's type> at <file:line function>`; never the exception's message, which may quote a password or a key |
@@ -94,8 +94,8 @@ with a reference for a failure nobody planned for.
   under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
   offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
   the result says `checked` with the backup, or `failed` with a `message`, the backup service's own, passed
-  on as it is: `backup.wrong_key`, `backup.none_found`, `backup.target_unreachable`, `backup.damaged`,
-  `backup.newer_version` (made with a newer PostgreSQL than this appliance's, #57) or
+  on as it is: `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.damaged`,
+  `backup.version_too_new` (made with a newer PostgreSQL than this appliance's, #57) or
   `backup.settings_invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its
   `== step` lines turned into five steps: **database**, **restore**, **models**, **network** (the old

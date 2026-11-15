@@ -39,8 +39,8 @@ signature: <key fingerprint, hex> <Ed25519 signature, base64>
   ([`bundles/`](../bundles/README.md)): the key signs `suveryn-manifest-signature/1` and the SHA-256
   of those bytes, so a key service only ever sees that short text. The fingerprint is the SHA-256 of
   the raw public key, as for bundles and the appliance's identity.
-- **The appliance refuses** a manifest that isn't this layout (`manifest_format`), isn't signed by a
-  key in `portal-keys/` or was changed after signing (`manifest_signature`), names another appliance
+- **The appliance refuses** a manifest that isn't this layout (`not_a_manifest`), isn't signed by a
+  key in `portal-keys/` or was changed after signing (`manifest_signature_invalid`), names another appliance
   (`manifest_other_appliance`) or has expired (`manifest_expired`). The web setup shows each in the
   office's language.
 

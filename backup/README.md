@@ -28,10 +28,15 @@ sudo suveryn-backup request                               # the administrator's 
 `check` and `restore` take `--on-target` to read FILE as a backup's name on the target, or `newest`.
 `check` needs root: it unpacks into `/var/lib/suveryn/backup`, which is root's, and mounts the target.
 
+When a named backup doesn't decrypt, `check` and `restore` say which of three it is. `backup.not_a_key`: the key
+file holds no recovery key. `backup.key_mismatch`: age says "no identity matched", so the key is another
+appliance's. `backup.damaged`: anything else, a backup the right key can't read. The second rests on age's own
+sentence (age gives no other sign and isn't translated); a test fails if a newer age words it differently.
+
 | Unit | What it does |
 |---|---|
 | `suveryn-backup.timer` | Hourly: `suveryn-backup run --scheduled`, which backs up only at the office's hour |
-| `suveryn-backup-key-test.path` | The administrator's key test. The gateway leaves the recovery key and a request in `/run/suveryn/backup-key-test` (in memory). The path unit starts `key-test`: the key must open this appliance's newest backup, and every part of it must be there. Nothing is restored. The key is deleted whatever happens. The result goes to `/var/lib/suveryn/backup/key-test.json`, with no secrets, and the gateway shows it. A wrong file (`backup.wrong_key`) keeps the last test that passed (`last_ok`), so it doesn't mark the office's key as failing |
+| `suveryn-backup-key-test.path` | The administrator's key test. The gateway leaves the recovery key and a request in `/run/suveryn/backup-key-test` (in memory). The path unit starts `key-test`: the key must open this appliance's newest backup, and every part of it must be there. Nothing is restored. The key is deleted whatever happens. The result goes to `/var/lib/suveryn/backup/key-test.json`, with no secrets, and the gateway shows it. A wrong file (`backup.key_mismatch`) keeps the last test that passed (`last_ok`), so it doesn't mark the office's key as failing |
 | `suveryn-backup-request.path` | The administrator's other requests from Administration › Backups: back up now, the USB disks connected, a share's test, new settings. The gateway leaves `request.json` in `/run/suveryn/backup-requests`. The path unit starts `request`, which deletes it at once and answers in `request-result.json`, never with a password; what it refuses is `failure`, or `fields` (a message per field of the settings form), in the registry's codes |
 
 (On the appliance the tool is `/opt/suveryn/appliance/backup/suveryn-backup`.)

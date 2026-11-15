@@ -87,7 +87,7 @@ def test_unusable_network_settings(monkeypatch, kw, message):
 
 
 @pytest.mark.parametrize("kw,code,params", [
-    ({"interface": "eth9"}, "network.port_missing", {}),
+    ({"interface": "eth9"}, "network.port_not_found", {}),
     ({"address": "192.168.1.50"}, "network.prefix_missing", {}),
     ({"address": "192.168.1.50/24", "gateway": "10.0.0.1", "dns": "1.1.1.1"}, "network.gateway_outside", {"gateway": "10.0.0.1", "network": "192.168.1.0/24"}),
     ({"address": "192.168.1.50/24", "gateway": "192.168.1.1"}, "network.dns_missing", {}),

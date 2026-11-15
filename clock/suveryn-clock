@@ -23,7 +23,7 @@ Both are refused while a time server keeps the clock (``timedatectl``'s ``NTPSyn
 The hardware clock is written afterwards (``hwclock --systohc``), so a restart keeps the correction. The request
 is deleted before anything else; the answer is in ``/var/lib/suveryn/clock/result.json`` (0644, no secret).
 A request that isn't acted on answers why as a code of suveryn-core's registry of messages (``failure``:
-``clock.synced``, ``clock.out_of_range``, ``clock.busy``, ``clock.unavailable``), which the page words.
+``clock.synced``, ``clock.difference_out_of_range``, ``clock.busy``, ``clock.unavailable``), which the page words.
 
 Moving the clock is not harmless: forward, the hourly sweep deletes closed cases whose keep period has
 passed, and old backups; back, an old two-step code is valid again. Hence the bounds here, whatever the gateway
@@ -70,7 +70,7 @@ messages = _messages()
 
 class Refused(Exception):
     """Why a request isn't acted on, as a code of core's registry: ``request.invalid``, ``clock.synced`` (a time
-    server keeps it), ``clock.out_of_range``, ``clock.busy`` (nudged less than an hour ago) or ``clock.unavailable``
+    server keeps it), ``clock.difference_out_of_range``, ``clock.busy`` (nudged less than an hour ago) or ``clock.unavailable``
     (the system may not set its clock; with what it said, for the log)."""
 
     def __init__(self, code: str, detail: str = ""):
@@ -143,7 +143,7 @@ def act(r: dict) -> dict:
     # offset_ms is the appliance's clock minus the PCs': positive, the appliance is ahead and goes back
     if kind == "nudge":
         if not NUDGE_MIN_MS <= abs(offset) <= NUDGE_MAX_MS:
-            raise Refused("clock.out_of_range")
+            raise Refused("clock.difference_out_of_range")
         last = STATE / "last-nudge"
         try:
             if time.time() - float(last.read_text().strip()) < NUDGE_EVERY_S:
@@ -154,7 +154,7 @@ def act(r: dict) -> dict:
         last.write_text(f"{time.time():.0f}\n")
     else:
         if abs(offset) > SET_MAX_MS:
-            raise Refused("clock.out_of_range")
+            raise Refused("clock.difference_out_of_range")
         set_to(-offset)
     return {"ok": True, "moved_ms": -offset, "hardware_clock": to_hardware_clock()}
 

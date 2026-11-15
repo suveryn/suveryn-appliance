@@ -193,6 +193,18 @@ def test_old_backups_expire_but_the_newest_always_stays(tmp_path):
     assert b.expire(tmp_path, 14, at) == [] and len(b.backups_in(tmp_path)) == 1
 
 
+def test_no_backup_target_in_the_settings_is_the_settings_not_a_backup_that_wasnt_found(tmp_path):
+    """suveryn-tracker#162: with no target set there is nowhere to look, so nothing was "not found"."""
+    (tmp_path / "backups.json").write_text(json.dumps({"target": "later"}))
+    key = tmp_path / "key"
+    key.write_text("AGE-SECRET-KEY-1" + "Q" * 58 + "\n")
+    env = {**os.environ, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "backups.json"), "SUVERYN_BACKUP_STATE": str(tmp_path / "state"),
+           "SUVERYN_BACKUP_TEST": "1"}
+    for args in (("find", "--json", "--identity", key), ("check", "newest", "--on-target", "--json", "--identity", key)):
+        r = tool(env, *args)
+        assert r.returncode == 1 and json.loads(r.stdout.strip().splitlines()[-1])["failure"]["code"] == "backup.settings_invalid", r.stdout + r.stderr
+
+
 def test_the_settings_are_the_web_setups(tmp_path, monkeypatch):
     b = load()
     monkeypatch.setattr(b, "CONFIG", tmp_path / "backups.json")
@@ -281,14 +293,14 @@ def test_the_newest_backup_on_a_target_is_checked_and_restored_by_settings_given
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["usable"] and out["appliance"] == "test-appliance" and out["file"].startswith("suveryn-backup_")
     r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["tmp"] / "recovery.key.missing")
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.wrong_key"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
     psql("DELETE FROM chunks", appliance["dbs"][0])
     r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert psql("SELECT count(*) FROM chunks", appliance["dbs"][0]) == "2"
     r = tool(env, "--settings", given, "check", "suveryn-backup_x_20990101T000000Z.tar.zst.age", "--on-target", "--json",
              "--identity", appliance["key"])
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.none_found"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.not_found"
 
 
 @needs
@@ -322,7 +334,7 @@ def test_a_replacement_with_a_name_of_its_own_finds_the_offices_backups(applianc
     assert r.returncode == 0 and json.loads(r.stdout)["usable"], r.stdout  # an older one, by name, under its own folder
     r = tool(env, "--settings", given, "check", "suveryn-backup_linked_20990101T000000Z.tar.zst.age", "--on-target", "--json",
              "--identity", appliance["key"])
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.none_found"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.not_found"
     psql("DELETE FROM chunks", appliance["dbs"][0])
     r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
     assert r.returncode == 0 and psql("SELECT count(*) FROM chunks", appliance["dbs"][0]) == "2", r.stdout
@@ -406,7 +418,7 @@ def test_a_backup_records_its_postgresql_and_one_from_a_newer_postgresql_is_refu
     r = tool(env, "check", newer, "--identity", appliance["key"])
     assert r.returncode == 1 and f"made with PostgreSQL {here + 2}, newer than this appliance's {here}" in r.stdout, r.stdout
     r = tool(env, "restore", newer, "--identity", appliance["key"], "--yes")
-    assert r.returncode == 1 and "restore failed (backup.newer_version)" in r.stdout, r.stdout
+    assert r.returncode == 1 and "restore failed (backup.version_too_new)" in r.stdout, r.stdout
     assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
     # Made before #57 (no version: PostgreSQL 16), or with an older version: restored.
     older = remade(appliance, backup, lambda d, m: {k: v for k, v in m.items() if k != "postgresql"})
@@ -578,14 +590,14 @@ def test_with_several_appliances_on_one_target_the_key_says_whose_backups_to_res
     # notary-02's backup by name, with test-appliance's key: not offered
     r = tool(env, "--settings", given, "check", json.loads(tool(env, "--settings", given, "find", "--json", "--identity",
              other_key).stdout)["backups"][0]["file"], "--on-target", "--json", "--identity", appliance["key"])
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.none_found"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.not_found"
     # a key that opens none of them
     stranger = tmp_path / "stranger.key"
     subprocess.run(["age-keygen", "-o", str(stranger)], capture_output=True, check=True)
     r = tool(env, "--settings", given, "find", "--json", "--identity", stranger)
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.wrong_key"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
     r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", stranger)
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.wrong_key"
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
 
 
 @needs
@@ -613,7 +625,7 @@ def test_each_backup_is_read_back_from_the_disk_and_its_checksum_kept_and_compar
     disk and compared, its checksum stays beside it, and check and restore compare it first."""
     env, folder = appliance["env"], appliance["target"] / "suveryn-backups" / "test-appliance"
     r = tool({**env, "SUVERYN_BACKUP_TEST_CORRUPT": "1"}, "run")
-    assert r.returncode == 1 and "backup failed (backup.verify_failed): the backup disk didn't give back what was written" in r.stdout, r.stdout
+    assert r.returncode == 1 and "backup failed (backup.verification_failed): the backup disk didn't give back what was written" in r.stdout, r.stdout
     assert not list(folder.iterdir())  # nothing half-written left
     assert tool(env, "run").returncode == 0
     [backup] = folder.glob("*.age")
@@ -629,6 +641,21 @@ def test_each_backup_is_read_back_from_the_disk_and_its_checksum_kept_and_compar
         f.write(bytes([b[0] ^ 1]))
     r = tool(env, "check", backup, "--identity", appliance["key"])
     assert r.returncode == 1 and "its checksum doesn't match; the disk may be failing" in r.stdout, r.stdout
+    # the same damage without the checksum beside it (an older backup, a copied one): still damaged, with the right
+    # key. It was once answered "the key doesn't open it", which hides a broken backup (suveryn-tracker#162).
+    (folder / f"{backup.name}.sha256").unlink()
+    r = tool(env, "check", backup, "--json", "--identity", appliance["key"])
+    assert r.returncode == 1 and json.loads(r.stdout.strip().splitlines()[-1])["failure"]["code"] == "backup.damaged", r.stdout
+    # and a key that isn't this backup's is still the key
+    other = appliance["tmp"] / "other.key"
+    subprocess.run(["age-keygen", "-o", str(other)], capture_output=True, check=True)
+    r = tool(env, "check", backup, "--json", "--identity", other)
+    assert json.loads(r.stdout.strip().splitlines()[-1])["failure"]["code"] == "backup.key_mismatch", r.stdout
+    # and a file that holds no key at all says so, not that the backup is damaged
+    not_a_key = appliance["tmp"] / "not-a-key.txt"
+    not_a_key.write_text("a shopping list\n")
+    r = tool(env, "check", backup, "--json", "--identity", not_a_key)
+    assert json.loads(r.stdout.strip().splitlines()[-1])["failure"]["code"] == "backup.not_a_key", r.stdout
 
 
 def test_a_second_usb_disk_for_rotation_is_recognised_and_another_offices_never(tmp_path):
@@ -673,7 +700,7 @@ def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key
         return r, json.loads(result.read_text())
 
     r, out = test_with(appliance["key"].read_text())
-    assert r.returncode == 1 and out["ok"] is False and out["failure"]["code"] == "backup.none_found"  # nothing backed up yet
+    assert r.returncode == 1 and out["ok"] is False and out["failure"]["code"] == "backup.not_found"  # nothing backed up yet
     assert tool(env, "run").returncode == 0
     r, out = test_with(appliance["key"].read_text())
     assert r.returncode == 0 and out["ok"] is True and out["file"].startswith("suveryn-backup_test-appliance_"), out
@@ -681,7 +708,7 @@ def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key
     other = tmp_path / "other.key"
     subprocess.run(["age-keygen", "-o", str(other)], capture_output=True, check=True)
     r, out = test_with(other.read_text())  # another appliance's key, or an old one
-    assert r.returncode == 1 and out["ok"] is False and out["failure"]["code"] == "backup.wrong_key" and "message" not in out  # a code, never a sentence
+    assert r.returncode == 1 and out["ok"] is False and out["failure"]["code"] == "backup.key_mismatch" and "message" not in out  # a code, never a sentence
     passed = out["last_ok"]  # a wrong file keeps the last test that passed (VM regression 03c8f74, finding 4)
     assert passed["at"] and passed["created"]
     r, out = test_with(other.read_text())
@@ -821,7 +848,7 @@ def test_a_share_keeps_its_password_apart_and_never_in_the_result(admin, tmp_pat
     assert not (tmp_path / "share.secret").exists()
     nfs = request(b, tmp_path, {**share, "protocol": "nfs", "address": "10.0.0.5:/srv/backups", "password": "ignored"})
     assert nfs["ok"] is True and not (tmp_path / "share.secret").exists()  # NFS: no password kept
-    assert request(b, tmp_path, {**share, "address": "nas"})["fields"]["address"]["code"] == "backup.share_address"
+    assert request(b, tmp_path, {**share, "address": "nas"})["fields"]["address"]["code"] == "backup.share_address_invalid"
 
 
 def test_a_new_recovery_key_is_said_and_a_bad_request_is_ignored(admin, tmp_path):
@@ -856,7 +883,13 @@ def test_a_share_is_tested_by_signing_in_and_writing(admin, tmp_path, monkeypatc
     monkeypatch.setattr(b, "run", refused)
     monkeypatch.setattr(b, "TEST_MOUNT", tmp_path / "mnt")
     monkeypatch.setattr(b, "CREDENTIALS", tmp_path)  # /run is root's: the test runs as anyone (VM check, finding 7)
-    assert request(b, tmp_path, smb)["failure"]["code"] == "backup.share_login"
+    assert request(b, tmp_path, smb)["failure"]["code"] == "backup.share_login_refused"
+
+    # signed in, and may not write: that is the share's permissions, not the user name or the password (#162)
+    def read_only(step, cmd, **k):
+        raise b.Failed("backup.target_unreachable", "can't write to the backup target: Permission denied")
+    monkeypatch.setattr(b, "run", read_only)
+    assert request(b, tmp_path, smb)["failure"]["code"] == "backup.share_not_writable"
 
 
 def test_the_web_setups_disk_id_finds_the_disk_whatever_udev_calls_it(monkeypatch):
@@ -914,7 +947,7 @@ def test_a_link_a_restore_would_refuse_stops_the_backup_before_it_is_written(app
     assert r.returncode != 0 and "a link a restore would refuse (etc)" in (r.stdout + r.stderr)
     assert not list((appliance["target"]).rglob("*.age"))
     # its own step, which the page words (VM regression e0f2e26, finding 5)
-    assert json.loads((var / "backup" / "status.json").read_text())["last_error"]["failure"]["code"] == "backup.unsafe_link"
+    assert json.loads((var / "backup" / "status.json").read_text())["last_error"]["failure"]["code"] == "backup.link_unsafe"
 
 
 def test_a_restore_stops_and_starts_only_the_units_systemd_has(monkeypatch):

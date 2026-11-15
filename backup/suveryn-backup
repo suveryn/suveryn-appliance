@@ -490,7 +490,7 @@ def make(s: dict) -> dict:
         for f in manifest["files"]:
             if (bad := unsafe_link(VAR / f)) is not None:
                 # its own code, so the page says what it is (VM regression e0f2e26, finding 5: "an unexpected error")
-                raise Failed("backup.unsafe_link", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
+                raise Failed("backup.link_unsafe", f"the {f} folder holds a link a restore would refuse ({bad}); remove or fix it")
         target = Target(s)
         with target as folder:
             final = folder / f"suveryn-backup_{name}_{started.strftime('%Y%m%dT%H%M%SZ')}.tar.zst.age"
@@ -509,7 +509,7 @@ def make(s: dict) -> dict:
             # day of a restore. The checksum stays beside the backup, for check and restore to compare.
             if read_back(partial) != digest:
                 partial.unlink(missing_ok=True)
-                raise Failed("backup.verify_failed", "the backup disk didn't give back what was written; the disk may be failing")
+                raise Failed("backup.verification_failed", "the backup disk didn't give back what was written; the disk may be failing")
             (folder / f"{final.name}.sha256").write_text(f"{digest}  {final.name}\n")
             size = partial.stat().st_size
             os.replace(partial, final)
@@ -821,9 +821,17 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
         problem = str(e)
     finally:
         zstd.stdout.close()
-    if age.wait() != 0:  # the wrong key, or not an age file: say that, not what reading the rest made of it
+    if age.wait() != 0:  # decryption stopped: say why, not what reading the rest made of it
         zstd.wait()
-        raise Failed("backup.wrong_key", f"age: {age_error(age.stderr.read())}")
+        why = age_error(age.stderr.read())
+        # A file that holds no recovery key says nothing about the backup. With a key, only age's "no identity
+        # matched" is the wrong key. Anything else (a file that isn't an age file, a part that doesn't decrypt) is
+        # a backup that can't be read with the right key: damaged. A damaged backup once said "the key doesn't
+        # open it", which the pages take for a wrong file and nothing to worry about (#162). age isn't translated:
+        # its sentence is the same in every locale, and the tests fail if a newer age words it differently.
+        code = "backup.not_a_key" if not recipient_of(identity) else \
+            "backup.key_mismatch" if "no identity matched" in why else "backup.damaged"
+        raise Failed(code, f"age: {why}")
     if problem:
         zstd.wait()
         raise Failed("backup.damaged", f"the backup can't be read: {problem}")
@@ -931,7 +939,7 @@ def check_dumps(dest: Path, manifest: dict) -> dict[str, int]:
     hand_dumps_to_postgres(dest)
     here = postgres_major()
     if manifest["postgresql"] > here:
-        raise Failed("backup.newer_version", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
+        raise Failed("backup.version_too_new", f"the backup was made with PostgreSQL {manifest['postgresql']}, newer than this "
                                 f"appliance's {here}; restore it on an appliance with PostgreSQL {manifest['postgresql']} or later")
     out = {}
     for db in manifest["databases"]:
@@ -947,13 +955,13 @@ def on_target(a, act) -> int:
         return act(a.file)
     s = settings(for_writing=False)
     if s is None:
-        raise Failed("backup.none_found", "no backup target in the settings")
+        raise Failed("backup.settings_invalid", "no backup target in the settings")
     with Target(s) as own:
         mine = backups_for_key(own, a.identity)
         name = mine[0]["file"] if str(a.file) == "newest" else str(a.file)
         chosen = next((b for b in mine if b["file"] == name), None)
         if chosen is None:
-            raise Failed("backup.none_found", f"no backup {name} on the target that this recovery key opens")
+            raise Failed("backup.not_found", f"no backup {name} on the target that this recovery key opens")
         return act(own.parent / chosen["appliance"] / chosen["file"])
 
 
@@ -967,10 +975,10 @@ def backups_for_key(own: Path, identity: Path) -> list[dict]:
     name only, never links. ``Failed`` when there are none, or none the key opens (``decrypt``)."""
     found = [dict(b, appliance=f.name) for f in sorted({own, *appliance_folders(own.parent)}) for b in backups_in(f)]
     if not found:
-        raise Failed("backup.none_found", "there is no backup on the target")
+        raise Failed("backup.not_found", "there is no backup on the target")
     mine = [b for b in found if opens(own.parent / b["appliance"] / b["file"], identity)]
     if not mine:
-        raise Failed("backup.wrong_key", "the recovery key opens none of the backups on the target")
+        raise Failed("backup.key_mismatch", "the recovery key opens none of the backups on the target")
     return sorted(mine, key=lambda b: b["when"], reverse=True)
 
 
@@ -1000,7 +1008,7 @@ def cmd_key_test(_a) -> int:
     Restores nothing. The key is deleted at the end whatever happened; the result goes to key-test.json
     (no secrets), which the gateway shows.
 
-    A wrong file (``backup.wrong_key``: another appliance's key, an old one) says nothing about the office's key:
+    A wrong file (``backup.key_mismatch``: another appliance's key, an old one) says nothing about the office's key:
     the last test that passed is kept in ``last_ok``, so one wrong file doesn't mark the key as failing on
     Status (VM regression 03c8f74, finding 4)."""
     key, result = KEY_TEST / "key", {"at": now()}
@@ -1017,11 +1025,11 @@ def cmd_key_test(_a) -> int:
         if s is None:
             raise Failed("backup.settings_invalid", "backups aren't set up")
         if recipient_of(key) != s["recipient"]:
-            raise Failed("backup.wrong_key", "this isn't this appliance's recovery key: it opens none of its backups")
+            raise Failed("backup.key_mismatch", "this isn't this appliance's recovery key: it opens none of its backups")
         with Target(s) as folder:
             found = backups_in(folder)
             if not found:
-                raise Failed("backup.none_found", "there is no backup on the target yet")
+                raise Failed("backup.not_found", "there is no backup on the target yet")
             STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="check-", dir=STATE) as d:
                 manifest = unpack(folder / found[0]["file"], key, Path(d))
@@ -1086,12 +1094,12 @@ def reachable(protocol: str, host: str) -> str | None:
 
 def test_share(r: dict) -> str | None:
     """None when the appliance signs in to the share and may write there, as the backup will; else why not:
-    a code of the registry: ``backup.share_address``, ``backup.share_not_local``, ``backup.share_unreachable``,
-    ``backup.share_login`` (the user or password) or ``backup.share_write``. The web setup
+    a code of the registry: ``backup.share_address_invalid``, ``backup.share_not_local``, ``backup.share_unreachable``,
+    ``backup.share_login_refused`` (the user or password) or ``backup.share_not_writable``. The web setup
     could only see whether the server answered; a wrong password showed at the first backup."""
     host = share_host(r.get("protocol"), r.get("address"))
     if host is None:
-        return "backup.share_address"
+        return "backup.share_address_invalid"
     if problem := reachable(r["protocol"], host):
         return problem
     password = r.get("password")
@@ -1105,10 +1113,12 @@ def test_share(r: dict) -> str | None:
             probe.unlink()
     except Failed as e:
         text = str(e).lower()
-        return "backup.share_login" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
-            "backup.share_write" if "can't write" in text else "backup.share_unreachable"
+        # signed in and not allowed to write says "permission denied" too: look for the write first (#162)
+        return "backup.share_not_writable" if "can't write" in text else \
+            "backup.share_login_refused" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
+            "backup.share_unreachable"
     except OSError:
-        return "backup.share_write"
+        return "backup.share_not_writable"
     return None
 
 
@@ -1146,7 +1156,7 @@ def new_settings(r: dict, current: dict | None) -> tuple[dict, str | None, list[
     else:
         protocol, user = r.get("protocol"), r.get("user") or None
         if share_host(protocol, r.get("address")) is None:
-            errors.append("address:backup.share_address")
+            errors.append("address:backup.share_address_invalid")
         if user is not None and (not isinstance(user, str) or len(user) > 256 or "\n" in user):
             errors.append("user:request.invalid")
         given = r.get("password")
@@ -1247,7 +1257,7 @@ def cmd_find(a) -> int:
     s = settings(for_writing=False)
     try:
         if s is None:
-            raise Failed("backup.none_found", "no backup target in the settings")
+            raise Failed("backup.settings_invalid", "no backup target in the settings")
         with Target(s) as own:
             mine = backups_for_key(own, a.identity)
     except Failed as e:

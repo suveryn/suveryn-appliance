@@ -63,7 +63,7 @@ class Invalid(Exception):
     """The bundle can't be trusted; the message says why, in a sentence an administrator can read on the
     command line and in a log. `code` is the reason for a screen, which words it in its reader's language: a code
     of suveryn-core's registry of messages (suveryn-tracker#160), `bundle.changed` (a file isn't what the
-    manifest says), `bundle.signature` (not signed by a key this system trusts) or `bundle.invalid` (anything
+    manifest says), `bundle.signature_invalid` (not signed by a key this system trusts) or `bundle.invalid` (anything
     else)."""
 
     def __init__(self, detail: str, code: str = "bundle.invalid"):
@@ -180,23 +180,23 @@ def read_signed_manifest(folder: Path) -> tuple[dict, str]:
     try:
         sig = json.loads((folder / "manifest.sig").read_bytes())
     except OSError:
-        raise Invalid("no manifest.sig: the bundle isn't signed", "bundle.signature") from None
+        raise Invalid("no manifest.sig: the bundle isn't signed", "bundle.signature_invalid") from None
     except ValueError:
-        raise Invalid("manifest.sig is damaged", "bundle.signature") from None
+        raise Invalid("manifest.sig is damaged", "bundle.signature_invalid") from None
     if not isinstance(sig, dict) or sig.get("format") != SIG_FORMAT:
-        raise Invalid("manifest.sig is damaged", "bundle.signature")
+        raise Invalid("manifest.sig is damaged", "bundle.signature_invalid")
     keys = trusted_keys()
     if not keys:
-        raise Invalid(f"this system trusts no bundle key ({KEYS} is empty)", "bundle.signature")
+        raise Invalid(f"this system trusts no bundle key ({KEYS} is empty)", "bundle.signature_invalid")
     key = sig.get("key")
     if key not in keys:
-        raise Invalid(f"signed by a key this system doesn't trust ({str(key)[:16]}…)", "bundle.signature")
+        raise Invalid(f"signed by a key this system doesn't trust ({str(key)[:16]}…)", "bundle.signature_invalid")
     try:
         signature = base64.b64decode(sig.get("signature", ""), validate=True)
     except (ValueError, TypeError):
-        raise Invalid("manifest.sig is damaged", "bundle.signature") from None
+        raise Invalid("manifest.sig is damaged", "bundle.signature_invalid") from None
     if len(signature) != 64 or not ed25519_verify(signed_text(raw), signature, keys[key][1]):
-        raise Invalid("the signature doesn't match: the manifest was changed, or signed with another key", "bundle.signature")
+        raise Invalid("the signature doesn't match: the manifest was changed, or signed with another key", "bundle.signature_invalid")
     try:
         manifest = json.loads(raw)
     except ValueError:

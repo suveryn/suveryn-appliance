@@ -30,7 +30,7 @@ that text. The appliance trusts the public keys in its portal-keys folder (*.pem
 these keys, and only this exact layout: no other YAML (quotes, lists, anchors) is read.
 
 `verify` refuses, with one code the web setup shows in the office's language:
-manifest_format (not this layout), manifest_signature (no trusted signature, or changed after
+not_a_manifest (not this layout), manifest_signature_invalid (no trusted signature, or changed after
 signing), manifest_other_appliance, manifest_expired. Python 3 standard library and openssl only.
 """
 
@@ -107,44 +107,44 @@ def split(raw: bytes) -> tuple[bytes, str | None]:
 
 
 def parse(body: bytes) -> dict:
-    """The fields, checked against FIELDS. Raises Refused(manifest_format)."""
+    """The fields, checked against FIELDS. Raises Refused(not_a_manifest)."""
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
-        raise Refused("manifest_format", "not UTF-8 text") from None
+        raise Refused("not_a_manifest", "not UTF-8 text") from None
     values: dict = {}
     for line in text.splitlines():
         if not line.strip() or line.startswith("#"):
             continue
         m = re.fullmatch(r"([a-z_]+): (.+)", line)
         if not m or m.group(1) not in FIELDS or m.group(1) in values:
-            raise Refused("manifest_format", f"unexpected line {line[:40]!r}")
+            raise Refused("not_a_manifest", f"unexpected line {line[:40]!r}")
         key, value = m.groups()
         if not FIELDS[key].fullmatch(value) or value != value.strip():
-            raise Refused("manifest_format", f"unusable {key}")
+            raise Refused("not_a_manifest", f"unusable {key}")
         values[key] = int(value) if key in INTEGERS else value
     missing = [k for k in FIELDS if k not in values]
     if missing:
-        raise Refused("manifest_format", f"missing {', '.join(missing)}")
+        raise Refused("not_a_manifest", f"missing {', '.join(missing)}")
     for key in ("valid_until", "next_check_in", "issued"):
         try:
             datetime.date.fromisoformat(values[key])
         except ValueError:
-            raise Refused("manifest_format", f"unusable {key}") from None
+            raise Refused("not_a_manifest", f"unusable {key}") from None
     return values
 
 
 def check(raw: bytes, appliance: str, today: datetime.date | None = None, keys: Path | None = None) -> dict:
     """The manifest's fields when it may be used on this appliance; otherwise Refused with a code."""
     if len(raw) > MAX_SIZE:
-        raise Refused("manifest_format", "larger than a manifest")
+        raise Refused("not_a_manifest", "larger than a manifest")
     body, sig = split(raw)
     values = parse(body)
     if sig is None:
-        raise Refused("manifest_signature", "not signed")
+        raise Refused("manifest_signature_invalid", "not signed")
     m = re.fullmatch(r"([0-9a-f]{64}) ([A-Za-z0-9+/]{86}==)", sig)
     if not m:
-        raise Refused("manifest_signature", "unusable signature line")
+        raise Refused("manifest_signature_invalid", "unusable signature line")
     trusted = {}
     folder = keys or KEYS
     for path in sorted(folder.glob("*.pem")) if folder.is_dir() else []:
@@ -155,7 +155,7 @@ def check(raw: bytes, appliance: str, today: datetime.date | None = None, keys: 
             continue
     pem = trusted.get(m.group(1))
     if pem is None or not bundle.ed25519_verify(signed_text(body), base64.b64decode(m.group(2)), pem):
-        raise Refused("manifest_signature", "no trusted signature, or changed after signing")
+        raise Refused("manifest_signature_invalid", "no trusted signature, or changed after signing")
     if values["appliance_id"] != appliance:
         raise Refused("manifest_other_appliance", "for another appliance")
     if datetime.date.fromisoformat(values["valid_until"]) < (today or datetime.date.today()):

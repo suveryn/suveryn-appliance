@@ -168,7 +168,7 @@ def network_file(args, ports: dict[str, str] | None = None) -> tuple[str, dict]:
     ports = interfaces() if ports is None else ports
     iface = args.interface or (next(iter(ports)) if ports else None)
     if iface not in ports:
-        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})", "network.port_missing")
+        raise Refused(f"no Ethernet port {iface!r} (found: {', '.join(ports) or 'none'})", "network.port_not_found")
     mac = ports[iface]
     summary = {"interface": iface, "mac": mac}
     lines = ["# Written by the installer (#37, C4).", "[Match]", f"MACAddress={mac}", "", "[Network]",
