@@ -26,6 +26,13 @@ pyte = pytest.importorskip("pyte")
 
 LIB = Path(__file__).resolve().parent.parent / "mkosi.extra" / "usr" / "lib" / "suveryn"
 UI = LIB / "installer-ui"
+
+# The engine says suveryn-core's codes through messages/suveryn-messages (suveryn-tracker#160): from this checkout,
+# and with a suveryn-core checkout (SUVERYN_CORE, as CI has) through core's registry; without one a code goes out
+# as it is, and these tests hold either way.
+os.environ.setdefault("SUVERYN_MESSAGES", str(Path(__file__).resolve().parents[3] / "messages" / "suveryn-messages"))
+if os.environ.get("SUVERYN_CORE"):
+    os.environ.setdefault("SUVERYN_CORE_MESSAGES", str(Path(os.environ["SUVERYN_CORE"]) / "packages" / "harness" / "src" / "suveryn_harness" / "messages.py"))
 KEY = "fjkcbvgt-lrhnedui-tbcvkjfg-hnulrdei-cgtbvfkj-rhnlduei-btcgkfvj-unhrlide"
 TAB, ENTER, ESC, SPACE, UP, DOWN, F1, BACKSPACE = "\t", "\r", "\x1b", " ", "\x1b[A", "\x1b[B", "\x1b[[A", "\x7f"
 
@@ -45,7 +52,7 @@ MACHINE = {
                {"folder": "mistral", "valid": True, "name": "mistral-small", "title": "Mistral Small 3.2 24B",
                 "version": "1", "size": 15_000_000_000, "key": "0f61e8d1aa3bfa1a8e4c", "default": False,
                 "description": "20 to 40% faster. People choose it per conversation."},
-               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)", "code": "signature"}],
+               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)", "code": "bundle.signature"}],
     "interfaces": [{"name": "eno1", "mac": "52:54:00:12:34:56", "model": "Intel I226-V", "carrier": True, "speed": 1000},
                    {"name": "eno2", "mac": "52:54:00:12:34:57", "model": "Intel I226-V", "carrier": False, "speed": -1}],
     "dhcp": {"eno1": {"address": "192.168.1.50/24", "gateway": "192.168.1.1", "dns": ["192.168.1.1"]}},
@@ -387,7 +394,8 @@ def test_an_installation_leaves_its_log_on_the_stick_without_the_recovery_key(co
 
 def test_a_failed_installation_shows_its_reference_and_where_the_log_is(console, tmp_path):
     m = copy.deepcopy(MACHINE)
-    m["install"] = {"lines": ["install: checking qwen", "install: systemd-repart failed: No such device"], "exit": 1, "result": {}}
+    m["install"] = {"lines": ["install: checking qwen", "install: systemd-repart failed: No such device"], "exit": 1,
+                    "result": {"failure": {"kind": "internal", "code": "system.internal", "params": {"ref": "7F3K-92QD"}}}}
     c = console(m)
     to_summary(c)
     c.type("ERASE")
@@ -396,10 +404,15 @@ def test_a_failed_installation_shows_its_reference_and_where_the_log_is(console,
     (run,) = (tmp_path / "logs").iterdir()
     s = " ".join(c.text.replace("│", " ").split())
     assert f"Full log on the stick (SUVLOGS): {run.name}" in s
-    assert "The stick's installer and models are unchanged." in s and "Systemd-repart failed: No such device" in s
+    # nobody planned for it: a sentence in the chosen language with the reference, never the engine's English line
+    # (suveryn-tracker#160); the line and the reference are in the log, where the partner looks them up
+    assert "The stick's installer and models are unchanged." in s and "Something unexpected went wrong." in s and "7F3K-92QD" in s
+    assert "No such device" not in s and "ystemd-repart" not in s
     summary = json.loads((run / "summary.json").read_text())
     assert summary["result"] == "failed" and summary["exit"] == 1 and "No such device" in summary["failure"]
-    assert "the installation failed (exit 1)" in (run / "install.log").read_text()
+    assert summary["reference"] == "7F3K-92QD"
+    log = (run / "install.log").read_text()
+    assert "the installation failed (exit 1)" in log and "reference 7F3K-92QD" in log
 
 
 def test_a_stick_whose_logs_partition_cant_be_used_still_installs_and_says_so(console):
@@ -412,7 +425,9 @@ def test_a_stick_whose_logs_partition_cant_be_used_still_installs_and_says_so(co
     c.press(ENTER)
     c.wait("The installation failed")
     s = " ".join(c.text.replace("│", " ").split())
-    assert "The log couldn't be written to the stick: note the line above." in s and "SUVLOGS" not in s
+    # no log to look a reference up in: the engine's line is shown as it is, as a technical line, under the sentence
+    assert "The log couldn't be written to the stick. Note this technical line for support:" in s and "SUVLOGS" not in s
+    assert "Something unexpected went wrong." in s and "systemd-repart failed: No such device" in s
 
 
 def test_a_machine_the_installer_refuses_leaves_its_record_too(console, tmp_path):
@@ -429,14 +444,16 @@ def test_a_machine_the_installer_refuses_leaves_its_record_too(console, tmp_path
 def test_a_failed_installation_says_so(console):
     m = copy.deepcopy(MACHINE)
     m["install"] = {"lines": ["install: checking qwen", "install: the bundle qwen isn't valid: model.gguf: its SHA-256 "
-                              "doesn't match the manifest"], "exit": 2, "result": {}}
+                              "doesn't match the manifest"], "exit": 2,
+                    "result": {"failure": {"kind": "refused", "code": "bundle.changed", "params": {}}}}
     c = console(m)
     to_summary(c)
     c.type("ERASE")
     c.press(ENTER)
     c.wait("The installation failed")
     s = " ".join(c.text.replace("│", " ").split())
-    assert "! Checking the language models" in s and "The bundle qwen isn't valid" in s
+    # a failure that has a code is said by it, in the chosen language
+    assert "! Checking the language models" in s and "Changed or damaged since it was signed." in s and "isn't valid" not in s
     assert "installing again erases it anew" in s and "Enter Back to the summary" in s
     c.press(ENTER)
     c.wait("Ready to install")
@@ -562,16 +579,20 @@ def test_a_problem_is_worded_by_its_code_in_the_chosen_language_never_from_engli
     words = json.loads((LIB / "installer-text.json").read_text(encoding="utf-8"))
     for lang in ("en", "nl", "fr"):
         monkeypatch.setattr(ui, "LANG", lang)
-        assert ui.model_problem("changed") == words["c3_changed"][lang]
-        assert ui.model_problem("signature") == words["c3_bad_signature"][lang]
-        for other in ("invalid", "", "tomorrow's code"):
-            assert ui.model_problem(other) == words["c3_not_valid"][lang]
+        assert ui.model_problem("bundle.changed") == words["bundle.changed"][lang]
+        assert ui.model_problem("bundle.signature") == words["bundle.signature"][lang]
+        for other in ("bundle.invalid", "", "tomorrow's code", "c6_failed"):
+            assert ui.model_problem(other) == words["bundle.invalid"][lang]
         refused = ui.ENGINE.Refused
-        assert ui.network_problem(refused("English", "prefix")) == words["c4_need_prefix"][lang]
-        assert ui.network_problem(refused("English", "dns")) == words["c4_need_dns"][lang]
-        said = ui.network_problem(refused("English", "gateway", gateway="10.0.0.1", network="192.168.1.0/24"))
+        assert ui.network_problem(refused("English", "network.prefix_missing")) == words["network.prefix_missing"][lang]
+        assert ui.network_problem(refused("English", "network.dns_missing")) == words["network.dns_missing"][lang]
+        assert ui.network_problem(refused("English", "network.port_missing")) == words["network.port_missing"][lang]
+        said = ui.network_problem(refused("English", "network.gateway_outside", gateway="10.0.0.1", network="192.168.1.0/24"))
         assert "10.0.0.1" in said and "192.168.1.0/24" in said and "English" not in said
-        said = ui.network_problem(refused("'300.1.1.1/24' does not appear to be an IPv4 or IPv6 interface", "address", value="300.1.1.1/24"))
+        # a code newer than this screen, or a screen entry that isn't a code, is never shown as a sentence of its own
+        assert ui.network_problem(refused("English", "network.tomorrow")) == words["network.address_invalid"][lang].format(value="")
+        assert ui.worded({"code": "c6_failed", "params": {}}) is None and ui.worded({"code": "network.gateway_outside", "params": {}}) is None
+        said = ui.network_problem(refused("'300.1.1.1/24' does not appear to be an IPv4 or IPv6 interface", "network.address_invalid", value="300.1.1.1/24"))
         assert "300.1.1.1/24" in said and "appear" not in said
 
 
@@ -585,18 +606,18 @@ def test_the_bundle_check_says_why_as_a_code(tmp_path):
         loader.exec_module(bundle)
     finally:
         sys.dont_write_bytecode = before
-    assert bundle.Invalid("anything").code == "invalid"
+    assert bundle.Invalid("anything").code == "bundle.invalid"
     (tmp_path / "manifest.json").write_text("{}")
     with pytest.raises(bundle.Invalid) as e:
         bundle.verify(tmp_path)  # no manifest.sig: not signed
-    assert e.value.code == "signature"
+    assert e.value.code == "bundle.signature"
     (tmp_path / "model.gguf").write_bytes(b"12345")
     with pytest.raises(bundle.Invalid) as e:
         bundle.hash_file(tmp_path / "model.gguf", 4)  # not the size the manifest says
-    assert e.value.code == "changed"
+    assert e.value.code == "bundle.changed"
     with pytest.raises(bundle.Invalid) as e:
         bundle.check_files(tmp_path, {"files": [{"path": "gone.gguf", "size": 1, "sha256": "0" * 64}]})
-    assert e.value.code == "changed"
+    assert e.value.code == "bundle.changed"
 
 
 def test_french_punctuation_never_starts_a_line(monkeypatch):

@@ -349,8 +349,13 @@ class Console(ui.App):
             try:
                 text, _ = ui.ENGINE.network_file(args, ports={p["name"]: p["mac"] for p in self.st["ports"]})
                 self.system.apply_network(a["name"], text)
-            except Exception as e:  # noqa: BLE001 (shown on the screen)
-                s.error = t("c8_apply_failed", detail=str(e)[:80])
+            except ui.ENGINE.Refused as e:  # what the screen's own check let through: still by its code
+                s.error = ui.network_problem(e)
+                return
+            except Exception as e:  # noqa: BLE001 (nobody planned for it: a reference, the detail in the journal)
+                ref = ui.ENGINE.reference()
+                print(f"console-ui: applying the network settings failed ({ref}): {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+                s.error = t("c8_apply_failed", ref=ref)
                 return
             self.st = self.system.status()
             self.show(Status(self))

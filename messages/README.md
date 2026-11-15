@@ -12,6 +12,7 @@ The appliance's services say those codes and keep no list of their own (suveryn-
 | The web setup ([`setup`](../setup/README.md)) | the `setup` area, and the `backup` area for a share's test and a restore | Its own API's answers, as Problem Details |
 | The backup service ([`backup`](../backup/README.md)) | the `backup` area | `failure` in `status.json`, `key-test.json` and `request-result.json`; `fields` for the settings form |
 | The clock's helper ([`clock`](../clock/README.md)) | the `clock` area | `failure` in `result.json` |
+| The console: the installer and the installed appliance's screen ([`image/mkosi`](../image/mkosi/README.md), *What can't be done, as a code*) | the `network` and `bundle` areas | The engine's `Refused.code` and `Invalid.code`; `{"failure": …}` from a failed installation. Worded in `installer-text.json`, under the code |
 
 | File | What |
 |---|---|
@@ -37,5 +38,6 @@ The appliance's services say those codes and keep no list of their own (suveryn-
 SUVERYN_CORE=../suveryn-core python3 -m pytest messages/tests
 ```
 
-Every code a service names is one core's registry lists; no service answers with a word of its own; a
-helper still says its code where core can't be read.
+Every code a service or the console names is one core's registry lists; no service answers with a word of its
+own; a helper still says its code where core can't be read; the console's text file has words in every
+language for every code it can say, and shows no sentence of its engine.

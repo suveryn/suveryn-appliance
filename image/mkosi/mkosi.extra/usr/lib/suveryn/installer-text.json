@@ -1,6 +1,6 @@
 {
   "_about": {
-    "en": "The console installer's words (installer-ui), in English (the approved design's copy), Dutch (formal: u) and French (vous). {name} marks a value filled in. Product name: lower-case sūveryn mid-sentence; Sūveryn Labs. No em dashes.",
+    "en": "The console installer's words (installer-ui), in English (the approved design's copy), Dutch (formal: u) and French (vous). {name} marks a value filled in. Product name: lower-case sūveryn mid-sentence; Sūveryn Labs. No em dashes. An entry named like a code (network.dns_missing, bundle.changed, system.internal) is the sentence for that code of suveryn-core's registry of messages, with the code's own values.",
     "nl": "-",
     "fr": "-"
   },
@@ -409,17 +409,17 @@
     "nl": "overgeslagen",
     "fr": "ignoré"
   },
-  "c3_changed": {
+  "bundle.changed": {
     "en": "Changed or damaged since it was signed.",
     "nl": "Gewijzigd of beschadigd sinds de ondertekening.",
     "fr": "Modifié ou endommagé depuis sa signature."
   },
-  "c3_bad_signature": {
+  "bundle.signature": {
     "en": "Signature not valid.",
     "nl": "Handtekening ongeldig.",
     "fr": "Signature non valide."
   },
-  "c3_not_valid": {
+  "bundle.invalid": {
     "en": "Not a valid model bundle.",
     "nl": "Geen geldige modelbundel.",
     "fr": "Paquet de modèle non valide."
@@ -584,30 +584,30 @@
     "nl": "De naam mag bestaan uit letters, cijfers en koppeltekens (hoogstens 63), en niet beginnen of eindigen met een koppelteken.",
     "fr": "Le nom peut contenir des lettres, des chiffres et des traits d'union (63 au plus), sans commencer ni finir par un trait d'union."
   },
-  "c4_no_port": {
+  "network.port_missing": {
     "en": "No Ethernet port found.",
     "nl": "Geen ethernetpoort gevonden.",
     "fr": "Aucun port Ethernet trouvé."
   },
-  "c4_need_prefix": {
+  "network.prefix_missing": {
     "en": "Enter the address with its network prefix, e.g. 192.168.1.50/24.",
     "nl": "Vul het adres in met de netwerkprefix, bijvoorbeeld 192.168.1.50/24.",
     "fr": "Saisissez l'adresse avec son préfixe réseau, par exemple 192.168.1.50/24."
   },
-  "c4_gateway_outside": {
-    "en": "The gateway {gw} isn't in {net}.",
-    "nl": "De gateway {gw} ligt niet in {net}.",
-    "fr": "La passerelle {gw} n'est pas dans {net}."
+  "network.gateway_outside": {
+    "en": "The gateway {gateway} isn't in {network}.",
+    "nl": "De gateway {gateway} ligt niet in {network}.",
+    "fr": "La passerelle {gateway} n'est pas dans {network}."
   },
-  "c4_need_dns": {
+  "network.dns_missing": {
     "en": "A fixed address needs a DNS server.",
     "nl": "Een vast adres heeft een DNS-server nodig.",
     "fr": "Une adresse fixe nécessite un serveur DNS."
   },
-  "c4_bad_address": {
-    "en": "This address can't be used: {detail}.",
-    "nl": "Dit adres kan niet worden gebruikt: {detail}.",
-    "fr": "Cette adresse ne peut pas être utilisée : {detail}."
+  "network.address_invalid": {
+    "en": "This address can't be used: {value}.",
+    "nl": "Dit adres kan niet worden gebruikt: {value}.",
+    "fr": "Cette adresse ne peut pas être utilisée : {value}."
   },
   "c5_title": {
     "en": "Ready to install",
@@ -754,6 +754,11 @@
     "nl": "De installatie is mislukt.",
     "fr": "L'installation a échoué."
   },
+  "system.internal": {
+    "en": "Something unexpected went wrong. Give your partner this reference: {ref}.",
+    "nl": "Er ging iets onverwachts mis. Geef deze referentie aan uw partner: {ref}.",
+    "fr": "Une erreur inattendue s'est produite. Communiquez cette référence à votre partenaire : {ref}."
+  },
   "c6_failed_note": {
     "en": "The stick's installer and models are unchanged. The disk {disk} may be partly written; installing again erases it anew.",
     "nl": "De installatie en de modellen op de USB-stick zijn ongewijzigd. De schijf {disk} kan gedeeltelijk beschreven zijn; een nieuwe installatie wist ze opnieuw.",
@@ -765,14 +770,9 @@
     "fr": "Journal sur la clé USB (SUVLOGS) : {folder}"
   },
   "c6_log_none": {
-    "en": "The log couldn't be written to the stick: note the line above.",
-    "nl": "Het logboek kon niet op de USB-stick worden geschreven: noteer de regel hierboven.",
-    "fr": "Le journal n'a pas pu être écrit sur la clé USB : notez la ligne ci-dessus."
-  },
-  "c6_no_result": {
-    "en": "the installer gave no result",
-    "nl": "de installatie gaf geen resultaat",
-    "fr": "l'installation n'a donné aucun résultat"
+    "en": "The log couldn't be written to the stick. Note this technical line for support:",
+    "nl": "Het logboek kon niet op de USB-stick worden geschreven. Noteer deze technische regel voor de ondersteuning:",
+    "fr": "Le journal n'a pas pu être écrit sur la clé USB. Notez cette ligne technique pour le support :"
   },
   "c6_duration": {
     "en": "This takes about ten minutes. Do not turn off the machine.",
@@ -1085,9 +1085,9 @@
     "fr": "Les nouveaux réglages réseau sont appliqués."
   },
   "c8_apply_failed": {
-    "en": "The network settings couldn't be applied: {detail}",
-    "nl": "De netwerkinstellingen konden niet worden toegepast: {detail}",
-    "fr": "Les réglages réseau n'ont pas pu être appliqués : {detail}"
+    "en": "The network settings couldn't be applied. Try again; if it happens again, give your partner this reference: {ref}.",
+    "nl": "De netwerkinstellingen konden niet worden toegepast. Probeer het opnieuw; gebeurt het weer, geef dan deze referentie aan uw partner: {ref}.",
+    "fr": "Les réglages réseau n'ont pas pu être appliqués. Réessayez ; si cela se reproduit, communiquez cette référence à votre partenaire : {ref}."
   },
   "button_apply": {
     "en": "< Apply >",
