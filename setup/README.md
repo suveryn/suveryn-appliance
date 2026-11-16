@@ -50,8 +50,8 @@ only) from the core on the appliance, the pinned one at `/opt/suveryn/core`, thr
 [`messages/suveryn-messages`](../messages/README.md), and says its codes through it. A code that core doesn't list can't be said.
 Without that core, or with one from before the setup's messages, the service doesn't start and says
 why in its journal (`journalctl -u suveryn-setup`); systemd tries again, and it starts once the core
-is there. So a change that needs a new code is merged in core first, and reaches the appliance when
-the pin moves. The screens word each code in the office's language.
+is there. So a code core adds, renames or removes is merged in core first, and reaches the appliance when
+the pin moves, in the same PR as the change here that says it. The screens word each code in the office's language.
 
 | What happened | What the service answers |
 |---|---|

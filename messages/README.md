@@ -29,8 +29,9 @@ The appliance's services say those codes and keep no list of their own (suveryn-
   as a raw word.
 - **A missing core doesn't stop a backup.** The web setup doesn't start without core's module. The backup
   service and the clock's helper still do their work and write the code as it is.
-- **A new code is merged in core first** and reaches the appliance when the pin moves, in the same PR as
-  the service that says it.
+- **A code is added, renamed or removed in core first**, and the change reaches the appliance when the pin
+  moves, in the same PR as the service that says the code (the handbook's [*How a change reaches
+  `main`*](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#how-a-change-reaches-main), item 5).
 
 ## Tests
 
