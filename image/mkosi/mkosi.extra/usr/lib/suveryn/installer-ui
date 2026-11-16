@@ -760,7 +760,7 @@ class Hardware(Screen):
 def model_problem(code: str) -> str:
     """Why a model on the stick can't be installed, in the chosen language: by the bundle check's code,
     never from its English sentence."""
-    return t(code if code in ("bundle.changed", "bundle.signature") else "bundle.invalid")
+    return t(code if code in ("bundle.changed", "bundle.signature_invalid") else "bundle.invalid")
 
 
 class Models(Screen):
@@ -936,7 +936,7 @@ class Network(Screen):
         except ENGINE.Refused as e:
             return network_problem(e)
         if not self.port.value:
-            return t("network.port_missing")
+            return t("network.port_not_found")
         args = Namespace(interface=self.port.value, address="dhcp", gateway=None, dns=None)
         if self.mode.value == "fixed":
             args = Namespace(interface=self.port.value, address=self.ip.value.strip(),

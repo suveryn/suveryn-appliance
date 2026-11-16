@@ -18,7 +18,7 @@ Start with the private [suveryn-handbook](https://github.com/suveryn/suveryn-han
 
 The handbook's [design principles](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#the-design-principles) and its *How a change reaches `main`* hold here and are not repeated (a folder's README changes with its code, like a spec). These are the appliance's own rules:
 
-- **Core is pinned by commit** in `provision/versions.json`, with every other download pinned by sha256 or commit. The pin moves in its own "Pin suveryn-core at …" PR, after a VM regression against that commit has passed and its findings are fixed in both repositories.
+- **Core is pinned by commit** in `provision/versions.json`, with every other download pinned by sha256 or commit. When and how the pin moves is the handbook's [*How a change reaches `main`*](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#how-a-change-reaches-main), item 5; a PR that only moves it is titled "Pin suveryn-core at …".
 - **Both network modes must work**: Connected (approved destinations only, or allow all) and Air-gapped. Nothing may fetch at runtime what wasn't put on the image or in a signed bundle. The mode is in `/etc/suveryn/network-mode.env`, enforced by the appliance's own rules and resolver.
 - **The system is read-only and verified; `/var` is the encrypted data partition.** Anything that must persist goes on the data partition; `/etc` is links. Ubuntu fixes arrive only through sūveryn updates (D3); no apt on the appliance; no swap (D5).
 - **Bundles are signed and checked before anything is written**: models now, updates later, one verification path. Signing happens at Sūveryn Labs (AWS KMS); the appliance holds public keys only.

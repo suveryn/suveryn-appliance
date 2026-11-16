@@ -24,7 +24,7 @@ clock is written (`hwclock --systohc --noadjfile`, from `util-linux-extra`, in t
 correction; the answer's `hardware_clock` says whether that worked. Where the system may not set the clock at all
 (a container), the answer is the refusal `clock.unavailable`, with what the system said in the journal,
 never a stopped tool. A request that isn't acted on answers why as `failure`, a code of suveryn-core's registry
-([`messages`](../messages/README.md)): `clock.synced`, `clock.out_of_range`, `clock.busy`, `clock.unavailable`. The answer's folder is made 0755 whatever the umask, so the gateway can read it.
+([`messages`](../messages/README.md)): `clock.synced`, `clock.difference_out_of_range`, `clock.busy`, `clock.unavailable`. The answer's folder is made 0755 whatever the umask, so the gateway can read it.
 
 **Why the bounds.** Moved forward, the gateway's hourly sweep deletes closed cases whose keep period has then
 passed, and backups past their retention; moved back, an old two-step code is valid again. The gateway has its

@@ -52,7 +52,7 @@ MACHINE = {
                {"folder": "mistral", "valid": True, "name": "mistral-small", "title": "Mistral Small 3.2 24B",
                 "version": "1", "size": 15_000_000_000, "key": "0f61e8d1aa3bfa1a8e4c", "default": False,
                 "description": "20 to 40% faster. People choose it per conversation."},
-               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)", "code": "bundle.signature"}],
+               {"folder": "third", "valid": False, "error": "signed by a key this system doesn't trust (abc…)", "code": "bundle.signature_invalid"}],
     "interfaces": [{"name": "eno1", "mac": "52:54:00:12:34:56", "model": "Intel I226-V", "carrier": True, "speed": 1000},
                    {"name": "eno2", "mac": "52:54:00:12:34:57", "model": "Intel I226-V", "carrier": False, "speed": -1}],
     "dhcp": {"eno1": {"address": "192.168.1.50/24", "gateway": "192.168.1.1", "dns": ["192.168.1.1"]}},
@@ -580,13 +580,13 @@ def test_a_problem_is_worded_by_its_code_in_the_chosen_language_never_from_engli
     for lang in ("en", "nl", "fr"):
         monkeypatch.setattr(ui, "LANG", lang)
         assert ui.model_problem("bundle.changed") == words["bundle.changed"][lang]
-        assert ui.model_problem("bundle.signature") == words["bundle.signature"][lang]
+        assert ui.model_problem("bundle.signature_invalid") == words["bundle.signature_invalid"][lang]
         for other in ("bundle.invalid", "", "tomorrow's code", "c6_failed"):
             assert ui.model_problem(other) == words["bundle.invalid"][lang]
         refused = ui.ENGINE.Refused
         assert ui.network_problem(refused("English", "network.prefix_missing")) == words["network.prefix_missing"][lang]
         assert ui.network_problem(refused("English", "network.dns_missing")) == words["network.dns_missing"][lang]
-        assert ui.network_problem(refused("English", "network.port_missing")) == words["network.port_missing"][lang]
+        assert ui.network_problem(refused("English", "network.port_not_found")) == words["network.port_not_found"][lang]
         assert ui.network_problem(refused("English", "network.name_invalid")) == words["network.name_invalid"][lang]
         said = ui.network_problem(refused("English", "network.gateway_outside", gateway="10.0.0.1", network="192.168.1.0/24"))
         assert "10.0.0.1" in said and "192.168.1.0/24" in said and "English" not in said
@@ -611,7 +611,7 @@ def test_the_bundle_check_says_why_as_a_code(tmp_path):
     (tmp_path / "manifest.json").write_text("{}")
     with pytest.raises(bundle.Invalid) as e:
         bundle.verify(tmp_path)  # no manifest.sig: not signed
-    assert e.value.code == "bundle.signature"
+    assert e.value.code == "bundle.signature_invalid"
     (tmp_path / "model.gguf").write_bytes(b"12345")
     with pytest.raises(bundle.Invalid) as e:
         bundle.hash_file(tmp_path / "model.gguf", 4)  # not the size the manifest says

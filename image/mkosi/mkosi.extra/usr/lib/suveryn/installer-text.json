@@ -414,7 +414,7 @@
     "nl": "Gewijzigd of beschadigd sinds de ondertekening.",
     "fr": "Modifié ou endommagé depuis sa signature."
   },
-  "bundle.signature": {
+  "bundle.signature_invalid": {
     "en": "Signature not valid.",
     "nl": "Handtekening ongeldig.",
     "fr": "Signature non valide."
@@ -584,7 +584,7 @@
     "nl": "De naam mag bestaan uit letters, cijfers en koppeltekens (hoogstens 63), en niet beginnen of eindigen met een koppelteken.",
     "fr": "Le nom peut contenir des lettres, des chiffres et des traits d'union (63 au plus), sans commencer ni finir par un trait d'union."
   },
-  "network.port_missing": {
+  "network.port_not_found": {
     "en": "No Ethernet port found.",
     "nl": "Geen ethernetpoort gevonden.",
     "fr": "Aucun port Ethernet trouvé."

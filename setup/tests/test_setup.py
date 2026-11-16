@@ -99,7 +99,11 @@ def test_the_password_rules_are_the_screens():
     assert ok == {"name": "Anne de Smet", "email": "anne@office.be", "password": GOOD_PASSWORD}
     for answer, codes in [
         ({"name": "", "email": "anne", "password": "short"}, {"name": "setup.name_missing", "email": "setup.email_invalid",
-                                                              "password": "setup.password_short"}),
+                                                              "password": "setup.password_too_short"}),
+        # too long is not "too short" and not "missing": what was sent isn't valid, and the code says no more
+        # (suveryn-tracker#162; the screen is to limit both fields: #163)
+        ({"name": "Anne", "email": "a@b.be", "password": "Zx9!" * 129}, {"password": "request.invalid"}),
+        ({"name": "A" * 201, "email": "a@b.be", "password": GOOD_PASSWORD}, {"name": "request.invalid"}),
         ({"name": "Anne", "email": "a@b.be", "password": "adminadminadmin"}, {"password": "setup.password_common"}),
         ({"name": "Anne", "email": "a@b.be", "password": "aaaaaaaaaaaaaaaa"}, {"password": "setup.password_common"}),
         ({"name": "Anne", "email": "a@b.be", "password": "abcdefghijklmnop"}, {"password": "setup.password_common"}),
@@ -171,7 +175,7 @@ def test_the_offices_certificate_is_checked_before_it_is_saved(s, certs):
         ({"certificate": certs["good.crt"], "key": certs["locked.key"]}, {"key": "setup.not_a_key"}),
         ({"certificate": certs["good.crt"], "key": certs["x.key"]}, {"key": "setup.key_mismatch"}),
         ({"certificate": certs["old.crt"], "key": certs["old.key"]}, {"certificate": "setup.certificate_expired"}),
-        ({"certificate": certs["other.crt"], "key": certs["other.key"]}, {"certificate": "setup.name_not_covered"}),
+        ({"certificate": certs["other.crt"], "key": certs["other.key"]}, {"certificate": "setup.certificate_name_mismatch"}),
         ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": certs["x.crt"]}, {"chain": "setup.chain_invalid"}),
         ({"certificate": certs["good.crt"], "key": certs["good.key"], "chain": "x" * 70000}, {"chain": "setup.not_a_certificate"}),
     ]:
@@ -200,10 +204,10 @@ def test_a_manifest_is_taken_only_when_signed_for_this_appliance(s, tmp_path):
     other = m.sign(m.make(APPLIANCE.replace("7f3c", "0000"), "Sūveryn Enterprise", 15, "2027-09-30", "2026-12-31"),
                    release.KeyFile(key))
     expired = m.sign(m.make(APPLIANCE, "Sūveryn Enterprise", 15, "2020-09-30", "2020-12-31"), release.KeyFile(key))
-    for raw, code in ((signed.replace(b"users: 15", b"users: 50"), "setup.manifest_signature"),
-                      (signed.split(b"signature:")[0], "setup.manifest_signature"), (other, "setup.manifest_other_appliance"),
-                      (expired, "setup.manifest_expired"), (b"edition: [a, b]\n", "setup.manifest_format"),
-                      (signed.replace(b"users: 15", b"users: '15'"), "setup.manifest_format"), (b"\xff\xfe", "setup.manifest_format")):
+    for raw, code in ((signed.replace(b"users: 15", b"users: 50"), "setup.manifest_signature_invalid"),
+                      (signed.split(b"signature:")[0], "setup.manifest_signature_invalid"), (other, "setup.manifest_other_appliance"),
+                      (expired, "setup.manifest_expired"), (b"edition: [a, b]\n", "setup.not_a_manifest"),
+                      (signed.replace(b"users: 15", b"users: '15'"), "setup.not_a_manifest"), (b"\xff\xfe", "setup.not_a_manifest")):
         with pytest.raises(s.Refused) as e:
             s.check_manifest(raw, facts)
         assert said(e) == {"_": code}, raw[:60]
@@ -234,14 +238,14 @@ def test_backups_need_a_real_recovery_key_and_a_disk_or_share_that_exists(s):
                           ({**usb, "recipient": broken}, {"_": "request.invalid"}),
                           ({**usb, "recipient": "age1" + "q" * 10}, {"_": "request.invalid"}),
                           ({**usb, "retention_days": 7}, {"_": "request.invalid"}),
-                          ({**share, "address": "nas01/backups"}, {"address": "backup.share_address"})]:
+                          ({**share, "address": "nas01/backups"}, {"address": "backup.share_address_invalid"})]:
         with pytest.raises(s.Refused) as e:
             s.check_backups(answer)
         assert said(e) == codes, answer
 
 
 def test_the_share_test_stays_on_the_offices_network(s):
-    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_address", "params": {}}}
+    assert s.test_share({"protocol": "smb", "address": "backups"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_address_invalid", "params": {}}}
     assert s.test_share({"protocol": "smb", "address": "\\\\8.8.8.8\\share"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_not_local", "params": {}}}
     assert s.test_share({"protocol": "nfs", "address": "127.0.0.1:/x"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_not_local", "params": {}}}
     assert s.test_share({"protocol": "nfs", "address": "10.255.255.1:/export"}) == {"ok": False, "message": {"kind": "refused", "code": "backup.share_unreachable", "params": {}}}
@@ -329,7 +333,7 @@ def test_there_is_one_list_of_messages_and_it_is_cores(s, tmp_path):
     registry in suveryn-core, says every code of the registry's setup area, and doesn't start without that core."""
     source = (HERE / "suveryn-setup").read_text(encoding="utf-8")
     used = set(re.findall(r'"((?:setup|request|system)\.[a-z_]+)"', source))
-    used |= {f"setup.{c}" for c in re.findall(r'Refused\("(manifest_[a-z_]+)"', (REPO / "support" / "suveryn-manifest").read_text())}
+    used |= {f"setup.{c}" for c in re.findall(r'Refused\("([a-z_]+)"', (REPO / "support" / "suveryn-manifest").read_text())}  # the manifest tool's own codes: said with the setup area's name
     assert used <= set(REGISTRY), used - set(REGISTRY)
     assert {c for c in REGISTRY if c.startswith("setup.")} <= used, "a setup code of the registry that nothing here says"
     assert s.messages.CODES.keys() == REGISTRY.keys() and not hasattr(s, "SAYS")
@@ -372,9 +376,9 @@ def test_refusals_come_as_codes_by_field(api):
         422, {**refused("request.invalid")[1],
               "fields": {"name": {"kind": "refused", "code": "setup.name_missing", "params": {}},
                          "email": {"kind": "refused", "code": "setup.email_invalid", "params": {}},
-                         "password": {"kind": "refused", "code": "setup.password_short", "params": {"min": 15}}}})
-    assert api("POST", "manifest", b"not a manifest", "application/octet-stream") == refused("setup.manifest_format")
-    assert api("POST", "provision", {}) == refused("setup.not_answered", 409)
+                         "password": {"kind": "refused", "code": "setup.password_too_short", "params": {"min": 15}}}})
+    assert api("POST", "manifest", b"not a manifest", "application/octet-stream") == refused("setup.not_a_manifest")
+    assert api("POST", "provision", {}) == refused("setup.answers_missing", 409)
 
 
 def test_only_the_appliances_own_page_can_call_it(api):
@@ -603,7 +607,7 @@ def test_where_the_backups_are_and_the_key_are_checked(s):
     assert answer["protocol"] == "smb" and "key" not in answer and password == "pw"
     for bad, code in (({"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": "AGE-SECRET-KEY-1short"}, {"key": "backup.not_a_key"}),
                       ({"target": "usb", "disk": "usb-Gone", "key": KEY}, {"disk": "backup.disk_gone"}),
-                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "backup.share_address"}),
+                      ({"target": "share", "protocol": "smb", "address": "nas", "key": KEY}, {"address": "backup.share_address_invalid"}),
                       ({"target": "later", "key": KEY}, {"_": "request.invalid"})):
         with pytest.raises(s.Refused) as e:
             s.check_restore(bad, disks)
@@ -665,7 +669,7 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
-    for code in ("backup.wrong_key", "backup.none_found", "backup.target_unreachable", "backup.damaged", "backup.newer_version"):
+    for code in ("backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.damaged", "backup.version_too_new"):
         said = {"code": code, "params": {}}
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'failure': {said!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
@@ -673,7 +677,7 @@ def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, 
         assert api("GET", "restore")[1] == {"state": "failed", "message": {
             "kind": "unavailable" if code == "backup.target_unreachable" else "refused", "code": code, "params": {}}}
         assert not (s.ANSWERS / "recovery-key").exists()  # asked for again, not kept
-    assert api("POST", "restore/start") == refused("setup.not_checked", 409)
+    assert api("POST", "restore/start") == refused("setup.backup_not_checked", 409)
 
 
 def test_a_failed_verify_names_the_check_that_failed_not_the_last_line(s, api, fake_tools):

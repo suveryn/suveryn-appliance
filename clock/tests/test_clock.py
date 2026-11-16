@@ -44,7 +44,7 @@ def test_a_nudge_slews_the_clock_back_by_what_it_is_ahead(tmp_path):
 def test_a_nudge_is_small_and_at_most_once_an_hour(tmp_path):
     for offset in (300, 61_000, -61_000):  # under half a second: nothing to do; over a minute: an administrator's
         code, result, state = ask(tmp_path, {"id": "0123456789abcdef", "kind": "nudge", "offset_ms": offset})
-        assert code == 1 and result["failure"]["code"] == "clock.out_of_range" and read(state, "test-slewed") is None
+        assert code == 1 and result["failure"]["code"] == "clock.difference_out_of_range" and read(state, "test-slewed") is None
     ask(tmp_path, {"id": "0123456789abcdef", "kind": "nudge", "offset_ms": -2000})
     code, result, state = ask(tmp_path, {"id": "0123456789abcdef", "kind": "nudge", "offset_ms": 3000})
     assert code == 1 and result["failure"]["code"] == "clock.busy" and read(state, "test-slewed") == 2000
@@ -57,7 +57,7 @@ def test_an_administrators_set_moves_it_at_once_up_to_a_year(tmp_path):
     code, result, state = ask(tmp_path, {"id": "0123456789abcdef", "kind": "set", "offset_ms": -95_000})
     assert code == 0 and read(state, "test-set") == 95_000  # 95 s behind: forward
     code, result, _ = ask(tmp_path, {"id": "fedcba9876543210", "kind": "set", "offset_ms": 400 * 24 * 3600 * 1000})
-    assert code == 1 and result["failure"]["code"] == "clock.out_of_range" and result["id"] == "fedcba9876543210"
+    assert code == 1 and result["failure"]["code"] == "clock.difference_out_of_range" and result["id"] == "fedcba9876543210"
 
 
 def test_nothing_while_a_time_server_keeps_the_clock(tmp_path):
