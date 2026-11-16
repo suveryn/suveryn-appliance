@@ -669,7 +669,7 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
-    for code in ("backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.damaged", "backup.version_too_new"):
+    for code in ("backup.not_a_key", "backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.damaged", "backup.version_too_new"):
         said = {"code": code, "params": {}}
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'failure': {said!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202

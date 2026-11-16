@@ -1088,7 +1088,7 @@ def restore_check() -> int:
         result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
                   "choices": choices}
     else:
-        # why, as the backup service says it: a code of the registry (backup.key_mismatch, backup.not_found,
+        # why, as the backup service says it: a code of the registry (backup.not_a_key, backup.key_mismatch, backup.not_found,
         # backup.damaged, backup.version_too_new, backup.target_unreachable), passed on as it is (#154)
         result = {"state": "failed", "message": messages.why(r.get("failure"))}
         forget_restore_secrets()  # the screen asks for them again
