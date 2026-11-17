@@ -1052,11 +1052,14 @@ def forget_restore_secrets(work: Path | None = None) -> None:
 
 
 MAX_CHOICES = 400  # a year of nightly backups, and some
+OLDER_CHECKED = 3  # when the newest backup is damaged, how many older ones are tried (suveryn-tracker#166)
 
 
 def restore_check() -> int:
     """Find the backups on the target the key opens (its appliance's: each has its own key), and check the
-    newest with the key: what the screen asks to confirm, with the others' dates to choose from."""
+    newest with the key: what the screen asks to confirm, with the others' dates to choose from. When the
+    newest is damaged (age can't read it, or its check fails as damaged), the next older ones are checked,
+    up to ``OLDER_CHECKED``, and the screen says the newest is damaged (suveryn-tracker#166)."""
     write_file(RESTORE, json.dumps({"state": "checking"}), 0o644)
     remove(ANSWERS / "restore-check")
     work = restore_work()
@@ -1075,18 +1078,35 @@ def restore_check() -> int:
     choices = [{"file": b["file"], "created": b["at"], "appliance": b["appliance"], "size": b["size"]}
                for b in found.get("backups") or [] if isinstance(b, dict) and NAME_OF_BACKUP.fullmatch(str(b.get("file")))
                and isinstance(b.get("size"), int) and HOST_LABEL.fullmatch(str(b.get("appliance")))][:MAX_CHOICES]
+    unreadable = [{"file": b["file"], "created": b["at"], "appliance": b["appliance"]}
+                  for b in found.get("damaged") or [] if isinstance(b, dict) and NAME_OF_BACKUP.fullmatch(str(b.get("file")))
+                  and isinstance(b.get("at"), str) and HOST_LABEL.fullmatch(str(b.get("appliance")))]
+    bad: list[dict] = []
     if not found.get("found") or not choices:
         r = {"usable": False, "failure": found.get("failure")}
     else:
-        code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", choices[0]["file"], "--on-target", "--json",
-                        "--identity", ANSWERS / "recovery-key", timeout=1800)
-        try:
-            r = json.loads(out.strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            r = {"usable": False}
+        # newest first, the ones age can't read among them; the newest that checks whole is offered
+        tried = sorted([(c["created"], c, False) for c in choices] + [(d["created"], d, True) for d in unreadable],
+                       key=lambda x: x[0], reverse=True)[:1 + OLDER_CHECKED]
+        r = {"usable": False}
+        for _, b, unreadable_by_age in tried:
+            if not unreadable_by_age:
+                code, out = run(sys.executable, "-I", BACKUP_TOOL, *opts, "check", b["file"], "--on-target", "--json",
+                                "--identity", ANSWERS / "recovery-key", timeout=1800)
+                try:
+                    r = json.loads(out.strip().splitlines()[-1])
+                except (ValueError, IndexError):
+                    r = {"usable": False}
+                if r.get("usable") or (r.get("failure") or {}).get("code") != "backup.damaged":
+                    break
+            bad.append(b)
+            dates = {"newest": bad[0]["created"], "oldest": bad[-1]["created"]} if len(bad) > 1 else {}
+            r = {"usable": False, "failure": message("backup.damaged", **dates)}
     if r.get("usable"):
         result = {"state": "checked", "backup": {"file": r["file"], "created": r["created"], "appliance": r["appliance"]},
-                  "choices": choices}
+                  "choices": [c for c in choices if c["file"] not in {b["file"] for b in bad}]}
+        if bad:
+            result["warning"] = message("backup.newest_damaged", newest=bad[0]["created"], whole=r["created"])
     else:
         # why, as the backup service says it: a code of the registry (backup.not_a_key, backup.key_mismatch, backup.not_found,
         # backup.damaged, backup.version_too_new, backup.target_unreachable), passed on as it is (#154)

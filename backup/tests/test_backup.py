@@ -643,6 +643,33 @@ def test_a_replacement_whose_only_backup_is_damaged_is_told_so_not_that_its_key_
 
 
 @needs
+def test_find_names_the_backups_it_cant_read_in_the_keys_own_folder(appliance, tmp_path):
+    """suveryn-tracker#166: a newest backup age can't read at all was left out of what ``find`` gives without a
+    word, and a restore took the older one. ``find`` now names it under ``damaged``, so the web setup can say
+    so; one age can't read in another appliance's folder isn't named (it isn't this key's, as far as is known)."""
+    import time
+    env, var = appliance["env"], appliance["var"]
+    assert tool(env, "run").returncode == 0
+    time.sleep(1.1)  # a newer backup, by the second
+    assert tool(env, "run").returncode == 0
+    folder = appliance["target"] / "suveryn-backups" / "test-appliance"
+    older, newest = sorted(folder.glob("*.age"))
+    data = bytearray(newest.read_bytes())
+    data[5] ^= 0xFF  # its first line: age can't read it at all
+    newest.write_bytes(bytes(data))
+    other = appliance["target"] / "suveryn-backups" / "notary-02"
+    other.mkdir()
+    (other / newest.name.replace("test-appliance", "notary-02")).write_bytes(bytes(data))
+    given = tmp_path / "restore-settings.json"
+    given.write_text(json.dumps({"target": "folder", "path": str(appliance["target"])}))
+    env = {**env, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "none.json")}
+    r = tool(env, "--settings", given, "find", "--json", "--identity", appliance["key"])
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and [b["file"] for b in out["backups"]] == [older.name], r.stdout
+    assert [(b["file"], b["appliance"]) for b in out["damaged"]] == [(newest.name, "test-appliance")], r.stdout
+
+
+@needs
 def test_a_full_disk_clears_what_is_past_the_retention_first_and_then_says_it_is_full(appliance):
     """Review of the backup strategy: backups past the retention period went only after a success, so a full
     disk failed every night for good. Now they go first; if it still doesn't fit, the step is "space"."""

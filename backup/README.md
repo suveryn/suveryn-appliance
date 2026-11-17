@@ -38,8 +38,10 @@ all, the answer is `backup.damaged`, not `backup.key_mismatch`: a replacement wh
 is told so, rather than sent looking for another key. Two limits: a wrong key on a target that also holds
 another appliance's damaged backup is answered "damaged", since whose backup age can't read isn't known; and
 a change in the part of a backup's header that names its key (some 90 characters) still reads as another
-key. A newest backup age can't read at all, beside an older whole one, is left out of what `find` lists, and the
-restore takes the older one (suveryn-tracker#166).
+key. `find` names the backups age can't read at all, in the folders of the backups the key opens, under
+`damaged`, so the web setup can say the newest is damaged (suveryn-tracker#166). On the command line, `check` and
+`restore` with `newest --on-target` (and `suveryn-provision restore` without `--backup`) still take the newest
+backup the key opens and pass over one age can't read at all without a word.
 
 | Unit | What it does |
 |---|---|

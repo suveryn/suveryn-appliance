@@ -667,6 +667,64 @@ for t in ("PostgreSQL 16 + pgvector", "Restoring the backup", "Model files (x)",
     assert s.SETUP_COMPLETE.exists() and not s.ANSWERS.exists()  # the key and the answers gone with setup
 
 
+def damaged_target(s, api, tmp_path, days: list[str], unreadable: list[str], checks: dict[str, str]) -> Path:
+    """A stand-in backup tool: ``find`` gives the backups of ``days`` the key opens and those of ``unreadable``
+    age can't read; ``check`` answers each day with ``checks`` (``usable`` or a code). The days checked are
+    written to the file it returns, in order."""
+    tried = tmp_path / "tried.txt"
+    name = "suveryn-backup_notary-ghent_202610{}T023900Z.tar.zst.age"
+    entry = lambda d: {"file": name.format(d), "at": f"2026-10-{d}T02:39:00Z", "size": 1, "appliance": "notary-ghent"}  # noqa: E731
+    s.BACKUP_TOOL = stand_in(tmp_path / "backup-tool", f"""import json, sys
+args = sys.argv[1:]
+if args[2] == "find":
+    print(json.dumps({{"found": True, "backups": {[entry(d) for d in days]!r}, "damaged": {[entry(d) for d in unreadable]!r}}}))
+else:
+    day = args[args.index("check") + 1][len("suveryn-backup_notary-ghent_202610"):][:2]
+    open({str(tried)!r}, "a").write(day + "\\n")
+    said = {checks!r}[day]
+    print(json.dumps({{"usable": True, "file": args[args.index("check") + 1], "created": f"2026-10-{{day}}T02:39:00Z",
+                      "appliance": "notary-ghent"}} if said == "usable" else {{"usable": False, "failure": {{"code": said, "params": {{}}}}}}))
+""")
+    assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
+    return tried
+
+
+def test_a_damaged_newest_backup_is_said_and_the_newest_whole_one_is_offered(s, api, tmp_path):
+    """suveryn-tracker#166: the newest backup used to be left out without a word when age couldn't read it, and
+    the whole restore stopped when its check found it damaged further in. The founder's choice: check older
+    ones, up to three, and say the newest is damaged."""
+    # the newest (23rd) unreadable by age, the next (22nd) damaged further in: the 21st is offered
+    tried = damaged_target(s, api, tmp_path, ["22", "21", "16"], ["23"], {"22": "backup.damaged", "21": "usable", "16": "usable"})
+    assert s.restore_check() == 0
+    r = api("GET", "restore")[1]
+    assert tried.read_text().split() == ["22", "21"]
+    assert r["state"] == "checked" and r["backup"]["created"] == "2026-10-21T02:39:00Z"
+    assert r["warning"] == {"kind": "warning", "code": "backup.newest_damaged", "params": {"newest": "2026-10-23T02:39:00Z",
+                                                                                         "whole": "2026-10-21T02:39:00Z"}}
+    assert [c["created"] for c in r["choices"]] == ["2026-10-21T02:39:00Z", "2026-10-16T02:39:00Z"]  # the damaged ones not offered
+    # nothing damaged: no warning
+    tried.unlink()
+    tried = damaged_target(s, api, tmp_path, ["23", "16"], ["01"], {"23": "usable", "16": "usable"})
+    assert s.restore_check() == 0
+    r = api("GET", "restore")[1]
+    assert tried.read_text().split() == ["23"] and "warning" not in r and r["backup"]["created"] == "2026-10-23T02:39:00Z"
+
+
+def test_when_the_newest_backups_are_all_damaged_the_check_stops_after_three_older_ones(s, api, tmp_path):
+    tried = damaged_target(s, api, tmp_path, ["23", "22", "21", "20", "19"], [], {d: "backup.damaged" for d in ("23", "22", "21", "20")} | {"19": "usable"})
+    assert s.restore_check() == 1
+    assert tried.read_text().split() == ["23", "22", "21", "20"]  # the newest and three older ones, no more
+    assert api("GET", "restore")[1] == {"state": "failed", "message": {"kind": "refused", "code": "backup.damaged", "params": {
+        "newest": "2026-10-23T02:39:00Z", "oldest": "2026-10-20T02:39:00Z"}}}  # the screen says from when to when
+
+
+def test_a_check_that_fails_for_another_reason_doesnt_try_older_backups(s, api, tmp_path):
+    tried = damaged_target(s, api, tmp_path, ["23", "16"], [], {"23": "backup.version_too_new", "16": "usable"})
+    assert s.restore_check() == 1
+    assert tried.read_text().split() == ["23"]
+    assert api("GET", "restore")[1]["message"]["code"] == "backup.version_too_new"
+
+
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
     for code in ("backup.not_a_key", "backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.damaged", "backup.version_too_new"):
