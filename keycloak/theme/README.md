@@ -1,6 +1,6 @@
 # Sūveryn Keycloak theme
 
-The branded sign-in for sūveryn appliances: Keycloak's **login** pages, **account console** and **emails**, in the sūveryn light theme. The **admin console** is deliberately left as Keycloak ships it: only IT admins see it, and theming it risks breaking on every Keycloak upgrade.
+The branded sign-in for sūveryn appliances: Keycloak's **login** pages, **account console** and **emails**, in the sūveryn light theme. Spec: suveryn-brand's [guidelines](https://github.com/suveryn/suveryn-brand/blob/main/guidelines/brand-guidelines.md) and the reviewed login mockup ([*Design rules it keeps*](#design-rules-it-keeps)). The **admin console** is deliberately left as Keycloak ships it: only IT admins see it, and theming it risks breaking on every Keycloak upgrade.
 
 It is a standard Keycloak theme (FreeMarker templates, CSS, message bundles) that **extends Keycloak's own themes** instead of changing Keycloak:
 

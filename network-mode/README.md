@@ -1,6 +1,7 @@
 # Network mode
 
-An installation runs in one of two network modes (development context §5; tracker #38). The appliance
+An installation runs in one of two network modes (spec: suveryn-tracker#38; the handbook's
+[development context](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md), §1, says both must always work). The appliance
 records the mode once, lets any component read it without a network call or a database, and
 enforces it with its own firewall.
 
@@ -12,9 +13,6 @@ enforces it with its own firewall.
 
 In every mode the office's own network stays reachable: private addresses (`10/8`, `172.16/12`,
 `192.168/16`, link-local, and their IPv6 equivalents), for LDAP/AD, DNS, time and a local mirror.
-
-The third mode of earlier versions, `outbound-blocked`, was dropped in October 2026: Connected with
-approved destinations covers it. A file that still says `outbound-blocked` reads as **unknown**.
 
 ## Where it lives
 
