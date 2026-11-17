@@ -293,7 +293,8 @@ def test_the_newest_backup_on_a_target_is_checked_and_restored_by_settings_given
     out = json.loads(r.stdout)
     assert r.returncode == 0 and out["usable"] and out["appliance"] == "test-appliance" and out["file"].startswith("suveryn-backup_")
     r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", appliance["tmp"] / "recovery.key.missing")
-    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
+    # no key file: no key in it, as for a named backup (unpack); it was "the key opens none" (suveryn-tracker#165)
+    assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.not_a_key"
     psql("DELETE FROM chunks", appliance["dbs"][0])
     r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
     assert r.returncode == 0, r.stdout + r.stderr
@@ -598,6 +599,47 @@ def test_with_several_appliances_on_one_target_the_key_says_whose_backups_to_res
     assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
     r = tool(env, "--settings", given, "check", "newest", "--on-target", "--json", "--identity", stranger)
     assert r.returncode == 1 and json.loads(r.stdout)["failure"]["code"] == "backup.key_mismatch"
+
+
+@needs
+def test_a_replacement_whose_only_backup_is_damaged_is_told_so_not_that_its_key_is_wrong(appliance, tmp_path):
+    """On a replacement machine the key is tried on every backup on the target. A backup age can't read at all
+    (its header, or its first part) once counted as another appliance's, so the office was told its key opens
+    none and went looking for another key while its backup was broken (suveryn-tracker#165)."""
+    env, var = appliance["env"], appliance["var"]
+    backup = first_backup(appliance)  # the only backup on the target
+    data = backup.read_bytes()
+    (var / "host" / "hostname").write_text("suveryn-4f2a\n")  # the replacement
+    given = tmp_path / "restore-settings.json"
+    given.write_text(json.dumps({"target": "folder", "path": str(appliance["target"])}))
+    env = {**env, "SUVERYN_BACKUP_CONFIG": str(tmp_path / "none.json")}
+
+    def answer(*args, key=appliance["key"]):
+        r = tool(env, "--settings", given, *args, "--json", "--identity", key)
+        return r.returncode, json.loads(r.stdout.strip().splitlines()[-1])["failure"]["code"]
+
+    header = data.index(b"\n--- ")
+    payload = data.index(b"\n", header + 1) + 1
+    for where, at in (("its first line", 5), ("its header's last line", header + 10), ("its first part", payload + 100)):
+        broken = bytearray(data)
+        broken[at] ^= 0xFF
+        backup.write_bytes(bytes(broken))
+        assert answer("find") == (1, "backup.damaged"), where
+        assert answer("check", "newest", "--on-target") == (1, "backup.damaged"), where
+        r = tool(env, "--settings", given, "restore", "newest", "--on-target", "--yes", "--identity", appliance["key"])
+        assert r.returncode == 1 and "backup.damaged" in r.stdout + r.stderr, (where, r.stdout, r.stderr)
+    # the backup whole again: the right key opens it, another key is still the wrong key, and a file that holds
+    # no key says so (age refuses every backup for it, which would otherwise read as damage)
+    backup.write_bytes(data)
+    r = tool(env, "--settings", given, "find", "--json", "--identity", appliance["key"])
+    assert r.returncode == 0 and len(json.loads(r.stdout)["backups"]) == 1, r.stdout
+    stranger = tmp_path / "stranger.key"
+    subprocess.run(["age-keygen", "-o", str(stranger)], capture_output=True, check=True)
+    assert answer("find", key=stranger) == (1, "backup.key_mismatch")
+    not_a_key = tmp_path / "not-a-key.txt"
+    not_a_key.write_text("a shopping list\n")
+    assert answer("find", key=not_a_key) == (1, "backup.not_a_key")
+    assert answer("check", "newest", "--on-target", key=not_a_key) == (1, "backup.not_a_key")
 
 
 @needs

@@ -32,6 +32,14 @@ When a named backup doesn't decrypt, `check` and `restore` say which of three it
 file holds no recovery key. `backup.key_mismatch`: age says "no identity matched", so the key is another
 appliance's. `backup.damaged`: anything else, a backup the right key can't read. The second rests on age's own
 sentence (age gives no other sign and isn't translated); a test fails if a newer age words it differently.
+`find`, and `check` or `restore` with `--on-target`, try the key on every backup on the target. A key file
+with no key in it is `backup.not_a_key`. When the key opens none of them and at least one can't be read at
+all, the answer is `backup.damaged`, not `backup.key_mismatch`: a replacement whose only backup is damaged
+is told so, rather than sent looking for another key. Two limits: a wrong key on a target that also holds
+another appliance's damaged backup is answered "damaged", since whose backup age can't read isn't known; and
+a change in the part of a backup's header that names its key (some 90 characters) still reads as another
+key. A newest backup age can't read at all, beside an older whole one, is left out of what `find` lists, and the
+restore takes the older one (suveryn-tracker#166).
 
 | Unit | What it does |
 |---|---|

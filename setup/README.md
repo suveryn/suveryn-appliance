@@ -94,7 +94,7 @@ with a reference for a failure nobody planned for.
   under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
   offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
   the result says `checked` with the backup, or `failed` with a `message`, the backup service's own, passed
-  on as it is: `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.damaged`,
+  on as it is: `backup.not_a_key`, `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.damaged`,
   `backup.version_too_new` (made with a newer PostgreSQL than this appliance's, #57) or
   `backup.settings_invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its
