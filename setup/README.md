@@ -91,8 +91,14 @@ with a reference for a failure nobody planned for.
 `answers/restore-start` instead of `answers/start`:
 
 - **check**: `suveryn-backup --settings <target> find --json --identity <key>` (the backups that key opens,
-  under any appliance's name), then `check <the newest of them> --on-target --json`; the confirm screen
-  offers the others' dates (`choices`) and `POST restore/start` takes `{"file": …}`, one of them;
+  under any appliance's name), then `check <the newest of them> --on-target --json`. When the newest is
+  damaged (`find` names it under `damaged`, or its check says `backup.damaged`), the next older ones are
+  checked, up to three, and the newest whole one is offered with the warning `backup.newest_damaged`
+  (suveryn-tracker#166); when all of those are damaged, `backup.damaged` says from when to when (`newest`,
+  `oldest`). If the next one fails for another reason (made by a newer version, the target gone), the screen
+  says that reason, not that the newest was damaged. Each check may take up to 30 minutes, so four may take two
+  hours, with "checking" on the screen all the while. The confirm screen offers the other whole ones' dates (`choices`) and `POST
+  restore/start` takes `{"file": …}`, one of them;
   the result says `checked` with the backup, or `failed` with a `message`, the backup service's own, passed
   on as it is: `backup.not_a_key`, `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.damaged`,
   `backup.version_too_new` (made with a newer PostgreSQL than this appliance's, #57) or

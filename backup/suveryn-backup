@@ -969,7 +969,14 @@ def on_target(a, act) -> int:
 
 
 def backups_for_key(own: Path, identity: Path) -> list[dict]:
-    """The backups on the target the recovery key opens, newest first, under every appliance's name.
+    """The backups on the target the recovery key opens, newest first (``search``)."""
+    return search(own, identity)[0]
+
+
+def search(own: Path, identity: Path) -> tuple[list[dict], list[dict]]:
+    """The backups on the target the recovery key opens, newest first, under every appliance's name; and,
+    newest first, the backups age can't read at all in the same folders, which are this key's too as far as
+    can be told (suveryn-tracker#166: the web setup says when the newest is one of them).
 
     A replacement has a name of its own until the restore gives it the old one (VM check of #57: "there is
     no backup on the target"), and an office may have several appliances backing up to one disk or share.
@@ -991,7 +998,9 @@ def backups_for_key(own: Path, identity: Path) -> list[dict]:
             raise Failed("backup.damaged", f"the recovery key opens none of the {len(found)} backups on the target, "
                          f"and {len(damaged)} can't be read at all: {', '.join(damaged[:3])}")
         raise Failed("backup.key_mismatch", "the recovery key opens none of the backups on the target")
-    return sorted(mine, key=lambda b: b["when"], reverse=True)
+    folders = {b["appliance"] for b in mine}
+    damaged = [b for b, refused in seen if refused == "backup.damaged" and b["appliance"] in folders]
+    return sorted(mine, key=lambda b: b["when"], reverse=True), sorted(damaged, key=lambda b: b["when"], reverse=True)
 
 
 def opens(file: Path, identity: Path) -> str | None:
@@ -1272,19 +1281,22 @@ def cmd_request(_a) -> int:
 
 
 def cmd_find(a) -> int:
-    """The backups on the target this recovery key opens: what a replacement may restore, and from when."""
+    """The backups on the target this recovery key opens: what a replacement may restore, and from when; and
+    those in the same folders it can't read at all (``damaged``)."""
     s = settings(for_writing=False)
     try:
         if s is None:
             raise Failed("backup.settings_invalid", "no backup target in the settings")
         with Target(s) as own:
-            mine = backups_for_key(own, a.identity)
+            mine, damaged = search(own, a.identity)
     except Failed as e:
         print(json.dumps({"found": False, "failure": e.failure()}) if a.json else f"find failed ({e.where()}): {e}")
         return 1
     out = [{k: v for k, v in b.items() if k != "when"} for b in mine]
-    print(json.dumps({"found": True, "backups": out}, indent=1) if a.json
-          else "\n".join(f"{b['at']}  {b['size']:>14,}  {b['appliance']}  {b['file']}" for b in out))
+    bad = [{k: v for k, v in b.items() if k != "when"} for b in damaged]
+    print(json.dumps({"found": True, "backups": out, "damaged": bad}, indent=1) if a.json
+          else "\n".join([f"{b['at']}  {b['size']:>14,}  {b['appliance']}  {b['file']}" for b in out]
+                         + [f"{b['at']}  {b['size']:>14,}  {b['appliance']}  {b['file']}  (damaged)" for b in bad]))
     return 0
 
 
