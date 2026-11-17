@@ -8,6 +8,7 @@ files, llama-server presets, and the test PDF. The installation itself is checke
 import importlib.machinery
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,6 +20,11 @@ loader = importlib.machinery.SourceFileLoader("provision", str(HERE / "suveryn-p
 spec = importlib.util.spec_from_loader("provision", loader)
 p = importlib.util.module_from_spec(spec)
 loader.exec_module(p)
+
+# suveryn-core at the pinned commit (CI: SUVERYN_CORE): llama-server's presets are written with its models/scripts/presets.py.
+CORE = Path(os.environ.get("SUVERYN_CORE", HERE.parents[1] / "suveryn-core"))
+with_core = pytest.mark.skipif(not (CORE / "models" / "scripts" / "presets.py").exists(),
+                               reason=f"no suveryn-core with models/scripts/presets.py at {CORE} (set SUVERYN_CORE)")
 
 
 @pytest.mark.parametrize(("site", "may", "says"), [
@@ -70,15 +76,32 @@ def test_the_test_runner_reads_the_same_units_systemd_does():
         assert u.get("User") and u.get("ExecStart")
 
 
-def test_presets_come_from_the_manifest():
+@with_core
+def test_presets_come_from_the_manifest(monkeypatch):
+    """suveryn-tracker#189: each model's options are the manifest's, written by core's script, not settings of our own."""
+    monkeypatch.setattr(p, "CORE", CORE)
     llms = [{"id": "qwen3.8-27b", "file": "Q.gguf", "default": True,
-             "llama_server_args": "-ngl 99 --jinja --chat-template-kwargs '{\"enable_thinking\":false}'"},
-            {"id": "mistral-small-3.2-24b", "file": "M.gguf", "llama_server_args": "-ngl 99"}]
+             "llama_server_args": "-ngl 99 -ctk q8_0 --jinja --chat-template-kwargs '{\"enable_thinking\":false}'"},
+            {"id": "mistral-small-3.2-24b", "file": "M.gguf", "llama_server_args": "-ngl 99 -ctk q4_0 -ctv q4_0"}]
     ini = p.presets(llms)
     qwen, mistral = ini.split("[qwen3.8-27b]")[1].split("[mistral-small-3.2-24b]")
     assert f"model = {p.MODELS / 'Q.gguf'}" in qwen and "jinja = true" in qwen and "load-on-startup = true" in qwen
-    assert 'chat-template-kwargs = {"enable_thinking":false}' in qwen
+    assert 'chat-template-kwargs = {"enable_thinking":false}' in qwen and "ctk = q8_0" in qwen
+    assert "ctk = q4_0" in mistral and "ctv = q4_0" in mistral
     assert "jinja" not in mistral and "load-on-startup" not in mistral
+    assert "[*]" not in ini  # no shared settings of the appliance's own
+
+
+@with_core
+def test_the_pinned_manifest_gives_mistral_its_4_bit_cache(monkeypatch):
+    """With the manifest of the core the appliance pins: Mistral's cache is the one that fits a 24 GB card (#133)."""
+    import configparser
+
+    monkeypatch.setattr(p, "CORE", CORE)
+    llms = [m for m in json.loads((CORE / "models" / "manifest.json").read_text())["models"] if m["role"] == "llm"]
+    ini = configparser.ConfigParser(interpolation=None)
+    ini.read_string(p.presets(llms))
+    assert ini["mistral-small-3.2-24b"]["ctk"] == ini["mistral-small-3.2-24b"]["ctv"] == "q4_0"
 
 
 def test_the_test_pdf_is_a_valid_one_page_pdf(tmp_path):
@@ -382,7 +405,22 @@ def test_the_language_models_come_from_an_installed_bundle_where_it_is(tmp_path,
     assert p.bundled(m) is None  # the wrong size or hash: not this model
     f.write_bytes(data)
     assert p.bundled(m) == f
-    assert f"model = {f}" in p.presets([{**m, "path": str(f), "default": True}])
+
+
+@with_core
+def test_a_model_from_a_bundle_is_loaded_where_the_bundle_has_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(p, "CORE", CORE)
+    f = tmp_path / "bundles" / "model" / "x" / "1" / "x.gguf"
+    assert f"model = {f}" in p.presets([{"id": "x", "file": "x.gguf", "path": str(f), "default": True,
+                                         "llama_server_args": "-ngl 99"}])
+
+
+@with_core
+def test_a_manifest_whose_options_cant_be_written_stops_provisioning_with_a_message(monkeypatch):
+    monkeypatch.setattr(p, "CORE", CORE)
+    for model in ({"id": "x", "file": "x.gguf"}, {"id": "x", "file": "x.gguf", "llama_server_args": "65536"}):
+        with pytest.raises(SystemExit):
+            p.presets([model])
 
 
 def test_on_the_read_only_system_an_air_gapped_first_boot_without_a_bundle_says_where_the_models_come_from(tmp_path, monkeypatch):
