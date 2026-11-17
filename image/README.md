@@ -1,20 +1,13 @@
-# The appliance image
+# The legacy Packer test image
 
-> **For testing with fictional documents only. Never an office's records.** This Packer image has no
+> **For testing with fictional documents only. Never an office's records.** This image has no
 > encrypted data partition: whoever has the disk can read the documents, conversations and accounts on
-> it. The appliance offices get is the read-only, verified system of the approved design
-> ([`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)), built with mkosi in
-> [`mkosi/`](mkosi/README.md), with its data partition encrypted (LUKS2, TPM or recovery key). That system
-> carries the sūveryn services (#47); this build is retired once it has been installed on a real PC and
-> through first boot (#48).
+> it. The appliance is the mkosi image in [`mkosi/`](mkosi/README.md), which also says when this one
+> is retired.
 
-A **bare-metal disk image**: flashed onto the office's own server, which then runs sūveryn directly
-on its hardware (like pfSense or TrueNAS). It is not a VM image. GPU passthrough into a VM is
-unreliable across arbitrary office hardware, and NVIDIA's GeForce driver licence is written for
-hardware the office owns, not for virtualised datacenter-style deployment.
-
-Packer and QEMU are only the build tools: Ubuntu 24.04 is installed into a disk file inside a QEMU
-machine, provisioned and hardened there, and that disk file is the image.
+A bare-metal disk image, for a test machine. Packer and QEMU are only the build tools: Ubuntu 24.04
+is installed into a disk file inside a QEMU machine, provisioned and hardened there, and that disk
+file is the image.
 
 ```bash
 cd image
@@ -40,7 +33,7 @@ each part only when it matches what it should be built from.
 | Network | Needed (packages, pinned downloads) | Per network mode (below) |
 | OS | Ubuntu 24.04 minimal, `linux-generic`, firmware, UEFI boot from the removable path | The root file system grows to the disk |
 | NVIDIA | Ubuntu's open kernel modules (branch 580, signed: Secure Boot works), CUDA runtime | **GPU licence check** on the real card (`SITE`) |
-| Services | PostgreSQL 16 + pgvector; suveryn-core with its embedding and Docling models; llama-server (llama.cpp, CUDA for Ampere, Ada and Hopper); Keycloak with the theme; the reader sandbox; the chat UI; nginx with the header snippets | Database roles and passwords; the LLM files; Keycloak's host name and the production realm with a fresh client secret, built from the image's suveryn-core checkout (no network needed); TLS; the nginx site; the services started and `verify` run |
+| Services | PostgreSQL 16 + pgvector; suveryn-core with its embedding and Docling models; llama-server (llama.cpp, CUDA for Ampere, Ada, Hopper and Blackwell, and the A100); Keycloak with the theme; the reader sandbox; the chat UI; nginx with the header snippets | Database roles and passwords; the LLM files; Keycloak's host name and the production realm with a fresh client secret, built from the image's suveryn-core checkout (no network needed); TLS; the nginx site; the services started and `verify` run |
 | Settings | None | Network mode, firewall and updates per mode (below) |
 | Secrets | **None in the image**: no passwords, keys, certificates or machine-id | All generated on the box |
 
@@ -67,6 +60,7 @@ CASES_ACCESS=members             # who sees a new case by default: members (the 
 CASES_KEEP=manual                # how long a closed case is kept: 6m | 1y | 5y | manual (the default: until deleted by hand)
 CONVERSATIONS_KEEP=manual        # how long saved conversations are kept, from their last change: the same choices and default
 MODELS_FROM=/media/suveryn-models
+PACKS_FROM=/media/suveryn-packs  # optional: the packs of a suveryn-packs checkout, unsigned (a test machine only)
 TLS_CERT=/boot/efi/suveryn/server.pem   # optional: the office's certificate (full chain) and key;
 TLS_KEY=/boot/efi/suveryn/server.key    # without them a local CA on the box issues one
 ```
@@ -104,42 +98,24 @@ access except, when connected, for the LLM files.
 
 ## Hardening
 
+This image has the same hardening settings as the appliance image
+([`mkosi/`, *Hardening*](mkosi/README.md#hardening)): the kernel settings, the core-dump limits, the
+1 GB journal, the services on loopback and the identity. In addition, Packer only:
+
 - **Minimal installation:** `ubuntu-server-minimal`. Snap, ModemManager, iSCSI, multipath, apport and
   the Ubuntu Pro client are removed; the CUDA compiler, build tools, Node and every cache go out after
   the build.
-- **One door in, a short list out:** ufw allows only 80 (redirects to https) and 443 in; the network
-  mode decides what goes out (above). PostgreSQL, Keycloak, llama-server
-  and the gateway listen on loopback only. Nothing answers on 80/443 until first boot has written the
-  office's site.
+- **ufw** lets in only 80 (redirects to https) and 443. Nothing answers on them until first boot has
+  written the office's site.
 - **No SSH server and no login:** the build user and the SSH server are removed last, and root is
   locked. Remote support is decided for connected appliances only (decision D6, #43) and isn't built.
-- **Kernel settings:** pointer and dmesg restrictions, BPF hardening, kexec disabled, ptrace limited
-  to admins, no redirects or source routing.
-- **No core dumps** (they would hold document text), and a persistent journal capped at 1 GB.
-- **Identity:** every flashed box gets its own machine-id, certificates and secrets at first start.
-- **Already provisioned:** the reader sandbox, the gateway's own hardening, and the proxy's security
-  headers.
 
 ## Licences
 
-The image redistributes NVIDIA's driver (Ubuntu's `linux-modules-nvidia-580-open-generic`,
-`nvidia-utils-580`, `libnvidia-compute-580` and the `nvidia-firmware-580` package they need). That
-is allowed (decided October 2026, development context §2, tracker #49): the open kernel modules are
-MIT, and the NVIDIA Driver License Agreement (§1.1(d)) lets the driver be distributed for use with an
-open-source kernel on two conditions, which every build keeps to:
-
-- **The binaries are Canonical's packages, unmodified.** Nothing patches, re-signs or translates the
-  driver's user-space libraries or firmware. (Signing the kernel modules would be fine, they are MIT;
-  Canonical's are signed already.)
-- **The licence text ships with the image.** In this build the packages' own
-  `/usr/share/doc/*/copyright` files stay in place (`cleanup.sh` doesn't remove them). The mkosi
-  build has no `/usr/share/doc` (`WithDocs=no`), so the text is in
-  `mkosi/mkosi.extra/usr/share/suveryn/licences/`, and `mkosi.postinst.chroot` stops a build that has
-  the driver without it.
-
-The licence is between the office and NVIDIA. For GeForce cards it only covers hardware the office
-owns, outside a datacenter (development context §2); that is a condition on the office's use, not on
-this image.
+NVIDIA's driver ships on the two conditions the handbook's development context §2 sets (tracker #49).
+In this image the licence text is the packages' own `/usr/share/doc/*/copyright` files, which
+`cleanup.sh` keeps; the mkosi image keeps it in
+[`licences/`](mkosi/mkosi.extra/usr/share/suveryn/licences/README.md).
 
 ## Testing
 
@@ -150,13 +126,3 @@ write the image to its disk from a rescue system
 (`zstd -dc suveryn-appliance.img.zst | dd of=/dev/nvme0n1 bs=4M conv=fsync`), put `first-boot.env`
 on its EFI partition, boot it, and check that `suveryn-provision verify` passes, as it did on the
 dev pod.
-
-## Open
-
-- **Remote support:** decided for connected appliances only, never air-gapped (decision D6, #43;
-  [`docs/design/appliance-architecture.md`](../docs/design/appliance-architecture.md)). Not built:
-  none in the image.
-- **Updates for offline installations:** a signed bundle on media, tied to the signing decisions
-  (development context §8, §11).
-- **`first-boot.env`:** the web setup ([`setup`](../setup/README.md)) replaces it once the real
-  provisioning through the web setup (#37 part 6b) has passed on a machine.

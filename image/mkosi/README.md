@@ -1,10 +1,16 @@
-# The read-only system (mkosi)
+# The appliance image (mkosi)
 
 The appliance's system as the design describes it ([`docs/design/appliance-architecture.md`](../../docs/design/appliance-architecture.md),
-tracker #39): read-only, verified block by block, with everything the office writes on a separate
-data partition. Built with [mkosi](https://github.com/systemd/mkosi) (decision D1). **This is the only
-image an office's records may go on**: the Packer build in [`image/`](../README.md) has no encrypted
-data partition and is for testing with fictional documents only, until it is retired.
+tracker #39): read-only, verified block by block, with everything the office writes on a separate,
+encrypted data partition. Built with [mkosi](https://github.com/systemd/mkosi) (decision D1) on
+Ubuntu 26.04, with PostgreSQL 18. It runs on the office's own machine, not in a VM: GPU passthrough
+is unreliable across office hardware, and NVIDIA's GeForce driver licence is written for hardware
+the office owns.
+
+**This is the appliance, and the only image an office's records may go on.** The Packer build in
+[`image/`](../README.md) (Ubuntu 24.04, PostgreSQL 16, no encrypted data partition) is a legacy
+test image, for fictional documents only. It is retired by #60, after the installation on a real
+PC (#48) and Secure Boot (#45).
 
 **State:**
 
@@ -20,9 +26,11 @@ data partition and is for testing with fictional documents only, until it is ret
 
 - an installation from the stick onto a real PC, through first boot and provisioning with the real
   services (#48);
-- Secure Boot signing (#45).
+- Secure Boot signing (#45);
+- the two release keys: until they are added the image trusts no key and refuses every bundle
+  ([Signed bundles](#signed-bundles-36)).
 
-Until both are done, no image is released to an office.
+Until both #48 and #45 are done, no image is released to an office.
 
 ## Build
 
@@ -38,18 +46,18 @@ sudo mkosi -f --profile test build   # the test system: the same layout, small (
 
 The appliance's build stops without `prebuilt/`, or when a part in it isn't the pinned one
 (`suveryn-provision check-prebuilt`). `prebuild-services` needs an Ubuntu 26.04 host with CUDA 13.4 from NVIDIA's 26.04 repository (no
-GPU needed; it installs Java and the build tools itself) and takes about 25 minutes on 32 cores; the
-services come to about 13 GB (12 GiB as slot A's uncompressed EROFS). mkosi itself needs a host where
+GPU needed; it installs Java and the build tools itself). mkosi itself needs a host where
 it may create namespaces: a virtual or real machine, not a container like a RunPod pod, where "mkosi was forbidden to unshare namespaces" (#47). Both together need about 60 GB free.
+
+Measured on the 24.04 image (22 and 23 October 2026): the prebuild took about
+25 minutes on 32 cores, the services came to about 13 GB (12 GiB as slot A's uncompressed EROFS),
+and slot A held 14.5 GiB of its 32.
 
 Needs Ubuntu 26.04 as the build host, like the image (systemd 259: `systemd-repart`, `ukify`), and
 `bubblewrap`, `erofs-utils`, `dosfstools`, `mtools`, `kmod`, `cpio`, `systemd-boot`, `systemd-ukify` and
 `systemd-repart`. The result
 is in `mkosi.output/`: `suveryn_<version>.raw` (the disk image: EFI partition, slot A, its verity),
-and the boot file, kernel and initrd beside it.
-
-The image was Ubuntu 24.04 until #57, built with upstream mkosi 25.3 because 24.04's own mkosi 20.2
-couldn't build a noble initrd; 26.04's own mkosi 26 builds resolute. Packages come from Ubuntu's archives **over HTTPS only**
+and the boot file, kernel and initrd beside it. Packages come from Ubuntu's archives **over HTTPS only**
 (`mkosi.sandbox/etc/apt/sources.list.d/mkosi.sources`; mkosi would otherwise use HTTP).
 
 ## What is where
@@ -82,6 +90,22 @@ couldn't build a noble initrd; 26.04's own mkosi 26 builds resolute. Packages co
   kept in `/usr/share/factory/var`, and systemd-tmpfiles copies whatever is missing on a fresh data
   partition.
 
+## Hardening
+
+- **Built from a list of packages**, not an Ubuntu installation; no SSH server.
+- **One door in:** the image's inbound table (`/usr/lib/suveryn/inbound.nft`) lets in only 80 and 443,
+  DHCP's answers, mDNS, ICMP and ICMPv6, loopback and replies to the appliance's own connections;
+  the network mode decides what goes out. PostgreSQL, Keycloak,
+  llama-server and the gateway listen on loopback only.
+- **Kernel settings** (`/usr/lib/sysctl.d/90-suveryn.conf`): pointer and dmesg restrictions, BPF
+  hardening, kexec disabled, ptrace limited to admins, no redirects or source routing.
+- **Core dumps** would hold document text. The image sets `fs.suid_dumpable = 0` and a hard core
+  limit of 0 for sign-in sessions (`/etc/security/limits.d/90-suveryn.conf`); whether a crashing
+  service leaves none is to be checked on a built image and fixed (#206).
+- **The journal** is persistent, on the data partition, capped at 1 GB (`journald.conf.d`).
+- **Identity:** every appliance makes its own machine-id, certificates and secrets at its first start;
+  the image holds none.
+
 ## The encrypted data partition (#34)
 
 - **Installing** (`/usr/lib/suveryn/install-disk <disk>`, the installer's disk step, below): erases
@@ -107,11 +131,11 @@ Known:
 
 ## Installer mode and the installer (#37)
 
-The installer stick holds the **same** system as an installed appliance (design note, "The installer"),
-made by `make-stick`: the image's EFI partition, slot A and verity, block for block; a partition
-named `suveryn-logs` (FAT, label `SUVLOGS`, 512 MiB) for the installer's log; and a partition named
-`suveryn-bundles` that fills the rest of the stick, exFAT (label `SUVBUNDLES`: exFAT labels hold 11
-characters), with the signed bundles in folders of their own.
+The installer stick and its partitions are designed in the design note's
+[*The installer*](../../docs/design/appliance-architecture.md#the-installer-the-same-system-in-installer-mode).
+`make-stick` makes it: the image's partitions block for block, the logs partition, and the bundles
+partition with each signed bundle in a folder of its own (label `SUVBUNDLES`: exFAT labels hold 11
+characters).
 
 ```bash
 sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundles ./qwen3-30b-a3b-2026.10.1 …
@@ -120,7 +144,8 @@ sudo image/mkosi/make-stick mkosi.output/suveryn_<version>.raw /dev/sdX --bundle
 - **Every run of the installer is logged on the stick** (`install-log`, #144): one folder per run on
   the logs partition, with a summary, every line and command of the installation, the kernel's
   messages and the hardware found; never the recovery key. Plug the stick into a laptop and open the
-  drive SUVLOGS. What is kept and what never is: the design note, "The installer's log".
+  drive SUVLOGS; `install-log list` at a shell on the stick names the runs. What is kept and what
+  never is: the design note, "The installer's log".
 - **One system, two modes, decided in the initrd** (`suveryn-boot-mode`, before anything else
   starts). The disk the firmware started from (systemd-boot's `LoaderDevicePartUUID`) has a partition
   named `suveryn-data`: **installed**, it is unlocked and mounted on `/var`. It has none:

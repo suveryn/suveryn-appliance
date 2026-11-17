@@ -110,7 +110,7 @@ NODE = OPT / "node"
 LOCAL_CA = Path("/usr/local/share/ca-certificates/suveryn-local-ca.crt")  # by full path: the services get a minimal PATH
 
 # The Ubuntu releases this script installs on, and the PostgreSQL major version each one's archive has
-# with pgvector. 26.04 replaces 24.04 once the read-only system's image is built on it (#57).
+# with pgvector. 24.04 is only for the legacy Packer test image (until #60) and the RunPod dev pod.
 POSTGRES_FOR_UBUNTU = {"24.04": "16", "26.04": "18"}
 # Keycloak runs on Java 21 on both, by this path: 26.04 also has newer Java, which Keycloak's release
 # hasn't been checked on (#57). The appliance is x86-64 only (its GPU's CUDA).

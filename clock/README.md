@@ -1,7 +1,8 @@
 # The clock
 
 `suveryn-clock` keeps the appliance's clock right where no time server does (decision, 30 October 2026), from the
-browsers of the people signed in, through suveryn-core's gateway (its README, *The clock*).
+browsers of the people signed in, through suveryn-core's gateway (its README, *The clock*). Spec: the design note's
+[*The clock*](../docs/design/appliance-architecture.md#the-clock).
 
 **Why.** Two-step sign-in accepts a code from one 30-second step either side of the appliance's clock. A phone
 keeps its time from the mobile network; the appliance keeps it with `systemd-timesyncd`: `ntp.ubuntu.com` in

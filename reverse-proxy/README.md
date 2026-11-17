@@ -1,7 +1,8 @@
 # Reverse proxy
 
-nginx in front of everything, on one https origin per appliance (development context §3: the chat
-UI is served on the same origin as the API):
+nginx in front of everything, on one https origin per appliance. Spec: the handbook's
+[development context](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md), §3 (the chat UI on the API's origin), and suveryn-core's
+content security policy (below):
 
 | Path | Goes to |
 |---|---|

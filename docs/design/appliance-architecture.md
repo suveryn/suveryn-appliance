@@ -6,9 +6,7 @@ encryption), #35 (identity, "system intact"), #36 (signed bundles), #37 (install
 
 ## In short
 
-Today the appliance is an ordinary Ubuntu installation: the image is written to the disk with `dd`,
-and the first boot changes it in place. This design turns it into an appliance in the stricter
-sense, like the systems in network equipment and phones:
+The appliance is one in the strict sense, like the systems in network equipment and phones:
 
 1. **The system is read-only and verified.** Everything sūveryn runs (Ubuntu, the NVIDIA libraries,
    PostgreSQL, Keycloak, llama-server, suveryn-core) sits in one image that can't be changed on the
@@ -128,8 +126,7 @@ is the only thing that starts. It:
 6. checks and copies the chosen model bundles (#36, C3);
 7. writes the name and network settings (C4), installs the boot file, and restarts into slot A.
 
-The `first-boot.env` file on the EFI partition, as used today, goes away: nothing the office sets
-ever touches the unencrypted EFI partition.
+Nothing the office sets ever touches the unencrypted EFI partition (there is no `first-boot.env`).
 
 ### The installer's log (#144)
 
@@ -172,25 +169,24 @@ the restart; without this an installation left nothing behind but the last line 
   its data partition: the log is not copied onto the installed disk (decided 13 November 2026; the
   installer destroys its copy of the disk key before its last steps).
 
-The tool is `install-log` (`/usr/lib/suveryn/`); `install-log list` at a shell on the stick names the
-runs. On a laptop the partition appears as a drive named SUVLOGS.
+The tool and how to read the log: [`image/mkosi/README.md`](../../image/mkosi/README.md#installer-mode-and-the-installer-37).
 
 ## First boot and provisioning
 
 `suveryn-provision` stays, split cleanly:
 
-- **Image build** (`suveryn-provision image`, as today): everything that is the same for every
-  office goes into the system. That now also includes what first boot writes today outside `/var`:
-  the systemd units (including the network mode's), the nginx snippets, the reader sandbox's sudo
-  rule, Keycloak's built server, and Python's precompiled files (the system is read-only, so they
-  can't be written later).
+- **Image build**: everything that is the same for every office goes into the system, including
+  what an ordinary Ubuntu writes at first boot outside `/var`: the systemd units (including the
+  network mode's), the nginx snippets, the reader sandbox's sudo rule, Keycloak's built server, and
+  Python's precompiled files (the system is read-only, so they can't be written later).
 - **First boot** (after the web setup, #37): everything unique to the office, all of it on the data
   partition: database roles and passwords, Keycloak's realm and secret, TLS, the site, the network
   mode, the models' settings.
 
-What changes because the system is read-only:
+What differs from an ordinary Ubuntu (the legacy [Packer test image](../../image/README.md)) because
+the system is read-only:
 
-| Today | Then |
+| Ordinary Ubuntu | Read-only system |
 |---|---|
 | ufw writes its rules to `/etc/ufw` | A fixed inbound nftables table in the image (80 and 443 in); the network mode's outbound table as built in #38 |
 | The local CA is added to `/etc/ssl/certs` (`update-ca-certificates`) | A trust bundle on the data partition, given to the services that need it (`SSL_CERT_FILE`) |
@@ -207,8 +203,9 @@ stages, each its own change (decided 23 October 2026):
    the run-time packages (provision's `RUNTIME_PACKAGES`), the services' users (`sysusers.d`), their
    folders on the data partition (`tmpfiles.d`), the reader's sudo rule, PostgreSQL without a cluster
    (made at first boot, its configuration on the data partition), a fixed inbound table instead of
-   ufw (80 and 443, DHCP, mDNS; both profiles), the Packer image's hardening (sysctl, no core dumps,
-   a 1 GB journal; both profiles), and the trust bundle on the data partition
+   ufw (80 and 443, DHCP, mDNS; both profiles), the
+   [hardening](../../image/mkosi/README.md#hardening) (sysctl, no core dumps, a 1 GB journal; both
+   profiles), and the trust bundle on the data partition
    (`/etc/suveryn/tls/ca-bundle.crt`, given to the gateway as `SSL_CERT_FILE`).
 2. **sūveryn itself**: suveryn-core and its Python, compiled; the embedding and Docling models in
    the read-only system (not the data partition); the chat UI; Keycloak, its writable parts on the
@@ -240,13 +237,8 @@ into `image/mkosi/prebuilt/`, which the image build copies in and checks against
 `/opt/suveryn/core` carries no git history; the realm builder reads the realm file there and checks
 it against `realm-lock.json`'s sha256.
 
-Built and inspected on a virtual machine (22 and 23 October 2026): slot A holds 14.5 GiB of its 32.
-The services come to about 13 GB (12 GiB as slot A's uncompressed EROFS), and the prebuild takes about
-25 minutes on 32 cores ([`image/mkosi/README.md`](../../image/mkosi/README.md)). mkosi needs a host
-where it may create namespaces (a virtual or real machine, not a container like a RunPod pod); the
-prebuild runs in an Ubuntu 26.04 + CUDA 13.4 container or machine, with no GPU. Those figures are from
-the 24.04 image; the image is built on 26.04 since #57. The Packer build stays for developing and
-testing suveryn-core on a Pod.
+How full slot A is, the build's size and time, and what the build host needs:
+[`image/mkosi/README.md`](../../image/mkosi/README.md#build).
 
 ### Backups (#33)
 
@@ -277,7 +269,6 @@ their PC's time from Status. The appliance's side, as root and within its own bo
   marks it good. If it fails three times, systemd-boot starts the previous slot again by itself.
 - An expired support agreement doesn't block an update (decision, 28 October 2026): *Updates and models*
   says support has ended and installs anyway, and everyone who signs in sees the notice (#35, #41).
-  Nothing is ever blocked by the agreement.
 
 ### The office's data during an update
 
@@ -342,8 +333,8 @@ verity, the boot file and the partition definitions directly from Ubuntu's packa
 an installer ([`image/mkosi`](../../image/mkosi/README.md)). The sūveryn services are built beforehand
 by `image/mkosi/prebuild-services` into `image/mkosi/prebuilt/` (suveryn-core compiled, llama-server
 with CUDA and its libraries, Keycloak, the chat UI); the image build copies them in and checks them
-against the pins (`suveryn-provision check-prebuilt`). The Packer build stays only for developing and
-testing suveryn-core on a Pod, until it is retired.
+against the pins (`suveryn-provision check-prebuilt`). The legacy Packer test image, and when it
+goes: [`image/mkosi/README.md`](../../image/mkosi/README.md).
 
 ## Testing
 
@@ -352,20 +343,20 @@ testing suveryn-core on a Pod, until it is retired.
   block, asks for the recovery key when the TPM state changes, updates into slot B and falls back to
   A when B is broken. This runs on any machine, slowly without hardware acceleration, and
   faster on one with KVM (decision D4).
-- **On real hardware with the GPU**, once: the full image from a real USB stick to a working chat
-  over HTTPS, as `image/README.md` already plans.
+- **On real hardware with the GPU**, once (#48): the full image from a real USB stick to a working
+  chat over HTTPS.
 
 ## Build order
 
-| Step | Ticket | What | Tested |
-|---|---|---|---|
-| 1 | #39 | mkosi build: read-only system with verity, boot file, partition definitions, the `/etc` links; boots with an unencrypted data partition | VM |
-| 2 | #34 | Encrypted data partition, TPM unlock, recovery key and its console prompt | VM with swtpm |
-| 3 | #35 | Identity at installation; boot measurement and root hash reported | VM |
-| 4 | #36 | Bundle partition and verification | VM |
-| 5 | #37 | Installer mode and the console screens | VM, then a real USB stick |
-| 6 | #40 | Slot B, updates from a folder or download, the health check and fall-back | VM |
-| 7 | #43 | The support session (after the portal's relay exists) | VM |
+| Step | Ticket | What | Tested | Done |
+|---|---|---|---|---|
+| 1 | #39 | mkosi build: read-only system with verity, boot file, partition definitions, the `/etc` links; boots with an unencrypted data partition | VM | Yes |
+| 2 | #34 | Encrypted data partition, TPM unlock, recovery key and its console prompt | VM with swtpm | Yes |
+| 3 | #35 | Identity at installation; boot measurement and root hash reported | VM | Yes |
+| 4 | #36 | Bundle partition and verification | VM | Yes |
+| 5 | #37 | Installer mode and the console screens | VM, then a real USB stick | Yes |
+| 6 | #40 | Slot B, updates from a folder or download, the health check and fall-back | VM | No |
+| 7 | #43 | The support session (after the portal's relay exists) | VM | No |
 
 ## Decisions (14 October 2026)
 
@@ -378,11 +369,13 @@ testing suveryn-core on a Pod, until it is retired.
 | D5 | No swap on disk | **Yes** (zram if memory runs short) |
 | D6 | Remote support for connected appliances only, as above (#43) | **Yes**, details in #43 |
 
-## Decisions for signed bundles (14 October 2026, #36)
+## Decisions for signed bundles (#36)
+
+D7 to D9 decided 14 October 2026, D10 on 3 November 2026.
 
 | # | Decision | Outcome |
 |---|---|---|
 | D7 | How bundles are signed | **Ed25519, checked with openssl** (already in the system for the identity). A signed manifest lists every file's size and SHA-256 |
 | D8 | Where the private signing keys live | **AWS KMS** (key spec `ECC_NIST_EDWARDS25519`): the key never leaves it, and only a 108-byte text with the manifest's SHA-256 is sent to be signed, never the files |
 | D9 | How a key is replaced | **Two trusted keys in every system**, the current one and a spare. A lost or leaked key is retired by an update, signed with the other, that leaves it out and brings a new spare |
-| D10 (3 November 2026) | How the certified packs reach an appliance | **A separate, versioned bundle per pack** (kind `packs`, name the pack's folder, version a release of the pack), by the same path as the models: checked, installed under `bundles/packs/<name>/<version>`, and made the pack's current version by a link in `/var/lib/suveryn/packs`, which the gateway reads (`SUVERYN_PACKS_DIR`). Not in the system image: a pack is what an office pays for and changes on its own cadence; the installer takes every valid packs bundle on the stick, a connected appliance will take them from suveryn.com (the update, #40). Every installed version stays, so an older bundle installed again is the way back |
+| D10 | How the certified packs reach an appliance | **A separate, versioned bundle per pack** (kind `packs`, name the pack's folder, version a release of the pack), by the same path as the models: checked, installed under `bundles/packs/<name>/<version>`, and made the pack's current version by a link in `/var/lib/suveryn/packs`, which the gateway reads (`SUVERYN_PACKS_DIR`). Not in the system image: a pack is what an office pays for and changes on its own cadence; the installer takes every valid packs bundle on the stick, a connected appliance will take them from suveryn.com (the update, #40). Every installed version stays, so an older bundle installed again is the way back |

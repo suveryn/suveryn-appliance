@@ -4,7 +4,7 @@ How models and packs (now) and system updates (#40, later) reach an appliance: a
 folder whose manifest is signed by Sūveryn Labs (tracker #36). The appliance checks the signature
 against the keys built into its read-only system, then every file, before anything is used. One
 verification path for models, packs and updates. Decisions D7 to D9 and D10 in the
-[design note](../docs/design/appliance-architecture.md#decisions-for-signed-bundles-14-october-2026-36).
+[design note](../docs/design/appliance-architecture.md#decisions-for-signed-bundles-36).
 
 | Where | What |
 |---|---|
