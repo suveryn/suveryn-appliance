@@ -9,7 +9,7 @@ Start with the private [suveryn-handbook](https://github.com/suveryn/suveryn-han
 <!-- shared: copied from suveryn-handbook/context/claude-md-shared.md; change it there, never here -->
 
 1. **Read the handbook's [*Start here*](https://github.com/suveryn/suveryn-handbook/blob/main/context/development-context.md#start-here)** before any work: the design principles, the project's words, how a change reaches `main`. If you can't open it, stop and say so. In a long session, read it again when the conversation has been summarised.
-2. **One issue, one branch, one PR.** The change has an issue in suveryn-tracker and the branch is named for it. No branch is built on an unmerged branch. A coding agent never pushes: it delivers its branch into the founder's local clone without switching that clone's branch, and only the founder pushes and merges.
+2. **One issue, one branch, one PR.** The change has an issue in suveryn-tracker and the branch is named for it. No branch is built on an unmerged branch. A coding agent never pushes: it delivers its commits as a branch fetched from a git bundle into the founder's local clone, never switching the branch that clone or another session is on, and checks the result is identical to what it built. Before it is delivered, a fresh session that did not build it reviews it ([the reviewer's brief](https://github.com/suveryn/suveryn-handbook/blob/main/context/review-brief.md)). Only the founder pushes and merges.
 3. **Before you ask for a merge**, say which design principle the change bends, if any, and why. A bent principle needs the founder's decision in the handbook before the merge.
 
 <!-- /shared -->
