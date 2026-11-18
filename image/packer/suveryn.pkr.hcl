@@ -2,7 +2,7 @@
 # own server, not a VM image. Packer and QEMU are only the build tools: Ubuntu 24.04 is installed
 # into a disk file in a QEMU machine, provisioned, hardened, and the disk file is the image.
 #
-#   cd image && packer init . && PKR_VAR_build_password=$(openssl rand -base64 24) packer build .
+#   cd image/packer && packer init . && PKR_VAR_build_password=$(openssl rand -base64 24) packer build .
 #   (no KVM, e.g. a RunPod pod: add -var accelerator=tcg; much slower)
 #
 # Build time (this template) vs first boot (suveryn-first-boot.service): see README.md.
@@ -47,7 +47,7 @@ variable "output_dir" {
 }
 
 locals {
-  appliance = abspath("${path.root}/..")
+  appliance = abspath("${path.root}/../..")
 }
 
 source "qemu" "suveryn" {
@@ -102,7 +102,7 @@ build {
   # reverse proxy, the reader sandbox, the network-mode tool, the Keycloak theme and realm, and these
   # image scripts. build.sh unpacks it into /opt/suveryn/appliance.
   provisioner "shell-local" {
-    inline = ["tar -C '${local.appliance}' --exclude=.git --exclude='./image/output' --exclude='./keycloak/theme/build' --exclude='__pycache__' -czf '${var.output_dir}-appliance.tar.gz' ."]
+    inline = ["tar -C '${local.appliance}' --exclude=.git --exclude='./image/packer/output' --exclude='./keycloak/theme/build' --exclude='__pycache__' -czf '${var.output_dir}-appliance.tar.gz' ."]
   }
   provisioner "shell-local" {
     inline = [var.prebuilt == "" ? "rm -f '${var.output_dir}-prebuilt.tar.gz' && touch '${var.output_dir}-prebuilt.tar.gz'" : "cp '${var.prebuilt}' '${var.output_dir}-prebuilt.tar.gz'"]

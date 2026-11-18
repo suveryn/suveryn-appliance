@@ -40,7 +40,7 @@ ufw --force enable >/dev/null
 
 echo "== Kernel settings"
 cat > /etc/sysctl.d/90-suveryn.conf <<'CONF'
-# sūveryn appliance hardening (image/scripts/harden.sh)
+# sūveryn appliance hardening (image/packer/scripts/harden.sh)
 kernel.kptr_restrict = 2
 kernel.dmesg_restrict = 1
 kernel.unprivileged_bpf_disabled = 1
@@ -74,6 +74,6 @@ sūveryn appliance (\n)
 
 This machine has no console login. It sets itself up at its first start from
 first-boot.env on its EFI partition (suveryn/first-boot.env); progress and the
-result are shown here. See suveryn-appliance image/README.md.
+result are shown here. See suveryn-appliance image/packer/README.md.
 
 ISSUE

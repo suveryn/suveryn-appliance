@@ -7,7 +7,7 @@ enforces it with its own firewall.
 
 | Mode | Outgoing | Meaning |
 |---|---|---|
-| `connected` | `approved` (default) | Reaches only approved destinations: sūveryn updates and models, Ubuntu's security updates, time, and the connectors the office enables. The appliance blocks everything else itself |
+| `connected` | `approved` (default) | Reaches only approved destinations: sūveryn updates and models, Ubuntu's security updates (used by the Packer test image only: the read-only image has no apt), time, and the connectors the office enables. The appliance blocks everything else itself |
 | `connected` | `all` | Any program on the appliance may reach the internet. Only for an office whose own firewall decides what the appliance may reach |
 | `air-gapped` | `none` | No outgoing connections beyond the office's own network. Updates and extra models arrive on a USB stick or from a mirror on the office network |
 

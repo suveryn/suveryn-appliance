@@ -1,7 +1,7 @@
 """The image's build files and first-boot rules: what is easy to break and expensive to find on a
 customer's server. Any machine:
 
-    python3 -m pytest image/tests
+    python3 -m pytest image/packer/tests
 
 The image itself is checked by booting it (README.md, "Testing").
 """
@@ -14,9 +14,10 @@ from pathlib import Path
 import pytest
 
 HERE = Path(__file__).resolve().parent.parent
+REPO = HERE.parent.parent
 TEMPLATE = (HERE / "suveryn.pkr.hcl").read_text()
 USER_DATA = (HERE / "http" / "user-data.pkrtpl").read_text()
-loader = importlib.machinery.SourceFileLoader("provision", str(HERE.parent / "provision" / "suveryn-provision"))
+loader = importlib.machinery.SourceFileLoader("provision", str(REPO / "provision" / "suveryn-provision"))
 spec = importlib.util.spec_from_loader("provision", loader)
 p = importlib.util.module_from_spec(spec)
 loader.exec_module(p)
@@ -32,7 +33,7 @@ def test_a_bare_metal_disk_that_boots_on_any_uefi_machine():
 
 def test_nothing_unique_to_a_box_is_built_in():
     """Every office must get its own secrets, certificate and identity at first boot."""
-    image_steps = re.search(r"def image\([^)]*\) -> None:(.*?)\n\n\ndef ", (HERE.parent / "provision" / "suveryn-provision").read_text(), re.S).group(1)
+    image_steps = re.search(r"def image\([^)]*\) -> None:(.*?)\n\n\ndef ", (REPO / "provision" / "suveryn-provision").read_text(), re.S).group(1)
     for first_boot_only in ("postgres(", "keycloak(", "tls(", "reverse_proxy(", "configure(", "llm_models(", "network_mode("):
         assert first_boot_only not in image_steps, first_boot_only
     cleanup = (HERE / "scripts" / "cleanup.sh").read_text()
@@ -58,10 +59,10 @@ def test_firewall_lets_in_only_the_web():
 
 
 def test_the_network_modes_units_load_the_rules_before_the_network():
-    egress = (HERE.parent / "provision" / "systemd" / "suveryn-egress.service").read_text()
+    egress = (REPO / "provision" / "systemd" / "suveryn-egress.service").read_text()
     assert "Before=network-pre.target" in egress and "WantedBy=sysinit.target" in egress
     assert "ExecStart=/opt/suveryn/bin/suveryn-network-mode apply" in egress
-    dns = (HERE.parent / "provision" / "systemd" / "suveryn-dns.service").read_text()
+    dns = (REPO / "provision" / "systemd" / "suveryn-dns.service").read_text()
     assert "Requires=suveryn-egress.service" in dns and "--conf-file=/etc/suveryn/dnsmasq.conf" in dns
     assert p.EGRESS_UNITS == ["suveryn-egress", "suveryn-dns"]
     assert "nameserver 127.0.0.1" in p.RESOLV_TEXT
@@ -97,3 +98,20 @@ def test_the_network_comes_up_on_any_machine():
 def test_the_build_machines_journal_is_not_left_behind():
     """Found in the boot test: a journal folder named after the build machine's machine-id."""
     assert "rm -rf /var/log/journal/*" in (HERE / "scripts" / "cleanup.sh").read_text()
+
+
+def test_the_moved_build_files_name_real_paths():
+    """image/ became image/packer/: every path the build and the units use still leads to a real file."""
+    on_appliance = "/opt/suveryn/appliance/"  # the repository, unpacked by build.sh
+    for unit in (HERE / "systemd").glob("*.service"):
+        start = re.search(r"^ExecStart=(\S+)", unit.read_text(), re.M).group(1)
+        assert start.startswith(on_appliance), unit.name
+        assert (REPO / start[len(on_appliance):]).is_file(), start
+    glob = re.search(r"install -m 0644 (/opt/suveryn/appliance/\S+) /etc/systemd/system/",
+                     (HERE / "scripts" / "build.sh").read_text()).group(1)
+    folder, _, pattern = glob[len(on_appliance):].rpartition("/")
+    assert list((REPO / folder).glob(pattern)), glob
+    assert 'appliance = abspath("${path.root}/../..")' in TEMPLATE
+    assert ((HERE / "../..").resolve() / "provision" / "suveryn-provision").is_file()
+    assert 'here=$(cd "$(dirname "$0")/../.." && pwd)' in (HERE / "prebuild.sh").read_text()
+    assert not re.search(r"\bcd image(?![/\w])|\bimage/(?!packer|mkosi)", TEMPLATE)  # no path names the old folder

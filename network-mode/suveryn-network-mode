@@ -32,7 +32,7 @@ air-gapped and never relies on outbound access, and the firewall lets nothing ou
 own network.
 
 Approved destinations are domain names (a name also covers its subdomains). The appliance's own
-list (sūveryn updates and models, Ubuntu's security updates, time) ships with the image in
+list (sūveryn updates and models, Ubuntu's security updates for the Packer test image, time) ships with the image in
 ``builtin-destinations``; the office's additions (connectors it enables) are in
 ``/etc/suveryn/approved-destinations``. The appliance enforces them itself:
 

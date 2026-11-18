@@ -21,10 +21,9 @@ The appliance is one in the strict sense, like the systems in network equipment 
 4. **An update replaces the whole system.** There are two system slots, A and B. An update is
    written to the slot that isn't running; the appliance restarts into it, checks itself, and goes
    back to the previous slot on its own if the new one doesn't come up healthy.
-5. **Remote support only when connected (#43).** The office's administrator starts a time-limited
-   support session; the appliance opens the connection outwards, so nothing on the office network
-   is opened inwards. An air-gapped appliance never has remote support: there the administrator
-   exports a diagnostics file instead.
+5. **Remote support only when connected.** Support may reach an appliance remotely, but never an
+   air-gapped one: there the administrator exports a diagnostics file instead. How support reaches
+   an appliance is still open (#43).
 
 What this gives: the office's data is unreadable on a stolen or returned disk (#34); the system the
 office runs is exactly the one Sūveryn Labs released, and the appliance can say so in each check-in
@@ -87,8 +86,8 @@ first boot is still to do (stage 4, below).
    recovery key on the console (C8b, 5 attempts).
 4. sūveryn starts. The first time, that means the web setup (#37); after that, the services.
 
-**What it protects, and what not.** Without Secure Boot (not required: the hardware is the office's)
-the boot file itself isn't checked by the firmware. Someone with the machine in their hands could
+**What it protects, and what not.** Secure Boot is undecided (#45). Without it, the boot file itself
+isn't checked by the firmware. Someone with the machine in their hands could
 replace both the system and its boot file. That is the "light protection" #35 accepts:
 
 - The appliance **reports** the root hash it booted, and the boot measurement in the TPM (PCR 11),
@@ -183,7 +182,7 @@ The tool and how to read the log: [`image/mkosi/README.md`](../../image/mkosi/RE
   partition: database roles and passwords, Keycloak's realm and secret, TLS, the site, the network
   mode, the models' settings.
 
-What differs from an ordinary Ubuntu (the legacy [Packer test image](../../image/README.md)) because
+What differs from an ordinary Ubuntu (the legacy [Packer test image](../../image/packer/README.md)) because
 the system is read-only:
 
 | Ordinary Ubuntu | Read-only system |
@@ -210,7 +209,7 @@ stages, each its own change (decided 23 October 2026):
 2. **sūveryn itself**: suveryn-core and its Python, compiled; the embedding and Docling models in
    the read-only system (not the data partition); the chat UI; Keycloak, its writable parts on the
    data partition and its host name from its environment rather than its configuration file;
-   llama-server from `prebuild.sh`, with the CUDA libraries it links against; the units, enabled in
+   llama-server from `image/mkosi/prebuild-services`, with the CUDA libraries it links against; the units, enabled in
    the image and started only once first boot has written their settings.
 3. **The GPU driver**: Ubuntu's own NVIDIA 580 driver with the open kernel modules
    (`linux-modules-nvidia-580-open-generic`, from the `restricted` component), built and signed by
@@ -304,7 +303,8 @@ Limits, stated plainly:
 
 ## Remote support (#43): connected only
 
-Decided 14 October 2026: remote support is possible, but never on an air-gapped appliance.
+Decided 14 October 2026 (D6): remote support is possible, but only on an appliance that is not
+air-gapped. How support reaches an appliance is open in #43.
 
 - **Off by default.** The office's administrator starts a support session from the admin dashboard
   or the console, for a fixed time (proposed: up to 8 hours), tied to a support request in the
@@ -367,7 +367,7 @@ goes: [`image/mkosi/README.md`](../../image/mkosi/README.md).
 | D3 | Ubuntu security fixes only through sūveryn updates (no apt on the appliance) | **Yes**, with a commitment: a monthly update, and urgent fixes within days |
 | D4 | A machine with KVM for the image tests | **Not available yet.** Until it is, the tests run with a small test system on a machine without KVM (slow, without hardware acceleration); the full image waits for KVM or real hardware |
 | D5 | No swap on disk | **Yes** (zram if memory runs short) |
-| D6 | Remote support for connected appliances only, as above (#43) | **Yes**, details in #43 |
+| D6 | Remote support for connected appliances only | **Yes**: never on an air-gapped appliance. How support reaches an appliance: #43, open |
 
 ## Decisions for signed bundles (#36)
 

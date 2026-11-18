@@ -8,9 +8,9 @@ is unreliable across office hardware, and NVIDIA's GeForce driver licence is wri
 the office owns.
 
 **This is the appliance, and the only image an office's records may go on.** The Packer build in
-[`image/`](../README.md) (Ubuntu 24.04, PostgreSQL 16, no encrypted data partition) is a legacy
-test image, for fictional documents only. It is retired by #60, after the installation on a real
-PC (#48) and Secure Boot (#45).
+[`image/packer`](../packer/README.md) (Ubuntu 24.04, PostgreSQL 16, no encrypted data partition) is a legacy
+test image, for fictional documents only. It is retired by #60, once the installation on a real
+PC (#48) is done and #45 (Secure Boot) is decided and, if it requires signing, done.
 
 **State:**
 
@@ -26,11 +26,11 @@ PC (#48) and Secure Boot (#45).
 
 - an installation from the stick onto a real PC, through first boot and provisioning with the real
   services (#48);
-- Secure Boot signing (#45);
+- Secure Boot: undecided (#45);
 - the two release keys: until they are added the image trusts no key and refuses every bundle
   ([Signed bundles](#signed-bundles-36)).
 
-Until both #48 and #45 are done, no image is released to an office.
+Until #48 is done and #45 is decided and, if it requires signing, done, no image is released to an office.
 
 ## Build
 

@@ -8,11 +8,11 @@
 # carries what it was built from (.suveryn-built, the git commit); suveryn-provision image checks
 # that and keeps a matching part, else builds it itself.
 #
-#   sudo image/prebuild.sh /var/tmp/suveryn-prebuilt.tar.gz
+#   sudo image/packer/prebuild.sh /var/tmp/suveryn-prebuilt.tar.gz
 #   packer build -var prebuilt=/var/tmp/suveryn-prebuilt.tar.gz …
 set -euo pipefail
 out=${1:?usage: prebuild.sh <output.tar.gz>}
-here=$(cd "$(dirname "$0")/.." && pwd)
+here=$(cd "$(dirname "$0")/../.." && pwd)
 . /etc/os-release
 [ "$VERSION_ID" = "24.04" ] || { echo "the host must be Ubuntu 24.04, like the image (not $VERSION_ID)" >&2; exit 1; }
 PATH=/usr/local/cuda/bin:$PATH
