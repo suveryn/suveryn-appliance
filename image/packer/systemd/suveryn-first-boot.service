@@ -9,7 +9,7 @@ ConditionPathExists=/boot/efi/suveryn/first-boot.env
 
 [Service]
 Type=oneshot
-ExecStart=/opt/suveryn/appliance/image/first-boot.sh
+ExecStart=/opt/suveryn/appliance/image/packer/first-boot.sh
 TimeoutStartSec=infinity
 StandardOutput=journal+console
 StandardError=journal+console

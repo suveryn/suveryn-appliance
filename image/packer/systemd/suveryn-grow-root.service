@@ -6,7 +6,7 @@ ConditionPathExists=!/var/lib/suveryn/.root-grown
 
 [Service]
 Type=oneshot
-ExecStart=/opt/suveryn/appliance/image/grow-root.sh
+ExecStart=/opt/suveryn/appliance/image/packer/grow-root.sh
 
 [Install]
 WantedBy=multi-user.target

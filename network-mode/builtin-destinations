@@ -9,7 +9,9 @@ suveryn.com
 huggingface.co
 hf.co
 
-# Ubuntu's security updates, until signed update bundles replace them (tracker #40).
+# Ubuntu's security updates: for the legacy Packer test image only. The read-only (mkosi) image has no
+# apt; its fixes come as sūveryn updates (decision D3, tracker #40). It ships this same file, so these two
+# names are approved there too, unused, until the Packer image is retired (tracker #60).
 security.ubuntu.com
 archive.ubuntu.com
 

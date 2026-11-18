@@ -47,5 +47,5 @@ echo "== suveryn-provision image"
 python3 /opt/suveryn/appliance/provision/suveryn-provision image
 
 echo "== First-start units"
-install -m 0644 /opt/suveryn/appliance/image/systemd/*.service /etc/systemd/system/
+install -m 0644 /opt/suveryn/appliance/image/packer/systemd/*.service /etc/systemd/system/
 systemctl enable suveryn-grow-root.service suveryn-first-boot.service

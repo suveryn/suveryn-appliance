@@ -464,10 +464,10 @@ def test_the_inbound_rules_parse():
 
 
 def test_the_packer_images_hardening_is_in_the_read_only_system_too():
-    """The data lifecycle promises a 1 GB journal and no core dumps (image/scripts/harden.sh did it on the
+    """The data lifecycle promises a 1 GB journal and no core dumps (image/packer/scripts/harden.sh did it on the
     Packer image only)."""
     extra = MKOSI / "mkosi.extra"
-    harden = (REPO / "image" / "scripts" / "harden.sh").read_text()
+    harden = (REPO / "image" / "packer" / "scripts" / "harden.sh").read_text()
     sysctl = (extra / "usr/lib/sysctl.d/90-suveryn.conf").read_text()
     for line in re.findall(r"^([a-z][\w.]+ = \S+)$", harden, re.M):
         assert line in sysctl, line

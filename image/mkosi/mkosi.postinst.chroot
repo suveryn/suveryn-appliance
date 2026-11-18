@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # 1. The listed /etc paths that belong to the office link into the data partition. Nothing else in
-#    /etc changes on the appliance (image/tests check this list against the design note).
+#    /etc changes on the appliance (image/mkosi/test checks this list against the design note).
 link() { rm -rf "$2"; mkdir -p "$(dirname "$2")"; ln -s "$1" "$2"; }
 link /var/lib/suveryn/etc              /etc/suveryn
 link /var/lib/suveryn/host/hostname    /etc/hostname

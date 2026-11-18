@@ -10,7 +10,7 @@
 # The host must be what the image is: Ubuntu 26.04 with CUDA 13.4 (#57; NVIDIA's 26.04 repository has
 # 13.1, 13.3 and 13.4, not the 13.2 first planned). A GPU isn't
 # needed; it installs Python, Java and the build tools itself. It writes /opt/suveryn and /opt/keycloak
-# on the host, as image/prebuild.sh does.
+# on the host, as image/packer/prebuild.sh does.
 #   sudo image/mkosi/prebuild-services
 #   cd image/mkosi && sudo mkosi -f build
 set -euo pipefail

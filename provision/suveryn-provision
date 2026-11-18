@@ -764,7 +764,7 @@ def keycloak_software() -> None:
     if (KEYCLOAK / "conf").is_dir() and not read_only_system():
         shutil.copyfile(REPO / "keycloak" / "quarkus.properties", KEYCLOAK / "conf" / "quarkus.properties")
     if built.exists() and built.read_text() == keycloak_built_as():
-        # Built beforehand for the image (image/prebuild.sh): Java's compiler crashes in an emulated build machine.
+        # Built beforehand for the image (image/packer/prebuild.sh): Java's compiler crashes in an emulated build machine.
         run("chown", "-R", "keycloak:keycloak", KEYCLOAK)  # unpacked as root
         note(f"kept: {built.read_text().strip()} (built beforehand)")
         return
@@ -2012,7 +2012,7 @@ def after_restore() -> None:
 
 
 def first_boot_config(path: Path) -> dict[str, str]:
-    """first-boot.env, written by the installer before the first start (KEY=value, see image/README.md)."""
+    """first-boot.env, written by the installer before the first start (KEY=value, see image/packer/README.md)."""
     values = read_env(path)
     unknown = set(values) - {"PUBLIC_URL", "NETWORK_MODE", "OUTBOUND", "SITE", "MODELS_FROM", "PACKS_FROM", "TLS_CERT", "TLS_KEY",
                              "CASES_ACCESS", "CASES_KEEP", "CONVERSATIONS_KEEP"}
@@ -2070,7 +2070,7 @@ def main() -> None:
     rs.add_argument("--share-secret", type=Path, help="the share's password file")
     rs.add_argument("--identity", type=Path, required=True, help="the office's recovery key file")
     rs.add_argument("--backup", default="newest", help="the backup's file name on the target, or newest")
-    pb = sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/prebuild.sh)")
+    pb = sub.add_parser("prebuild", help="build llama-server, Keycloak and the chat UI as the image needs them (image/packer/prebuild.sh)")
     pb.add_argument("--read-only-image", action="store_true",
                     help="also suveryn-core compiled, its models in /opt/suveryn/hf and the CUDA libraries, for the "
                          "read-only system (image/mkosi/prebuild-services)")
