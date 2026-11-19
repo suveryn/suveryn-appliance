@@ -4,9 +4,10 @@
     python3 keycloak/realm/build_realm.py --update <commit-or-tag>   # follow another suveryn-core commit
 
 One source: the realm in suveryn-core (packages/api-gateway/keycloak/suveryn-realm.json) defines the
-client, its flow, the roles and the password and brute-force rules, for development and production
-alike. This script takes it at the commit pinned in realm-lock.json (checked by SHA-256) and lays
-the production settings over it (PRODUCTION below). Writes, both 0600 and only for provisioning:
+client, its flow, the roles and the brute-force rules, for development and production alike. This script takes it at the commit pinned in realm-lock.json (checked by SHA-256) and lays
+the production settings over it (PRODUCTION below). The password's least length is the web setup's,
+from suveryn-core's setup-limits.json at the same commit (also checked by SHA-256): the screen and
+the setup service read the same file (suveryn-tracker#163). Writes, both 0600 and only for provisioning:
 
 - ``suveryn-realm.json``: to import into Keycloak once (``kc.sh import`` or the admin console), then
   delete: it contains the client secret (and, with ``--administrator``, the office's administrator
@@ -54,12 +55,7 @@ PRODUCTION = {
     "loginTheme": "suveryn",
     "accountTheme": "suveryn",
     "emailTheme": "suveryn",
-    # The administrator account's rules from the web setup (suveryn-tracker#37), for every account:
-    # at least 15 characters, not the user name or email address. The leaked-password list
-    # (passwordBlacklist) joins once it exists on the appliance (open point, #37).
-    "passwordPolicy": "length(15) and notUsername and notEmail",
 }
-MIN_PASSWORD = 15
 # What the office's administrator may do in Keycloak's admin console for this realm: manage the
 # office's own accounts. Nothing on the realm's settings, clients or other realms.
 ADMIN_CLIENT_ROLES = ["manage-users", "view-users", "query-users", "query-groups"]
@@ -78,8 +74,15 @@ def fail(message: str):
     raise SystemExit(f"build_realm: {message}")
 
 
-def fetch_realm(repo: str, commit: str, path: str, sha256: str | None = None) -> tuple[bytes, str]:
-    """The realm file at ``commit`` of suveryn-core. From a local checkout without git history (the
+def password_policy(password_min: int) -> str:
+    """The administrator account's rules from the web setup (suveryn-tracker#37), for every account: at
+    least the setup's length, not the user name or email address. The leaked-password list
+    (passwordBlacklist) joins once it exists on the appliance (open point, #37)."""
+    return f"length({password_min}) and notUsername and notEmail"
+
+
+def fetch_core(repo: str, commit: str, path: str, sha256: str | None = None) -> tuple[bytes, str]:
+    """A file (the realm, the setup's limits) at ``commit`` of suveryn-core. From a local checkout without git history (the
     read-only system's /opt/suveryn/core, which has neither git nor .git, #47) when its file has the
     lock's sha256: the hash pins the content as the commit would."""
     if not re.fullmatch(r"[\w][\w./-]*", commit) or repo.startswith("-"):
@@ -89,7 +92,7 @@ def fetch_realm(repo: str, commit: str, path: str, sha256: str | None = None) ->
         with open(plain, "rb") as f:
             data = f.read()
         if hashlib.sha256(data).hexdigest() != sha256:
-            fail(f"{plain} isn't the realm in realm-lock.json (sha256 differs)")
+            fail(f"{plain} isn't the file in realm-lock.json (sha256 differs)")
         return data, commit
     if os.path.isdir(repo):
         repo = os.path.abspath(repo)  # git runs in a temporary folder: a relative path would point there
@@ -121,13 +124,14 @@ def check_public_url(url: str) -> str:
 DIRECTORY_CLIENT = "suveryn-directory"  # the gateway's read-only view of the office's accounts (suveryn-tracker#10)
 
 
-def production_realm(dev: dict, public_url: str, client_secret: str, directory_secret: str) -> dict:
+def production_realm(dev: dict, public_url: str, client_secret: str, directory_secret: str, password_min: int) -> dict:
     """The development realm with the production settings laid over it. Pure: no I/O.
 
-    ``directory_secret`` is the ``suveryn-directory`` client's; its service account may only view users."""
+    ``directory_secret`` is the ``suveryn-directory`` client's; its service account may only view users.
+    ``password_min`` is the web setup's least password length (setup-limits.json)."""
     if not any(c["clientId"] == DIRECTORY_CLIENT for c in dev["clients"]):
         fail(f"suveryn-core's realm has no {DIRECTORY_CLIENT} client")
-    realm = {**dev, **PRODUCTION}
+    realm = {**dev, **PRODUCTION, "passwordPolicy": password_policy(password_min)}
     realm["attributes"] = {**dev.get("attributes", {}), "adminEventsExpiration": str(EVENT_RETENTION_S)}
     [client] = [c for c in dev["clients"] if c["clientId"] == "suveryn-chat"]
     client = {**client, "secret": client_secret, "baseUrl": f"{public_url}/",
@@ -145,16 +149,16 @@ def production_realm(dev: dict, public_url: str, client_secret: str, directory_s
         else:
             clients.append(c)
     realm["clients"] = clients
-    verify(realm, public_url)
+    verify(realm, public_url, password_min)
     return realm
 
 
-def administrator_user(name: str, email: str, password: str, salt: bytes | None = None) -> dict:
+def administrator_user(name: str, email: str, password: str, password_min: int, salt: bytes | None = None) -> dict:
     """The office's administrator from the web setup: realm role suveryn-admin and user management.
     Signs in with the email address (the user name is the same address, in lower case)."""
     name, email = " ".join(name.split()), email.strip().lower()
-    if not name or "@" not in email or len(password) < MIN_PASSWORD:
-        fail("the administrator needs a name, an email address and a password of at least 15 characters")
+    if not name or "@" not in email or len(password) < password_min:
+        fail(f"the administrator needs a name, an email address and a password of at least {password_min} characters")
     # First name up to the first space: "Anne de Smet" is Anne, de Smet (Belgian surnames carry their particles).
     first, _, last = name.partition(" ")
     salt = salt or secrets.token_bytes(16)
@@ -173,7 +177,7 @@ def administrator_user(name: str, email: str, password: str, salt: bytes | None 
     }
 
 
-def verify(realm: dict, public_url: str) -> None:
+def verify(realm: dict, public_url: str, password_min: int) -> None:
     """Refuse a realm that doesn't meet the production rules, whatever the development realm says."""
     problems = []
     if realm.get("sslRequired") != "all":
@@ -183,8 +187,8 @@ def verify(realm: dict, public_url: str) -> None:
     if realm.get("registrationAllowed") or realm.get("identityProviders"):
         problems.append("self-registration or external identity providers are on")
     m = re.search(r"\blength\((\d+)\)", realm.get("passwordPolicy", ""))
-    if not m or int(m.group(1)) < MIN_PASSWORD or "notUsername" not in realm["passwordPolicy"]:
-        problems.append(f"the password policy doesn't require {MIN_PASSWORD} characters and not the user name")
+    if not m or int(m.group(1)) < password_min or "notUsername" not in realm["passwordPolicy"]:
+        problems.append(f"the password policy doesn't require {password_min} characters and not the user name")
     if not realm.get("bruteForceProtected"):
         problems.append("brute-force protection is off")
     for c in realm["clients"]:
@@ -249,24 +253,32 @@ def main() -> None:
     lock = json.loads(LOCK.read_text())
     repo = os.environ.get("SUVERYN_CORE_REPO", lock["repo"])
     if a.update:
-        data, commit = fetch_realm(repo, a.update, lock["path"])
-        LOCK.write_text(json.dumps({**lock, "commit": commit, "sha256": hashlib.sha256(data).hexdigest()}, indent=2) + "\n")
+        data, commit = fetch_core(repo, a.update, lock["path"])
+        limits, _ = fetch_core(repo, commit, lock["limits"]["path"])
+        LOCK.write_text(json.dumps({**lock, "commit": commit, "sha256": hashlib.sha256(data).hexdigest(),
+                                    "limits": {**lock["limits"], "sha256": hashlib.sha256(limits).hexdigest()}}, indent=2) + "\n")
         print(f"realm-lock.json: suveryn-core@{commit[:7]}")
         return
     if not (a.public_url and a.out):
         ap.error("--public-url and --out are required")
     public_url = check_public_url(a.public_url)
     issuer_base = check_issuer_base(a.issuer_base or f"{public_url}/idp")
-    data, commit = fetch_realm(repo, lock["commit"], lock["path"], lock["sha256"])
+    data, commit = fetch_core(repo, lock["commit"], lock["path"], lock["sha256"])
     if commit != lock["commit"] or hashlib.sha256(data).hexdigest() != lock["sha256"]:
         fail("suveryn-core's realm differs from realm-lock.json")
+    limits, _ = fetch_core(repo, lock["commit"], lock["limits"]["path"], lock["limits"]["sha256"])
+    if hashlib.sha256(limits).hexdigest() != lock["limits"]["sha256"]:
+        fail("suveryn-core's setup-limits.json differs from realm-lock.json")
+    password_min = json.loads(limits).get("password_min")
+    if type(password_min) is not int or password_min < 1:
+        fail("suveryn-core's setup-limits.json has no password_min")
     secret = secrets.token_urlsafe(32)
     dev = json.loads(data)
     directory_secret = secrets.token_urlsafe(32)
-    realm = production_realm(dev, public_url, secret, directory_secret)
+    realm = production_realm(dev, public_url, secret, directory_secret, password_min)
     if a.administrator:
         admin = json.loads(a.administrator.read_text())
-        realm["users"] = [*realm.get("users", []), administrator_user(admin["name"], admin["email"], admin["password"])]
+        realm["users"] = [*realm.get("users", []), administrator_user(admin["name"], admin["email"], admin["password"], password_min)]
     a.out.mkdir(mode=0o700, parents=True, exist_ok=True)
     write_private(a.out / "suveryn-realm.json", json.dumps(realm, indent=2, ensure_ascii=False) + "\n")
     write_private(a.out / "gateway-oidc.env", "".join(f"{k}={v}\n" for k, v in {

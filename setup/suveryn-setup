@@ -79,7 +79,6 @@ SITE = ENV("SUVERYN_SETUP_SITE", "on-premise")
 SHARE_TIMEOUT = float(ENV("SUVERYN_SETUP_SHARE_TIMEOUT", "5"))
 MAX_BODY = 300 * 1024
 MAX_PEM = 64 * 1024
-MIN_PASSWORD = 15
 RETENTION = (14, 30, 90, 365)
 STEPS = ("database", "signin", "models", "web", "outgoing")
 # Restoring a backup on a replacement machine (#56): its steps, and which of suveryn-provision restore's
@@ -139,6 +138,20 @@ if messages is None:
 if not {"setup", "backup"} <= set(messages.AREAS):
     raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the web setup's and the "
                      "backup service's messages (suveryn-tracker#141, #154): this appliance needs a newer core")
+# The lengths the administrator's account may have: suveryn-core's setup-limits.json, beside its registry,
+# which the setup screen reads too, so the two can't differ (suveryn-tracker#163).
+SETUP_LIMITS = CORE_MESSAGES.with_name("setup-limits.json")
+if not SETUP_LIMITS.exists():
+    raise SystemExit(f"suveryn-setup: the suveryn-core at {CORE_MESSAGES.parents[4]} is from before the setup's field lengths "
+                     "(suveryn-tracker#163): this appliance needs a newer core")
+try:
+    LIMITS = json.loads(SETUP_LIMITS.read_text(encoding="utf-8"))
+    if not all(type(LIMITS.get(k)) is int and LIMITS[k] > 0 for k in ("name_max", "email_max", "password_min", "password_max")):
+        raise ValueError("not four whole numbers")
+    if LIMITS["password_min"] > LIMITS["password_max"]:
+        raise ValueError("the password's least length is above its most")
+except (OSError, ValueError, AttributeError) as e:
+    raise SystemExit(f"suveryn-setup: suveryn-core's {SETUP_LIMITS} can't be read ({e}): setup needs the core on this appliance")
 message = messages.message      # {kind, code, params} for a listed code: inside an answer, or stored
 reference = messages.reference  # a short id for an unplanned failure ("7F3K-92QD")
 
@@ -308,13 +321,13 @@ def check_administrator(a, appliance_name: str) -> dict:
     errors = {}
     if not name:
         errors["name"] = "setup.name_missing"
-    elif len(name) > 200:  # not missing: what was sent isn't valid (the screen is to limit the field: suveryn-tracker#163)
+    elif len(name) > LIMITS["name_max"]:  # not missing: what was sent isn't valid (the screen stops the field there)
         errors["name"] = "request.invalid"
-    if len(email) > 254 or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+    if len(email) > LIMITS["email_max"] or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
         errors["email"] = "setup.email_invalid"
-    if len(password) < MIN_PASSWORD:
-        errors["password"] = message("setup.password_too_short", min=MIN_PASSWORD)
-    elif len(password) > 512:  # as for the name: not too short, not valid
+    if len(password) < LIMITS["password_min"]:
+        errors["password"] = message("setup.password_too_short", min=LIMITS["password_min"])
+    elif len(password) > LIMITS["password_max"]:  # as for the name: not too short, not valid
         errors["password"] = "request.invalid"
     elif is_common_password(password):
         errors["password"] = "setup.password_common"

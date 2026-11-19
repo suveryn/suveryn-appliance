@@ -68,7 +68,7 @@ The step where provisioning stopped also keeps provisioning's own last line as `
 |---|---|
 | `GET state` | (The name, the address, gateway and resolver in use, the language, the identity, the models, the USB disks plugged in now, the answers so far without secrets, provisioning's progress) |
 | `PUT answers/network` | Connected (approved destinations or everything) or air-gapped |
-| `PUT answers/administrator` | A name; an email address; a password of at least 15 characters, not common, not containing the name, the email's local part or the appliance's name: the screen's rules, the same list |
+| `PUT answers/administrator` | A name; an email address; a password long enough, not common, not containing the name, the email's local part or the appliance's name: the screen's rules, the same list. The lengths (the name's, the email address's, the password's least and most) are core's `suveryn_harness/setup-limits.json`, which the screen reads too; without it the service doesn't start |
 | `PUT answers/certificate` | Self-signed: names `<name>.local` and the address. Own: a PEM certificate (and its chain, in the same file or apart) and an unencrypted PEM private key; the key belongs to the certificate, it hasn't expired, it covers `<name>.local` (a `*.local` wildcard does), and the chain leads to it. With `openssl`, the files in memory only |
 | `POST manifest` | A support manifest ([`support/`](../support/README.md)): signed by a trusted portal key, for this appliance, not expired |
 | `PUT answers/support` | `{"skipped": true}` |

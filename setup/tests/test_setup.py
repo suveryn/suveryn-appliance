@@ -93,6 +93,23 @@ def refused(code: str, status: int | None = None, **params) -> tuple[int, dict]:
                              "detail": known["title"], "kind": known["kind"], "code": code, "params": params}
 
 
+def test_the_lengths_are_the_files(monkeypatch):
+    """The check uses core's setup-limits.json, not numbers of its own: other limits, other answers, at the edge."""
+    mod = load(Path("/tmp"))
+    monkeypatch.setattr(mod, "LIMITS", {"name_max": 5, "email_max": 8, "password_min": 20, "password_max": 24})  # an 8-character address passes, a 9-character one not
+    ok = mod.check_administrator({"name": "Annet", "email": "a@b.be", "password": "x7 Qz" * 4}, "notary-01")
+    assert ok["name"] == "Annet"
+    with pytest.raises(mod.Refused) as e:
+        mod.check_administrator({"name": "Anneke", "email": "ann@bc.be", "password": "x7 Qz" * 4 + "a"}, "notary-01")
+    assert said(e) == {"name": "request.invalid", "email": "setup.email_invalid"}
+    with pytest.raises(mod.Refused) as e:
+        mod.check_administrator({"name": "Anne", "email": "a@b.be", "password": "x7 Qz" * 5}, "notary-01")
+    assert said(e) == {"password": "request.invalid"}
+    with pytest.raises(mod.Refused) as e:
+        mod.check_administrator({"name": "Anne", "email": "a@b.be", "password": "x7 Qz" * 3 + "abcd"}, "notary-01")
+    assert said(e) == {"password": "setup.password_too_short"}
+
+
 def test_the_password_rules_are_the_screens():
     mod = load(Path("/tmp"))
     ok = mod.check_administrator({"name": " Anne  de Smet ", "email": "anne@office.be ", "password": GOOD_PASSWORD}, "notary-01")
@@ -122,7 +139,9 @@ def test_the_common_password_list_is_the_screens(tmp_path):
         pytest.skip(f"no suveryn-core checkout at {CORE} (set SUVERYN_CORE)")
     listed = set(re.findall(r'"([^"]+)"', re.search(r"const COMMON = new Set\(\[(.*?)\]\)", ts.read_text(), re.S).group(1)))
     assert listed == load(tmp_path).COMMON_PASSWORDS
-    assert f"MIN_PASSWORD = {load(tmp_path).MIN_PASSWORD}" in ts.read_text()
+    # the lengths: one file in core, which the screen and this service both read (suveryn-tracker#163)
+    assert re.search(r'^import LIMITS from "[./]*/harness/src/suveryn_harness/setup-limits\.json";$', ts.read_text(), re.M)
+    assert load(tmp_path).LIMITS == json.loads((CORE_MESSAGES.parent / "setup-limits.json").read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------- the certificate
@@ -352,6 +371,18 @@ def test_there_is_one_list_of_messages_and_it_is_cores(s, tmp_path):
     r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env={**env, "SUVERYN_CORE_MESSAGES": str(old / "messages.py")},
                        capture_output=True, text=True)
     assert r.returncode != 0 and "needs a newer core" in r.stderr
+    (old / "messages.json").write_text(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"), encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env={**env, "SUVERYN_CORE_MESSAGES": str(old / "messages.py")},
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "from before the setup's field lengths" in r.stderr  # no setup-limits.json beside it
+    (old / "setup-limits.json").write_text('{"name_max": 200}', encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env={**env, "SUVERYN_CORE_MESSAGES": str(old / "messages.py")},
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "setup-limits.json can't be read (not four whole numbers)" in r.stderr
+    (old / "setup-limits.json").write_text('{"name_max": 200, "email_max": 254, "password_min": 20, "password_max": 16}', encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", HERE / "suveryn-setup", "serve"], env={**env, "SUVERYN_CORE_MESSAGES": str(old / "messages.py")},
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "least length is above its most" in r.stderr
 
 
 def test_a_failure_nobody_planned_for_gives_a_reference_the_log_has_and_never_its_message(s, api, capfd, monkeypatch):

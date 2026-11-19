@@ -1,6 +1,10 @@
 {
   "repo": "https://github.com/suveryn/suveryn-core.git",
-  "commit": "88ecf91b5a7ac5918e3d8d87e36be3ff653c9d2a",
+  "commit": "0b1a1d3aa196f10c96a47e2fa56649975bd006c5",
   "path": "packages/api-gateway/keycloak/suveryn-realm.json",
-  "sha256": "d68550560c260c2b732c97a416a6cf83934d90d79090db7ff63e35a08f8d9d92"
+  "sha256": "d68550560c260c2b732c97a416a6cf83934d90d79090db7ff63e35a08f8d9d92",
+  "limits": {
+    "path": "packages/harness/src/suveryn_harness/setup-limits.json",
+    "sha256": "f455b5484af5d1faf92ffdb615a804e12cf49bb9ef9a523be954b15487f78c9a"
+  }
 }

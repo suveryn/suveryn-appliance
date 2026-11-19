@@ -233,8 +233,8 @@ write outside the data partition. In stage 2,
 everything that isn't from Ubuntu's archive is built beforehand on a Pod by `image/mkosi/prebuild-services`
 into `image/mkosi/prebuilt/`, which the image build copies in and checks against the pins
 (`suveryn-provision check-prebuilt`): no network, git or compiler inside the image build.
-`/opt/suveryn/core` carries no git history; the realm builder reads the realm file there and checks
-it against `realm-lock.json`'s sha256.
+`/opt/suveryn/core` carries no git history; the realm builder reads the realm file and the setup's
+`setup-limits.json` there and checks each against its sha256 in `realm-lock.json`.
 
 How full slot A is, the build's size and time, and what the build host needs:
 [`image/mkosi/README.md`](../../image/mkosi/README.md#build).

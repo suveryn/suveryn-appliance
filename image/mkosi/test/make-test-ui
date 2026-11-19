@@ -10,7 +10,8 @@ core=$(cd "${1:-../../../../suveryn-core}" && pwd)
 (cd "$core/packages/chat-ui" && npm ci --silent && npm run build --silent)
 rm -rf ui && mkdir ui && cp -r "$core/packages/chat-ui/dist/." ui/
 # The web setup says suveryn-core's messages (one list, core's: tracker #141). The appliance image has the whole of
-# core at /opt/suveryn/core; the test system gets just the module and its registry, at the same place.
+# core at /opt/suveryn/core; the test system gets just the module, its registry and the setup's field lengths, at the same place.
 rm -rf core-messages && mkdir core-messages
-cp "$core/packages/harness/src/suveryn_harness/messages.py" "$core/packages/harness/src/suveryn_harness/messages.json" core-messages/
-echo "the chat UI and the messages from $core ($(git -C "$core" rev-parse --short HEAD)) in image/mkosi/test/ui and core-messages (not committed)"
+cp "$core/packages/harness/src/suveryn_harness/messages.py" "$core/packages/harness/src/suveryn_harness/messages.json" \
+   "$core/packages/harness/src/suveryn_harness/setup-limits.json" core-messages/
+echo "the chat UI, the messages and the field lengths from $core ($(git -C "$core" rev-parse --short HEAD)) in image/mkosi/test/ui and core-messages (not committed)"

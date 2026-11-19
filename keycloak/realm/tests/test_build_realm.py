@@ -1,7 +1,7 @@
 """The production realm (suveryn-tracker#16). Run: python3 -m pytest keycloak/realm/tests
 
-Uses suveryn-core's development realm at the commit in realm-lock.json, from SUVERYN_CORE_REPO or a
-sibling ../suveryn-core checkout; skipped when neither has that commit.
+Uses suveryn-core's development realm at the commit in realm-lock.json, from SUVERYN_CORE_REPO, SUVERYN_CORE
+(the checkout the other folders' tests use) or a sibling ../suveryn-core; skipped when none has that commit.
 """
 
 import json
@@ -18,14 +18,27 @@ sys.path.insert(0, str(HERE))
 import build_realm  # noqa: E402
 
 LOCK = json.loads((HERE / "realm-lock.json").read_text())
-CORE = os.environ.get("SUVERYN_CORE_REPO", str(HERE.parents[2] / "suveryn-core"))
+CORE = os.environ.get("SUVERYN_CORE_REPO") or os.environ.get("SUVERYN_CORE") or str(HERE.parents[2] / "suveryn-core")
 URL = "https://suveryn.office.example"
+MIN = 15  # an input for the pure functions below; the built realm takes core's (test_the_password_policy_is_the_web_setups)
+
+
+@pytest.fixture(scope="module")
+def limits():
+    """The web setup's limits (suveryn-core's setup-limits.json) at the lock's commit."""
+    try:
+        data, _ = build_realm.fetch_core(CORE, LOCK["commit"], LOCK["limits"]["path"])
+    except subprocess.CalledProcessError:
+        pytest.skip(f"no suveryn-core with commit {LOCK['commit'][:7]} at {CORE}")
+    import hashlib
+    assert hashlib.sha256(data).hexdigest() == LOCK["limits"]["sha256"]
+    return json.loads(data)
 
 
 @pytest.fixture(scope="module")
 def dev():
     try:
-        data, commit = build_realm.fetch_realm(CORE, LOCK["commit"], LOCK["path"])
+        data, commit = build_realm.fetch_core(CORE, LOCK["commit"], LOCK["path"])
     except subprocess.CalledProcessError:
         pytest.skip(f"no suveryn-core with commit {LOCK['commit'][:7]} at {CORE}")
     import hashlib
@@ -35,7 +48,7 @@ def dev():
 
 def build(dev, chat_secret="test-secret-not-real"):
     """The production realm, with the directory client's secret."""
-    return build_realm.production_realm(dev, URL, chat_secret, "directory-secret")
+    return build_realm.production_realm(dev, URL, chat_secret, "directory-secret", MIN)
 
 
 def chat_client(realm):
@@ -54,8 +67,7 @@ def test_production_settings_are_laid_over_the_development_realm(dev):
     assert c["redirectUris"] == [f"{URL}/auth/callback"] and c["baseUrl"] == f"{URL}/"
     assert c["attributes"]["post.logout.redirect.uris"] == f"{URL}/" and c["webOrigins"] == []
     assert c["secret"] == "test-secret-not-real"
-    # The web setup's password rules (15 characters), stricter than development's 12.
-    assert prod["passwordPolicy"] == "length(15) and notUsername and notEmail"
+    assert prod["passwordPolicy"] == f"length({MIN}) and notUsername and notEmail"
     # everything else is the development realm's: flow, roles, brute-force rules
     for key in ("bruteForceProtected", "failureFactor", "accessTokenLifespan", "roles", "scopeMappings",
                 "registrationAllowed", "identityProviders", "supportedLocales"):
@@ -79,13 +91,13 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
     realm has it, so the test holds whatever commit realm-lock.json points at."""
     with_dir = dev
     without = {**dev, "clients": [chat_client(dev)], "users": []}
-    prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret")
+    prod = build_realm.production_realm(with_dir, URL, "chat-secret", "directory-secret", MIN)
     chat, directory = prod["clients"]
     assert chat["secret"] == "chat-secret" and directory["secret"] == "directory-secret"
     assert directory["redirectUris"] == [] and not directory["standardFlowEnabled"]
     assert not chat["serviceAccountsEnabled"]
     with pytest.raises(SystemExit):
-        build_realm.production_realm(with_dir, URL, "chat-secret", "")  # the client without a secret: refused
+        build_realm.production_realm(with_dir, URL, "chat-secret", "", MIN)  # the client without a secret: refused
     # a service account with more rights, on the chat client, or a directory client that could sign in: refused
     for bad in ({"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["manage-users"]}}]},
                 {"users": [{**SERVICE_ACCOUNT, "clientRoles": {"realm-management": ["view-users", "view-realm", "manage-realm"]}}]},
@@ -94,15 +106,15 @@ def test_the_directory_client_gets_its_own_secret_and_may_only_view_users(dev):
                 {"clients": [{**chat_client(dev), "serviceAccountsEnabled": True}, DIRECTORY]},
                 {"clients": [chat_client(dev), {**DIRECTORY, "standardFlowEnabled": True}]}):
         with pytest.raises(SystemExit):
-            build_realm.production_realm({**with_dir, **bad}, URL, "chat-secret", "directory-secret")
+            build_realm.production_realm({**with_dir, **bad}, URL, "chat-secret", "directory-secret", MIN)
     with pytest.raises(SystemExit, match="no suveryn-directory client"):
-        build_realm.production_realm(without, URL, "chat-secret", "directory-secret")  # suveryn-core's realm always has it
+        build_realm.production_realm(without, URL, "chat-secret", "directory-secret", MIN)  # suveryn-core's realm always has it
 
 
 def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash_in_the_file():
     import base64
     import hashlib
-    u = build_realm.administrator_user("  Anne  de  Smet ", "Anne@Office.BE", "a long test password 1", salt=b"0" * 16)
+    u = build_realm.administrator_user("  Anne  de  Smet ", "Anne@Office.BE", "a long test password 1", MIN, salt=b"0" * 16)
     assert (u["username"], u["email"], u["firstName"], u["lastName"]) == ("anne@office.be", "anne@office.be", "Anne", "de Smet")
     assert u["realmRoles"] == ["suveryn-admin"] and u["enabled"] and u["emailVerified"]
     assert set(u["clientRoles"]["realm-management"]) == {"manage-users", "view-users", "query-users", "query-groups"}
@@ -112,15 +124,23 @@ def test_the_administrator_from_the_web_setup_signs_in_by_email_with_only_a_hash
     assert data == {"hashIterations": 210000, "algorithm": "pbkdf2-sha512", "additionalParameters": {}}
     expected = hashlib.pbkdf2_hmac("sha512", b"a long test password 1", b"0" * 16, 210000)
     assert base64.b64decode(secret["value"]) == expected and base64.b64decode(secret["salt"]) == b"0" * 16
-    assert build_realm.administrator_user("Cher", "cher@office.be", "x" * 15)["lastName"] == ""
+    assert build_realm.administrator_user("Cher", "cher@office.be", "x" * MIN, MIN)["lastName"] == ""
     with pytest.raises(SystemExit):
-        build_realm.administrator_user("Anne", "anne@office.be", "too short")
+        build_realm.administrator_user("Anne", "anne@office.be", "x" * (MIN - 1), MIN)
+
+
+def test_the_password_policy_is_the_web_setups(dev, limits):
+    """Keycloak's least password length is the one the setup screen and the setup service use: core's
+    setup-limits.json at the lock's commit (suveryn-tracker#163), stricter than development's 12."""
+    prod = build_realm.production_realm(dev, URL, "c", "d", limits["password_min"])
+    assert prod["passwordPolicy"] == f"length({limits['password_min']}) and notUsername and notEmail"
+    assert limits["password_min"] > int(dev["passwordPolicy"].split("length(")[1].split(")")[0])
 
 
 def test_a_production_realm_with_a_weaker_password_policy_is_refused(dev):
     prod = build(dev)
     with pytest.raises(SystemExit, match="password policy"):
-        build_realm.verify({**prod, "passwordPolicy": "length(12) and notUsername and notEmail"}, URL)
+        build_realm.verify({**prod, "passwordPolicy": f"length({MIN - 1}) and notUsername and notEmail"}, URL, MIN)
 
 
 @pytest.mark.parametrize("change, problem", [
@@ -173,12 +193,12 @@ def test_the_directory_client_must_carry_view_users_in_its_scope_and_nothing_mor
     had no roles and Keycloak refused the user list (403). A realm without the mapping is refused, and so
     is one that maps more, or maps to another client."""
     with_dir = {**dev, "clients": [chat_client(dev), DIRECTORY], "users": [SERVICE_ACCOUNT]}
-    build_realm.production_realm({**with_dir, "clientScopeMappings": SCOPE}, URL, "c", "d")
+    build_realm.production_realm({**with_dir, "clientScopeMappings": SCOPE}, URL, "c", "d", MIN)
     for bad in ({}, {"realm-management": [{"client": "suveryn-directory", "roles": ["view-realm"]}]},
                 {"realm-management": [{"client": "suveryn-directory", "roles": ["view-users", "manage-users"]}]},
                 {"realm-management": [*SCOPE["realm-management"], {"client": "suveryn-chat", "roles": ["view-users"]}]}):
         with pytest.raises(SystemExit, match="scope"):
-            build_realm.production_realm({**with_dir, "clientScopeMappings": bad}, URL, "c", "d")
+            build_realm.production_realm({**with_dir, "clientScopeMappings": bad}, URL, "c", "d", MIN)
 
 
 ADMIN_COMPOSITE = {"name": "suveryn-admin", "composite": True,
@@ -191,10 +211,10 @@ def test_only_the_administrator_role_carries_account_management_and_no_more(dev)
     suveryn-admin is a composite of the five realm-management roles it needs.
     More than those, a realm role inside it, or another composite role is refused."""
     realm = build_realm.production_realm({**dev, "roles": {"realm": [ADMIN_COMPOSITE]}}, URL, "c",
-                                         "d")
+                                         "d", MIN)
     assert realm["roles"]["realm"] == [ADMIN_COMPOSITE]
     build_realm.production_realm({**dev, "roles": {"realm": [{"name": "suveryn-admin"}]}}, URL, "c",
-                                 "d")  # a plain role, as before
+                                 "d", MIN)  # a plain role, as before
     more = {"realm-management": ["manage-users", "manage-clients"]}
     for bad in ({**ADMIN_COMPOSITE, "composites": {"client": more}},
                 {**ADMIN_COMPOSITE, "composites": {"realm": ["offline_access"]}},
@@ -202,7 +222,7 @@ def test_only_the_administrator_role_carries_account_management_and_no_more(dev)
                 {**ADMIN_COMPOSITE, "name": "office-staff"}):
         with pytest.raises(SystemExit, match="carries more than"):
             build_realm.production_realm({**dev, "roles": {"realm": [bad]}}, URL, "c",
-                                         "d")
+                                         "d", MIN)
 
 
 def test_the_realm_comes_from_a_checkout_without_git_when_its_hash_is_the_locks(tmp_path, dev):
@@ -211,7 +231,37 @@ def test_the_realm_comes_from_a_checkout_without_git_when_its_hash_is_the_locks(
     (tmp_path / LOCK["path"]).write_text(json.dumps(dev))
     import hashlib
     sha = hashlib.sha256((tmp_path / LOCK["path"]).read_bytes()).hexdigest()
-    data, commit = build_realm.fetch_realm(str(tmp_path), LOCK["commit"], LOCK["path"], sha)
+    data, commit = build_realm.fetch_core(str(tmp_path), LOCK["commit"], LOCK["path"], sha)
     assert json.loads(data) == dev and commit == LOCK["commit"]
     with pytest.raises(SystemExit, match="sha256 differs"):
-        build_realm.fetch_realm(str(tmp_path), LOCK["commit"], LOCK["path"], "0" * 64)
+        build_realm.fetch_core(str(tmp_path), LOCK["commit"], LOCK["path"], "0" * 64)
+
+
+def test_the_build_takes_both_files_from_a_checkout_without_git(tmp_path, dev, limits):
+    """As provisioning builds it on the read-only system: /opt/suveryn/core has neither git nor .git (#47),
+    and the lock's sha256 pins the realm and the setup's limits; Keycloak's least password length is the file's."""
+    core = tmp_path / "core"
+    for path in (LOCK["path"], LOCK["limits"]["path"]):
+        (core / path).parent.mkdir(parents=True, exist_ok=True)
+        (core / path).write_bytes(subprocess.run(["git", "-C", CORE, "show", f"{LOCK['commit']}:{path}"],
+                                                 check=True, capture_output=True).stdout)
+    env = {**os.environ, "SUVERYN_CORE_REPO": str(core)}
+    subprocess.run([sys.executable, str(HERE / "build_realm.py"), "--public-url", URL, "--out", str(tmp_path / "out")],
+                   check=True, env=env, capture_output=True)
+    realm = json.loads((tmp_path / "out" / "suveryn-realm.json").read_text())
+    assert realm["passwordPolicy"] == f"length({limits['password_min']}) and notUsername and notEmail"
+    (core / LOCK["limits"]["path"]).write_text(json.dumps({**limits, "password_min": 20}))  # not the pinned file: refused
+    r = subprocess.run([sys.executable, str(HERE / "build_realm.py"), "--public-url", URL, "--out", str(tmp_path / "out2")],
+                       env=env, capture_output=True, text=True)
+    assert r.returncode != 0 and "sha256 differs" in r.stderr
+    # pinned (a copy of the builder with a lock for that file): the policy follows the file, not a number of the builder's
+    import hashlib
+    builder = tmp_path / "builder"
+    builder.mkdir()
+    (builder / "build_realm.py").write_bytes((HERE / "build_realm.py").read_bytes())
+    sha = hashlib.sha256((core / LOCK["limits"]["path"]).read_bytes()).hexdigest()
+    (builder / "realm-lock.json").write_text(json.dumps({**LOCK, "limits": {**LOCK["limits"], "sha256": sha}}))
+    subprocess.run([sys.executable, str(builder / "build_realm.py"), "--public-url", URL, "--out", str(tmp_path / "out3")],
+                   check=True, env=env, capture_output=True)
+    realm = json.loads((tmp_path / "out3" / "suveryn-realm.json").read_text())
+    assert realm["passwordPolicy"] == "length(20) and notUsername and notEmail"
