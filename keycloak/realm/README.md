@@ -2,7 +2,7 @@
 
 The appliance's Keycloak realm, built from suveryn-core's development realm (suveryn-tracker#16).
 One source: [`suveryn-realm.json`](https://github.com/suveryn/suveryn-core/blob/main/packages/api-gateway/keycloak/suveryn-realm.json)
-in suveryn-core defines the client, its flow, the roles and the password and brute-force rules.
+in suveryn-core defines the client, its flow, the roles and the brute-force rules; the production password's least length is the web setup's (below).
 `build_realm.py` takes it at the commit in `realm-lock.json` (checked by SHA-256) and lays the
 production settings over it.
 
@@ -36,7 +36,7 @@ where the chat client has a service account, or where the directory client could
 | Redirect, base and logout URLs | `http://localhost:5173/…` | exactly `<public-url>/…` | No wildcards: a wildcard lets a crafted link send the sign-in code elsewhere |
 | Themes | Keycloak's | `suveryn` (login, account, email) | This repository's [theme](../theme/README.md) |
 | Client secrets | none in the file | new random ones per build (`suveryn-chat`, and `suveryn-directory` when present) | Rotation: build again and re-import the clients |
-| Password policy | at least 12 characters, not the user name or email | at least **15**, not the user name or email | The web setup's rule for the administrator (#37), for every account. The leaked-password list (`passwordBlacklist`) joins once it is on the appliance |
+| Password policy | at least 12 characters, not the user name or email | at least the web setup's least length (`password_min` in suveryn-core's `setup-limits.json`, pinned beside the realm in `realm-lock.json`), not the user name or email | The web setup's rule for the administrator (#37), for every account; the screen and the setup service read the same file (#163). The leaked-password list (`passwordBlacklist`) joins once it is on the appliance |
 | The `suveryn-admin` role | as suveryn-core's realm | the same, checked: it may carry `manage-users`, `view-users`, `view-realm`, `view-events` and `manage-realm` (realm-management) and nothing more, and no other realm role may carry any | Administration › Users manages the accounts with the administrator's own token, and Settings' two-step sign-in for everyone changes the browser flow (`manage-realm`, decision, 30 October 2026; it also lets the administrator change the realm's other settings) (suveryn-core `keycloak/README.md`): no extra client or secret, and the admin events name the administrator. |
 | The office's administrator | none | with `--administrator FILE` (`{name, email, password}`, from the web setup): signs in with the email address; realm role `suveryn-admin` and user management in the admin console (`manage-users`, `view-users`, `query-users`, `query-groups`); through `suveryn-admin` also `manage-realm`, for the two-step setting | Made by the realm import, so no password passes through Keycloak's admin API. The file holds only a pbkdf2-sha512 hash (210,000 iterations), which Keycloak 26 reads; checked by signing in with Keycloak 26.8 |
 
@@ -48,7 +48,7 @@ Everything else comes unchanged from the development realm:
 - no self-registration and no external identity providers.
 
 `build_realm.py` refuses to build if the development realm ever loses one of these, or the password
-policy drops below 15 characters.
+policy drops below the web setup's least length.
 
 Event retention is 180 days, decided on 2026-10-11. Long enough to investigate an incident found months later, short enough for data minimisation. Keycloak deletes older events itself: sign-in events through the realm's `eventsExpiration`, admin events through its `adminEventsExpiration` attribute, which Keycloak 26.8's event store reads. Keycloak's own log (the `jboss-logging` listener) goes to the journal, whose retention the appliance sets.
 
