@@ -472,8 +472,39 @@ def test_the_packer_images_hardening_is_in_the_read_only_system_too():
     for line in re.findall(r"^([a-z][\w.]+ = \S+)$", harden, re.M):
         assert line in sysctl, line
     assert "SystemMaxUse=1G" in (extra / "usr/lib/systemd/journald.conf.d/90-suveryn.conf").read_text()
-    assert "Storage=none" in (extra / "usr/lib/systemd/coredump.conf.d/90-suveryn.conf").read_text()
     assert "* hard core 0" in (extra / "etc/security/limits.d/90-suveryn.conf").read_text()
+
+
+def test_no_service_can_leave_a_core_dump():
+    """A core dump would hold document text (#206). The kernel pipes every dump to a program that discards it,
+    and every service runs with a core limit of 0; the self-test checks both on the running system."""
+    extra = MKOSI / "mkosi.extra"
+    sysctl = (extra / "usr/lib/sysctl.d/90-suveryn.conf").read_text()
+    pattern = re.search(r"^kernel\.core_pattern = (\S+)$", sysctl, re.M).group(1)
+    assert pattern == "|/bin/false"  # a pipe: nothing is written; a plain path such as /dev/null fails
+    assert "coreutils" in packages(MKOSI / "mkosi.conf")  # /bin/false (usr-merged: /usr/bin/false)
+    assert "fs.suid_dumpable = 0" in sysctl
+    system = (extra / "usr/lib/systemd/system.conf.d/90-suveryn.conf").read_text()
+    assert re.search(r"^\[Manager\]$", system, re.M) and re.search(r"^DefaultLimitCORE=0$", system, re.M)
+    assert "* hard core 0" in (extra / "etc/security/limits.d/90-suveryn.conf").read_text()  # sign-in sessions
+    assert not (extra / "usr/lib/systemd/coredump.conf.d").exists()  # read only by systemd-coredump, not installed
+    # Nothing else sets the pattern: no other sysctl.d file in any tree that reaches the image.
+    others = [f for f in MKOSI.rglob("*") if f.is_file() and "sysctl.d" in f.parts
+              and f != extra / "usr/lib/sysctl.d/90-suveryn.conf" and "kernel.core_pattern" in f.read_text()]
+    assert not others, others
+    # No package that would take the dumps instead (apport, systemd-coredump), in any package list.
+    have = set()
+    for conf in MKOSI.rglob("*.conf"):
+        have |= packages(conf)
+    assert not have & {"apport", "systemd-coredump"}, have & {"apport", "systemd-coredump"}
+    # No unit or drop-in raises a service's limit again.
+    unit_suffixes = {".service", ".conf", ".socket", ".mount", ".slice", ".scope", ".target", ".timer", ".path"}
+    raising = [f for f in REPO.rglob("*") if f.is_file() and f.suffix in unit_suffixes and ".git" not in f.parts
+               and re.search(r"^\s*LimitCORE=", f.read_text(errors="replace"), re.M)]
+    assert not raising, raising
+    selftest = (MKOSI / "mkosi.profiles/test/extra/usr/lib/suveryn-test/selftest").read_text()
+    assert "cat /proc/sys/kernel/core_pattern" in selftest and "systemctl show -p DefaultLimitCORE" in selftest
+    assert "sysctl -n" not in selftest  # procps isn't in the image
 
 
 def test_suveryn_itself_comes_prebuilt_and_checked_against_the_pins():

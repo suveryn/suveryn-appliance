@@ -99,8 +99,12 @@ access except, when connected, for the LLM files.
 ## Hardening
 
 This image has the same hardening settings as the appliance image
-([`image/mkosi`, *Hardening*](../mkosi/README.md#hardening)): the kernel settings, the core-dump limits, the
-1 GB journal, the services on loopback and the identity. In addition, Packer only:
+([`image/mkosi`, *Hardening*](../mkosi/README.md#hardening)): the kernel settings, the
+1 GB journal, the services on loopback and the identity. Core dumps differ: this image has a hard core
+limit of 0 for sign-in sessions (`limits.d`), `fs.suid_dumpable = 0` and a `coredump.conf.d`
+(`Storage=none`, read only by systemd-coredump); the pipe that discards every dump
+(`kernel.core_pattern`) and the services' core limit of 0 are the appliance image's only (suveryn-tracker#221). In addition,
+Packer only:
 
 - **Minimal installation:** `ubuntu-server-minimal`. Snap, ModemManager, iSCSI, multipath, apport and
   the Ubuntu Pro client are removed; the CUDA compiler, build tools, Node and every cache go out after

@@ -89,6 +89,8 @@ check "/var noexec,nosuid,nodev"      sh -c 'o=$(findmnt -no OPTIONS /var); for 
 check "nothing runs from /var"        sh -c 'cp /usr/bin/true /var/tmp/x && ! /var/tmp/x 2>/dev/null; r=$?; rm -f /var/tmp/x; exit $r'
 check "/tmp in memory"                sh -c 'test "$(findmnt -no FSTYPE /tmp)" = tmpfs'
 check "no swap"                       sh -c 'test -z "$(swapon --noheadings)"'
+check "no core dumps: the kernel discards them" sh -c 'p=$(cat /proc/sys/kernel/core_pattern); echo "$p"; test "$p" = "|/bin/false" && test -x /bin/false'
+check "no core dumps: services' limit 0" sh -c 'v=$(systemctl show -p DefaultLimitCORE --value); echo "$v"; test "$v" = 0'
 check "/etc/suveryn on /var"          sh -c 'test "$(readlink -f /etc/suveryn)" = /var/lib/suveryn/etc && test -d /etc/suveryn'
 check "/etc/hosts on /var"            sh -c 'test "$(readlink -f /etc/hosts)" = /var/lib/suveryn/host/hosts && grep -q localhost /etc/hosts'
 check "machine-id kept on /var"       sh -c 'id=$(cat /var/lib/suveryn/host/machine-id) && [ ${#id} -eq 32 ] && [ "$id" = "$(cat /etc/machine-id)" ] && echo "$id"'

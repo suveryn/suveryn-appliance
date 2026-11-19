@@ -99,9 +99,12 @@ and the boot file, kernel and initrd beside it. Packages come from Ubuntu's arch
   llama-server and the gateway listen on loopback only.
 - **Kernel settings** (`/usr/lib/sysctl.d/90-suveryn.conf`): pointer and dmesg restrictions, BPF
   hardening, kexec disabled, ptrace limited to admins, no redirects or source routing.
-- **Core dumps** would hold document text. The image sets `fs.suid_dumpable = 0` and a hard core
-  limit of 0 for sign-in sessions (`/etc/security/limits.d/90-suveryn.conf`); whether a crashing
-  service leaves none is to be checked on a built image and fixed (#206).
+- **No core dumps:** they would hold document text. The kernel hands every dump to `/bin/false`,
+  which discards it (`kernel.core_pattern = |/bin/false`), so none reaches a disk; every service runs
+  with a core limit of 0 (`/usr/lib/systemd/system.conf.d/90-suveryn.conf`), sign-in sessions too
+  (`/etc/security/limits.d/90-suveryn.conf`); and `fs.suid_dumpable = 0`. With a pipe the kernel
+  ignores the core limit, so the limits are the fallback for the moments before the sysctl applies at
+  boot. The VM self-test checks the pipe and the services' limit on the running system.
 - **The journal** is persistent, on the data partition, capped at 1 GB (`journald.conf.d`).
 - **Identity:** every appliance makes its own machine-id, certificates and secrets at its first start;
   the image holds none.
