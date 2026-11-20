@@ -120,7 +120,8 @@ file, and a run of `install` after a stop picks it up.
 
 A test machine's own nginx.conf may not load `/etc/nginx/sites-enabled/` (RunPod's doesn't). A test
 machine (`install`, `first-boot --test-machine`, the web setup on a test site) gets the line added, as
-Ubuntu has it; an appliance, and a restore, stop instead, since the image's nginx.conf has it.
+Ubuntu has it; an appliance stops instead, since the image's nginx.conf has it; a restore doesn't add it
+either.
 
 ## Without systemd
 

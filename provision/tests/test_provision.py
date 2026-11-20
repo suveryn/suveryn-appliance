@@ -610,7 +610,7 @@ def test_a_test_machines_nginx_conf_gets_sites_enabled_and_an_appliance_stops(tm
     assert conf.read_text().count("include /etc/nginx/sites-enabled/*;") == 1
     assert conf.read_text().index("http {") < conf.read_text().index("sites-enabled")
     conf.write_text("http {\n    include /etc/nginx/sites-enabled/*.conf;\n}\n")
-    assert p.add_sites_enabled() is False  # a narrower include of its own counts
+    assert p.add_sites_enabled() is False  # a narrower include is left alone (sites_loaded then stops)
     conf.unlink()
     with pytest.raises(SystemExit):
         p.add_sites_enabled()
