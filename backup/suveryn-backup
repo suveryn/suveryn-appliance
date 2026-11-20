@@ -313,10 +313,14 @@ def usb_candidates(listing: dict) -> list[tuple[Path, str]]:
 
 def usb_partition(chosen: str) -> Path:
     """The USB disk the office chose, by the web setup's id (``disk_id``): its first partition with a file system,
-    or the disk."""
-    for dev, label in usb_candidates(lsblk_usb()):
+    or the disk. ``backup.file_system_unsupported`` when it is connected and none of its file systems is one
+    this appliance uses (it was formatted again since); ``backup.target_unreachable`` when it isn't connected."""
+    listing = lsblk_usb()
+    for dev, label in usb_candidates(listing):
         if label == chosen:
             return dev
+    if any(d.get("tran") == "usb" and d.get("type") == "disk" and disk_id(d) == chosen for d in listing.get("blockdevices") or []):
+        raise Failed("backup.file_system_unsupported", "the backup disk is connected, with no file system of ext4, exFAT, FAT or NTFS")
     raise Failed("backup.target_unreachable", "the backup disk isn't connected")
 
 
@@ -383,23 +387,26 @@ class Target:
 
     def _usb(self, opts: str) -> str:
         MOUNT = self.mount
-        """Mount the office's USB disk: the one chosen in the setup, or, when that isn't connected, another
-        disk the office uses for its backups (rotation: two disks swapped, one kept elsewhere). That is a
+        """Mount the office's USB disk: the one chosen in the setup, or, when that isn't connected or can't be
+        used, another disk the office uses for its backups (rotation: two disks swapped, one kept elsewhere). That is a
         disk with a ``suveryn-backups`` folder at its top, made by this appliance or by the office, unless
         the folder says it is another office's (its key). Returns which disk."""
         s = self.s
+        unusable = None
         try:
             chosen = [(usb_partition(s["disk"]), s["disk"])]
-        except Failed:
+        except Failed as e:
             if not s.get("recipient"):  # reading on a replacement: the disk the office chose there
                 raise
-            chosen = []
+            chosen, unusable = [], e if e.code == "backup.file_system_unsupported" else None
         for dev, label in chosen or usb_candidates(lsblk_usb()):
             kind = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", str(dev)], capture_output=True,
                                   text=True).stdout.strip()
             if kind not in ("ext4", "exfat", "vfat", "ntfs"):
+                if chosen and not kind:  # lsblk saw a file system it uses, blkid none: gone or failing since, not formatted
+                    raise Failed("backup.target_unreachable", "the backup disk's file system can't be read")
                 if chosen:
-                    raise Failed("backup.target_unreachable", f"the backup disk's file system ({kind or 'none'}) isn't ext4, exFAT, FAT or NTFS")
+                    raise Failed("backup.file_system_unsupported", f"the backup disk's file system ({kind}) isn't ext4, exFAT, FAT or NTFS")
                 continue
             # NTFS through the kernel's own driver (ntfs3): there is no ntfs-3g on the appliance. Another
             # disk is looked at read-only first.
@@ -414,6 +421,8 @@ class Target:
             if ours:
                 run("backup.target_unreachable", ["mount", *fs, "-o", opts, dev, MOUNT])
                 return label
+        if unusable:  # the chosen disk is there and can't be used, and no other of the office's disks is
+            raise unusable
         raise Failed("backup.target_unreachable", "the backup disk isn't connected")
 
     def __exit__(self, *exc) -> None:
@@ -816,11 +825,11 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
                 entries, total = entries + 1, total + max(member.size, 0)
                 folders += max(member.size, 0) if member.name.startswith("files/") else 0
                 if entries > MAX_ENTRIES:
-                    raise Failed("backup.damaged", f"the backup holds more than {MAX_ENTRIES} entries")
+                    raise Failed("backup.too_large", f"the backup holds more than {MAX_ENTRIES} entries")
                 if folders > MAX_FOLDER_BYTES:
-                    raise Failed("backup.damaged", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
+                    raise Failed("backup.too_large", f"the backup's folders are larger than {MAX_FOLDER_BYTES // 2**20} MiB")
                 if total > budget:
-                    raise Failed("backup.damaged", "the backup unpacks to more than this appliance has room for")
+                    raise Failed("backup.too_large", "the backup unpacks to more than this appliance has room for")
                 tar.extract(member, dest, filter="data")
                 if member.name == "manifest.json":  # written first: a newer backup is said so before its new parts are met
                     too_new(dest / "manifest.json")

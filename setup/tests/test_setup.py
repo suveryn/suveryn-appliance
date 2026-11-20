@@ -777,16 +777,19 @@ def test_when_the_newest_backups_are_all_damaged_the_check_stops_after_three_old
 
 
 def test_a_check_that_fails_for_another_reason_doesnt_try_older_backups(s, api, tmp_path):
-    tried = damaged_target(s, api, tmp_path, ["23", "16"], [], {"23": "backup.version_too_new", "16": "usable"})
-    assert s.restore_check() == 1
-    assert tried.read_text().split() == ["23"]
-    assert api("GET", "restore")[1]["message"]["code"] == "backup.version_too_new"
+    # too large (#164) stops too: an older backup would quietly lose recent work, and is usually as large (the founder)
+    for code in ("backup.version_too_new", "backup.too_large"):
+        (tmp_path / code).mkdir()
+        tried = damaged_target(s, api, tmp_path / code, ["23", "16"], [], {"23": code, "16": "usable"})
+        assert s.restore_check() == 1
+        assert tried.read_text().split() == ["23"]
+        assert api("GET", "restore")[1]["message"]["code"] == code
 
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
     for code in ("backup.not_a_key", "backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.share_login_refused",
-                 "backup.damaged", "backup.version_too_new"):
+                 "backup.file_system_unsupported", "backup.damaged", "backup.too_large", "backup.version_too_new"):
         said = {"code": code, "params": {}}
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'failure': {said!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
