@@ -594,6 +594,55 @@ def test_llama_server_is_built_without_llama_cpps_own_web_page(tmp_path, monkeyp
         assert any(a[0] == "cmake" for a in ran) is rebuilt, cache
 
 
+def test_a_test_machines_nginx_conf_gets_sites_enabled_and_an_appliance_stops(tmp_path, monkeypatch, capsys):
+    """suveryn-tracker#225: RunPod's own nginx.conf doesn't load sites-enabled/; one function adds it, on test machines only."""
+    conf = tmp_path / "nginx.conf"
+    conf.write_text("events {}\nhttp {\n    include mime.types;\n}\n")
+    monkeypatch.setattr(p, "NGINX", tmp_path)
+    monkeypatch.setattr(p, "run", lambda *a, **k: "server_name x;" if "include /etc/nginx/sites-enabled/*;" in conf.read_text() else "")
+    with pytest.raises(SystemExit):
+        p.sites_loaded("server_name x;")  # an appliance: a missing line is a fault
+    assert "sites-enabled" not in conf.read_text()
+    p.sites_loaded("server_name x;", test_machine=True)
+    assert "added, as on Ubuntu" in capsys.readouterr().out
+    p.sites_loaded("server_name x;", test_machine=True)  # once only
+    assert "added" not in capsys.readouterr().out
+    assert conf.read_text().count("include /etc/nginx/sites-enabled/*;") == 1
+    assert conf.read_text().index("http {") < conf.read_text().index("sites-enabled")
+    conf.write_text("http {\n    include /etc/nginx/sites-enabled/*.conf;\n}\n")
+    assert p.add_sites_enabled() is False  # a narrower include is left alone (sites_loaded then stops)
+    conf.unlink()
+    with pytest.raises(SystemExit):
+        p.add_sites_enabled()
+
+
+@pytest.mark.parametrize("staging", [True, False])
+def test_first_boot_tells_the_reverse_proxy_whether_this_is_a_test_machine(staging, monkeypatch):
+    """suveryn-tracker#225: install and first-boot --test-machine are test machines; the office's first boot isn't."""
+    got = {}
+
+    class Reached(Exception):
+        pass
+
+    def reverse_proxy(host, test_machine=False):
+        got.update(host=host, test_machine=test_machine)
+        raise Reached
+    for name, value in (("gpu_names", lambda: []), ("gpu_verdict", lambda names, site: (True, "ok")),
+                        ("network_mode", lambda *a: None), ("firewall", lambda: None), ("updates", lambda mode: None),
+                        ("postgres", lambda: ("db", "pw")), ("keycloak", lambda *a: {}), ("llm_models", lambda *a: []),
+                        ("packs", lambda *a: None), ("tls", lambda *a: None), ("reverse_proxy", reverse_proxy)):
+        monkeypatch.setattr(p, name, value)
+    monkeypatch.setattr(p.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, "connected\n", ""))
+    args = type("A", (), {"site": "test", "public_url": "https://x.test", "network_mode": "connected", "outbound": "all",
+                          "models_from": None, "packs_from": None, "tls_cert": None, "tls_key": None})()
+    with pytest.raises(Reached):
+        p.first_boot(args, staging=staging)
+    assert got == {"host": "x.test", "test_machine": staging}
+    src = (HERE / "suveryn-provision").read_text()
+    assert src.count("first_boot(a, staging=True)") == 1  # install
+    assert "first_boot(a, staging=a.test_machine)" in src
+
+
 def test_the_images_llama_server_carries_machine_code_for_every_office_card():
     """CUDA 13 with driver 580: a card without machine code would need the driver to compile a newer CUDA 13's
     intermediate code, which 580 can't (#57). So every generation an office card can be is listed."""

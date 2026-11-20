@@ -996,7 +996,7 @@ def starting_page() -> None:
             dest.chmod(0o644)
 
 
-def reverse_proxy(host: str) -> None:
+def reverse_proxy(host: str, test_machine: bool = False) -> None:
     step("Reverse proxy (nginx)")
     snippets()
     starting_page()
@@ -1013,9 +1013,7 @@ def reverse_proxy(host: str) -> None:
         Path("/etc/hosts").write_text(hosts.rstrip("\n") + f"\n127.0.0.1 {host}  # suveryn-provision\n")
     keep_hosts_from_cloud_init(host)
     run("nginx", "-t", capture=True)
-    # Ubuntu's nginx.conf loads sites-enabled/; an image with its own nginx.conf may not (RunPod's
-    # doesn't), and the site would then silently not be served.
-    sites_loaded(f"server_name {host};")
+    sites_loaded(f"server_name {host};", test_machine)
     note(f"https://{host}/: the chat UI, the gateway (/v1, /auth, /health) and Keycloak (/idp); http redirects to https")
 
 
@@ -1047,12 +1045,32 @@ def hosts_has(host: str) -> bool:
         return False
 
 
-def sites_loaded(marker: str) -> None:
-    """Stops when nginx's main configuration doesn't load sites-enabled/ (RunPod's own nginx.conf
-    doesn't), so the site would silently not be served."""
+def sites_loaded(marker: str, test_machine: bool = False) -> None:
+    """Stops when nginx's main configuration doesn't load sites-enabled/, so the site would silently not
+    be served. Ubuntu's nginx.conf and the image's load it; a test machine's own may not (RunPod's
+    doesn't), and there the line is added first, as Ubuntu has it (suveryn-tracker#225). On an appliance
+    a missing line is a fault, and it stops."""
+    if test_machine and add_sites_enabled():
+        note("nginx.conf didn't load /etc/nginx/sites-enabled/ (a test machine's own): added, as on Ubuntu")
     if marker not in run("nginx", "-T", capture=True):
         fail("nginx's main configuration doesn't load /etc/nginx/sites-enabled/; add "
              "'include /etc/nginx/sites-enabled/*;' to its http block (Ubuntu's own nginx.conf has it)")
+
+
+def add_sites_enabled() -> bool:
+    """Adds 'include /etc/nginx/sites-enabled/*;' to nginx.conf's http block where it is missing; whether it did."""
+    conf = NGINX / "nginx.conf"
+    if not conf.exists():
+        fail(f"{conf} is missing: nginx isn't installed as Ubuntu installs it")
+    text = conf.read_text()
+    if re.search(r"^\s*include\s+/etc/nginx/sites-enabled/\*[^;]*;", text, re.M):
+        return False
+    m = re.search(r"^\s*http\s*\{", text, re.M)
+    if not m:
+        fail(f"{conf} has no http block to add sites-enabled/ to")
+    conf.write_text(text[:m.end()] + "\n    include /etc/nginx/sites-enabled/*;  # added by suveryn-provision on a test machine\n"
+                    + text[m.end():])
+    return True
 
 
 def _nginx_running() -> bool:
@@ -1932,7 +1950,7 @@ def first_boot(a: argparse.Namespace, staging: bool) -> None:
     reader = READER_SETTINGS
     host = a.public_url.split("://", 1)[1].rstrip("/")
     tls(host, a.tls_cert, a.tls_key)
-    reverse_proxy(host)
+    reverse_proxy(host, test_machine=staging)
     configure(db_url, oidc, reader, llms, a.cases_access or "members", a.cases_keep or "manual",
               a.conversations_keep or "manual")
     step("Starting the services")

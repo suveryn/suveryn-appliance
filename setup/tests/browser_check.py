@@ -101,21 +101,6 @@ def served_as_scripts() -> None:
     print("(the page's scripts and styles come with their types)", flush=True)
 
 
-def sites_enabled() -> None:
-    """A test machine whose own nginx.conf doesn't load sites-enabled/ (RunPod's): add it, as the
-    provisioning README says. Ubuntu's own nginx.conf, and the appliance's, have it already."""
-    conf = Path("/etc/nginx/nginx.conf")
-    text = conf.read_text()
-    if re.search(r"^\s*include\s+/etc/nginx/sites-enabled/\*;", text, re.M):
-        return
-    m = re.search(r"^\s*http\s*\{", text, re.M)
-    if not m:
-        sys.exit("browser_check.py: /etc/nginx/nginx.conf has no http block to add sites-enabled to")
-    conf.write_text(text[:m.end()] + "\n    include /etc/nginx/sites-enabled/*;  # added by browser_check.py (sūveryn)\n"
-                    + text[m.end():])
-    print("(nginx.conf didn't load sites-enabled/: added, as on Ubuntu)", flush=True)
-
-
 def machine() -> dict:
     """The disposable machine as an appliance would be at its first start."""
     global SETUP, HERE
@@ -166,11 +151,12 @@ def machine() -> dict:
     check_tool.chmod(0o755)
     if os.environ.get("SUVERYN_CORE"):  # one list of messages, core's: where this machine has no /opt/suveryn/core
         os.environ["SUVERYN_CORE_MESSAGES"] = str(Path(os.environ["SUVERYN_CORE"]) / "packages/harness/src/suveryn_harness/messages.py")
-    env = {**os.environ, "SUVERYN_PROVISION": str(HERE / "stand_in_provision.py"),
+    # A test site either way: where this machine's own nginx.conf doesn't load sites-enabled/ (RunPod's),
+    # provision adds the line (suveryn-tracker#225).
+    env = {**os.environ, "SUVERYN_PROVISION": str(HERE / "stand_in_provision.py"), "SUVERYN_SETUP_SITE": "test",
            "SUVERYN_NETWORK_MODE_TOOL": str(check_tool), "STAND_IN_FAIL_AT": "Keycloak", "SUVERYN_SETUP_SEEN_DONE_WAIT": "60"}
     if REAL:  # the real suveryn-provision first-boot and outgoing-traffic check, as a test machine
         env = {**os.environ, "SUVERYN_SETUP_SITE": "test", "SUVERYN_SETUP_SEEN_DONE_WAIT": "300"}
-    sites_enabled()
     # Its output to a file, not a pipe: without systemd, prepare starts nginx, which keeps it open.
     with open(OUT / "prepare.log", "w") as log:
         r = subprocess.run([sys.executable, SETUP / "suveryn-setup", "prepare"], env=env, stdin=subprocess.DEVNULL,

@@ -866,7 +866,8 @@ def nginx_setup_site(host: str) -> None:
         code, out = run("nginx", "-t")
         if code != 0:
             raise SystemExit(f"suveryn-setup: nginx refuses the setup site: {out[-300:]}")
-        p.sites_loaded(SETUP_SITE_MARK if SETUP_SITE_MARK in site.read_text() else f"server_name {host};")
+        p.sites_loaded(SETUP_SITE_MARK if SETUP_SITE_MARK in site.read_text() else f"server_name {host};",
+                       test_machine=SITE == "test")
         p.start_nginx()
 
 
