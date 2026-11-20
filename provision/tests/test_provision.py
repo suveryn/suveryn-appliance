@@ -571,6 +571,29 @@ def test_without_the_temporary_administrator_verify_says_the_sign_in_check_was_n
     assert "if ok and not staging:" in first_boot  # a test machine keeps it
 
 
+def test_llama_server_is_built_without_llama_cpps_own_web_page(tmp_path, monkeypatch):
+    """suveryn-tracker#224: the page is downloaded during the build, unpinned, and unused. A build folder made
+    with it (a leftover, or a half download that stopped the build) starts again."""
+    (tmp_path / ".git").mkdir()
+    build = tmp_path / "build"
+    monkeypatch.setattr(p, "LLAMA", tmp_path)
+    monkeypatch.setattr(p, "for_image", lambda: False)
+    monkeypatch.setattr(p, "cuda_stub_dir", lambda: None)
+    ran = []
+    monkeypatch.setattr(p, "run", lambda *a, **k: (ran.append(a), p.VERSIONS["llama_cpp"]["commit"])[1])
+    p.llama_server()
+    configure = next(a for a in ran if a[0] == "cmake" and "-S" in a)
+    assert "-DLLAMA_USE_PREBUILT_UI=OFF" in configure and "-DLLAMA_BUILD_UI=OFF" in configure
+    for cache, rebuilt in (("LLAMA_USE_PREBUILT_UI:BOOL=ON\n", True), ("", True),
+                           ("LLAMA_USE_PREBUILT_UI:BOOL=OFF\n", False)):
+        (build / "bin").mkdir(parents=True, exist_ok=True)
+        (build / "bin" / "llama-server").write_text("")
+        (build / "CMakeCache.txt").write_text(cache)
+        ran.clear()
+        p.llama_server()
+        assert any(a[0] == "cmake" for a in ran) is rebuilt, cache
+
+
 def test_the_images_llama_server_carries_machine_code_for_every_office_card():
     """CUDA 13 with driver 580: a card without machine code would need the driver to compile a newer CUDA 13's
     intermediate code, which 580 can't (#57). So every generation an office card can be is listed."""
