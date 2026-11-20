@@ -594,6 +594,26 @@ def test_llama_server_is_built_without_llama_cpps_own_web_page(tmp_path, monkeyp
         assert any(a[0] == "cmake" for a in ran) is rebuilt, cache
 
 
+def test_a_test_machines_nginx_conf_gets_sites_enabled_and_an_appliance_stops(tmp_path, monkeypatch):
+    """suveryn-tracker#225: RunPod's own nginx.conf doesn't load sites-enabled/. The installer stopped on a test
+    machine, while the web setup's browser check added the line itself: now one function, on test machines only."""
+    conf = tmp_path / "nginx.conf"
+    conf.write_text("events {}\nhttp {\n    include mime.types;\n}\n")
+    monkeypatch.setattr(p, "NGINX", tmp_path)
+    monkeypatch.setattr(p, "run", lambda *a, **k: "server_name x;" if "include /etc/nginx/sites-enabled/*;" in conf.read_text() else "")
+    with pytest.raises(SystemExit):
+        p.sites_loaded("server_name x;")  # an appliance: a missing line is a fault
+    assert "sites-enabled" not in conf.read_text()
+    p.sites_loaded("server_name x;", test_machine=True)
+    p.sites_loaded("server_name x;", test_machine=True)  # once only
+    assert conf.read_text().count("include /etc/nginx/sites-enabled/*;") == 1
+    assert conf.read_text().index("http {") < conf.read_text().index("sites-enabled")
+    src = (HERE / "suveryn-provision").read_text()
+    assert "reverse_proxy(host, test_machine=staging)" in src[src.index("def first_boot("):src.index("def after_restore(")]
+    setup = (HERE.parent / "setup" / "suveryn-setup").read_text()
+    assert 'test_machine=SITE == "test"' in setup
+
+
 def test_the_images_llama_server_carries_machine_code_for_every_office_card():
     """CUDA 13 with driver 580: a card without machine code would need the driver to compile a newer CUDA 13's
     intermediate code, which 580 can't (#57). So every generation an office card can be is listed."""

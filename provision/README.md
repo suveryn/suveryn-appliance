@@ -124,6 +124,10 @@ small runner: each `ExecStart` as the unit's `User`, with its `EnvironmentFile`s
 systemd, which also applies the units' hardening (`ProtectSystem`, `PrivateTmp`, …) that the runner
 doesn't.
 
+Its own nginx.conf may not load `/etc/nginx/sites-enabled/` (RunPod's doesn't). A test machine (`install`,
+`first-boot --test-machine`, the web setup on a test site) gets the line added, as Ubuntu has it; an
+appliance stops instead, since the image's nginx.conf has it.
+
 ## Tests
 
 ```bash
