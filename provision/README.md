@@ -116,6 +116,12 @@ the read-only system an air-gapped appliance with neither stops.
 Downloads resume: curl retries every error (a connection reset too), each of its three runs continues the partial
 file, and a run of `install` after a stop picks it up.
 
+## A test machine's nginx.conf
+
+A test machine's own nginx.conf may not load `/etc/nginx/sites-enabled/` (RunPod's doesn't). A test
+machine (`install`, `first-boot --test-machine`, the web setup on a test site) gets the line added, as
+Ubuntu has it; an appliance, and a restore, stop instead, since the image's nginx.conf has it.
+
 ## Without systemd
 
 A container (the RunPod test pod) has no systemd. `services start` then runs the same units with a
@@ -123,10 +129,6 @@ small runner: each `ExecStart` as the unit's `User`, with its `EnvironmentFile`s
 `/var/log/suveryn/<unit>.log`, PIDs in `/run/suveryn`; `status` lists PostgreSQL and nginx with them, and `stop` waits until nginx has quit, so a `start` right after it finds no nginx still exiting. It is for testing only; an appliance runs
 systemd, which also applies the units' hardening (`ProtectSystem`, `PrivateTmp`, …) that the runner
 doesn't.
-
-Its own nginx.conf may not load `/etc/nginx/sites-enabled/` (RunPod's doesn't). A test machine (`install`,
-`first-boot --test-machine`, the web setup on a test site) gets the line added, as Ubuntu has it; an
-appliance stops instead, since the image's nginx.conf has it.
 
 ## Tests
 

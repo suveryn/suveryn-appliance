@@ -600,6 +600,23 @@ def test_prepare_writes_the_facts_and_the_setup_site(tmp_path, monkeypatch):
     assert (mod.NGINX / "sites-available" / "suveryn").read_text() == "# the real site"
 
 
+@pytest.mark.parametrize("site", ["test", "on-premise"])
+def test_the_setup_site_adds_sites_enabled_on_a_test_site_only(site, tmp_path, monkeypatch):
+    """suveryn-tracker#225: on a test site (the Pod) provision adds a missing sites-enabled/ line to nginx.conf;
+    on an office's appliance it stops instead."""
+    mod = load(tmp_path, SUVERYN_SETUP_SITE=site)
+    monkeypatch.delenv("SUVERYN_SETUP_TEST")  # reach the nginx part
+    real = mod.provision_module()
+    real.NGINX = mod.NGINX
+    asked = []
+    monkeypatch.setattr(real, "sites_loaded", lambda marker, test_machine=False: asked.append(test_machine))
+    monkeypatch.setattr(real, "start_nginx", lambda: None)
+    monkeypatch.setattr(mod, "provision_module", lambda: real)
+    monkeypatch.setattr(mod, "run", lambda *a, **k: (0, ""))
+    mod.nginx_setup_site("notary-ghent.local")
+    assert asked == [site == "test"]
+
+
 def test_on_the_read_only_system_the_site_goes_to_the_data_partition(tmp_path, monkeypatch):
     """image/mkosi: /etc/nginx/sites-enabled/suveryn is a link into /var/lib/suveryn/nginx, built in."""
     mod = load(tmp_path)

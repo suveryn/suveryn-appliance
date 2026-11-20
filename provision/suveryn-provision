@@ -1060,8 +1060,10 @@ def sites_loaded(marker: str, test_machine: bool = False) -> None:
 def add_sites_enabled() -> bool:
     """Adds 'include /etc/nginx/sites-enabled/*;' to nginx.conf's http block where it is missing; whether it did."""
     conf = NGINX / "nginx.conf"
+    if not conf.exists():
+        fail(f"{conf} is missing: nginx isn't installed as Ubuntu installs it")
     text = conf.read_text()
-    if re.search(r"^\s*include\s+/etc/nginx/sites-enabled/\*;", text, re.M):
+    if re.search(r"^\s*include\s+/etc/nginx/sites-enabled/\*[^;]*;", text, re.M):
         return False
     m = re.search(r"^\s*http\s*\{", text, re.M)
     if not m:
