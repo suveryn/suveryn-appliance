@@ -96,11 +96,12 @@ with a reference for a failure nobody planned for.
   checked, up to three, and the newest whole one is offered with the warning `backup.newest_damaged`
   (suveryn-tracker#166); when all of those are damaged, `backup.damaged` says from when to when (`newest`,
   `oldest`). If the next one fails for another reason (made by a newer version, the target gone), the screen
-  says that reason, not that the newest was damaged. Each check may take up to 30 minutes, so four may take two
+  says that reason, not that the newest was damaged. A newest backup that is too large (`backup.too_large`) or made
+  by a newer version stops the check there, with no older one tried: an older one would quietly lose recent work. Each check may take up to 30 minutes, so four may take two
   hours, with "checking" on the screen all the while. The confirm screen offers the other whole ones' dates (`choices`) and `POST
   restore/start` takes `{"file": …}`, one of them;
   the result says `checked` with the backup, or `failed` with a `message`, the backup service's own, passed
-  on as it is: `backup.not_a_key`, `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.share_login_refused` (the share refused the user or the password), `backup.damaged`,
+  on as it is: `backup.not_a_key`, `backup.key_mismatch`, `backup.not_found`, `backup.target_unreachable`, `backup.share_login_refused` (the share refused the user or the password), `backup.file_system_unsupported` (the disk is there and can't be used), `backup.damaged`, `backup.too_large` (larger than this appliance can restore: its room, or its limits on entries and on the settings folders),
   `backup.version_too_new` (made by a newer sūveryn: a newer backup format or PostgreSQL than this appliance's, #57) or
   `backup.settings_invalid`.
 - **restore**: `suveryn-provision restore --settings … --identity … --backup <the file chosen>`, its

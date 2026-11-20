@@ -1127,7 +1127,8 @@ def restore_check() -> int:
             result["warning"] = message("backup.newest_damaged", newest=bad[0]["created"], whole=r["created"])
     else:
         # why, as the backup service says it: a code of the registry (backup.not_a_key, backup.key_mismatch, backup.not_found,
-        # backup.damaged, backup.version_too_new, backup.target_unreachable, backup.share_login_refused), passed on as it is (#154)
+        # backup.damaged, backup.too_large, backup.version_too_new, backup.target_unreachable, backup.file_system_unsupported,
+        # backup.share_login_refused), passed on as it is (#154)
         result = {"state": "failed", "message": messages.why(r.get("failure"))}
         forget_restore_secrets()  # the screen asks for them again
     write_file(RESTORE, json.dumps(result, indent=1), 0o644)

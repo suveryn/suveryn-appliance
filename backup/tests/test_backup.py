@@ -572,7 +572,7 @@ def test_a_backup_that_unpacks_to_too_much_is_refused_before_it_fills_the_disk(a
     r = tool(env, "check", backup, "--identity", appliance["key"])
     assert r.returncode == 1 and says in r.stdout, r.stdout
     r = tool(env, "restore", backup, "--identity", appliance["key"], "--yes")
-    assert r.returncode == 1 and "restore failed (backup.damaged)" in r.stdout and says in r.stdout, r.stdout
+    assert r.returncode == 1 and "restore failed (backup.too_large)" in r.stdout and says in r.stdout, r.stdout
     assert psql("SELECT count(*) FROM chunks", gw_db) == "3"
     assert not [p for p in (var / "backup").iterdir() if p.name.startswith(("restore-", "check-"))]
 
@@ -1004,8 +1004,42 @@ def test_the_web_setups_disk_id_finds_the_disk_whatever_udev_calls_it(monkeypatc
     monkeypatch.setattr(b, "lsblk_usb", lambda: listing)
     assert b.disk_id(listing["blockdevices"][0]) == "usb-Extreme_55AE_3233"
     assert b.usb_partition("usb-Extreme_55AE_3233") == Path("/dev/sdb1")
-    with pytest.raises(b.Failed):
+    with pytest.raises(b.Failed) as e:
         b.usb_partition("usb-Other_1")
+    assert e.value.code == "backup.target_unreachable"
+    listing["blockdevices"][0]["children"][0]["fstype"] = "btrfs"  # formatted again since the setup (#164)
+    with pytest.raises(b.Failed) as e:
+        b.usb_partition("usb-Extreme_55AE_3233")
+    assert e.value.code == "backup.file_system_unsupported"
+
+
+def test_a_chosen_disk_that_cant_be_used_is_said_so_when_no_other_disk_of_the_office_is_there(monkeypatch, tmp_path):
+    """Rotation: another of the office's disks would be used instead; with none, the chosen disk's own reason (#164)."""
+    b = load()
+    listing = {"blockdevices": [{"name": "sdb", "path": "/dev/sdb", "tran": "usb", "type": "disk", "model": "Extreme",
+                                 "serial": "1", "children": [{"name": "sdb1", "path": "/dev/sdb1", "type": "part", "fstype": "btrfs"}]}]}
+    monkeypatch.setattr(b, "lsblk_usb", lambda: listing)
+    target = b.Target({"target": "usb", "disk": "usb-Extreme_1", "recipient": "age1" + "q" * 58}, mount=tmp_path / "mnt")
+    with pytest.raises(b.Failed) as e:
+        target._usb("nosuid")
+    assert e.value.code == "backup.file_system_unsupported"
+
+
+def test_what_blkid_says_of_the_chosen_disk_decides_between_unusable_and_unreachable(monkeypatch, tmp_path):
+    """lsblk lists the disk with a file system the appliance uses; blkid, asked just after, says another one (formatted
+    again in between) or none (pulled out, or failing): only the first is "can't be used" (#164)."""
+    b = load()
+    listing = {"blockdevices": [{"name": "sdb", "path": "/dev/sdb", "tran": "usb", "type": "disk", "model": "Extreme",
+                                 "serial": "1", "children": [{"name": "sdb1", "path": "/dev/sdb1", "type": "part", "fstype": "exfat"}]}]}
+    monkeypatch.setattr(b, "lsblk_usb", lambda: listing)
+    target = b.Target({"target": "usb", "disk": "usb-Extreme_1", "recipient": "age1" + "q" * 58}, mount=tmp_path / "mnt")
+    real = subprocess.run
+    for says, code in (("btrfs\n", "backup.file_system_unsupported"), ("", "backup.target_unreachable")):
+        monkeypatch.setattr(b.subprocess, "run", lambda cmd, *a, said=says, **k: subprocess.CompletedProcess(cmd, 0, said, "")
+                            if cmd[0] == "blkid" else real(cmd, *a, **k))
+        with pytest.raises(b.Failed) as e:
+            target._usb("nosuid")
+        assert e.value.code == code, says
 
 
 @needs
