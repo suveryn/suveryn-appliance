@@ -33,7 +33,6 @@ code in the office's language. Anything unplanned is `system.internal` with a re
 log has. Python 3 standard library, openssl, ip and lsblk only.
 """
 
-import base64
 import datetime
 import importlib.machinery
 import importlib.util
@@ -544,8 +543,8 @@ def manifest_for_screen(m: dict) -> dict:
 
 def check_manifest(raw: bytes, facts: dict) -> dict:
     appliance = (facts.get("appliance") or {}).get("id")
-    if not appliance:
-        raise Refused({"_": "setup.manifest_other_appliance"})
+    if not appliance:  # the appliance's identity is made before setup opens: nobody planned for its absence (#164)
+        raise RuntimeError("this appliance has no id of its own (facts.json)")
     try:
         return manifest_for_screen(manifests.check(raw, appliance))
     except manifests.Refused as e:
@@ -950,6 +949,11 @@ def provision() -> int:
         log.write(f"the saved answers are incomplete or not valid: {e}\n")
         prog.fail(message("request.invalid"))
         return 1
+    except RuntimeError as e:  # nobody planned for it (an appliance without an id, #164): a reference the log has
+        ref = reference()
+        log.write(f"internal {ref}: {e}\n")
+        prog.fail(message("system.internal", ref=ref))
+        return 1
     facts = read_json(STATE / "facts.json", {}) or {}
     host = f"{facts['name']}.local"
     work = Path(ENV("SUVERYN_SETUP_WORK", "/run/suveryn/setup"))
@@ -1123,7 +1127,7 @@ def restore_check() -> int:
             result["warning"] = message("backup.newest_damaged", newest=bad[0]["created"], whole=r["created"])
     else:
         # why, as the backup service says it: a code of the registry (backup.not_a_key, backup.key_mismatch, backup.not_found,
-        # backup.damaged, backup.version_too_new, backup.target_unreachable), passed on as it is (#154)
+        # backup.damaged, backup.version_too_new, backup.target_unreachable, backup.share_login_refused), passed on as it is (#154)
         result = {"state": "failed", "message": messages.why(r.get("failure"))}
         forget_restore_secrets()  # the screen asks for them again
     write_file(RESTORE, json.dumps(result, indent=1), 0o644)

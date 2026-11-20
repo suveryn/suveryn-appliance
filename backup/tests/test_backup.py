@@ -511,9 +511,9 @@ class Zeros:
         return b"\0" * n
 
 
-def crafted(appliance, entries) -> Path:
-    """A backup made by hand for the office's public key: the first backup's manifest and dumps, then
-    ``entries`` (name, size) of zeros, streamed through zstd and age."""
+def crafted(appliance, entries, manifest: dict | None = None) -> Path:
+    """A backup made by hand for the office's public key: the first backup's manifest (with ``manifest``'s
+    keys laid over it) and dumps, then ``entries`` (name, size) of zeros, streamed through zstd and age."""
     import tarfile
     good = first_backup(appliance)
     plain = subprocess.run(f'age -d -i "{appliance["key"]}" "{good}" | zstd -q -d -c', shell=True, capture_output=True, check=True).stdout
@@ -527,6 +527,11 @@ def crafted(appliance, entries) -> Path:
             import io
             with tarfile.open(fileobj=io.BytesIO(plain)) as src:
                 for m in src.getmembers():
+                    if m.name == "manifest.json" and manifest:
+                        data = json.dumps({**json.load(src.extractfile(m)), **manifest}).encode()
+                        m.size = len(data)
+                        tar.addfile(m, io.BytesIO(data))
+                        continue
                     tar.addfile(m, src.extractfile(m) if m.isfile() else None)
             for name, size in entries:
                 info = tarfile.TarInfo(name)
@@ -535,6 +540,19 @@ def crafted(appliance, entries) -> Path:
         zstd.stdin.close()
         assert zstd.wait() == 0 and age.wait() == 0
     return out
+
+
+@needs
+def test_a_backup_made_by_a_newer_suveryn_is_said_so_even_with_parts_this_appliance_doesnt_know(appliance):
+    """A newer format will add parts: the manifest, written first, says it before they are met (#164)."""
+    env = appliance["env"]
+    fmt = load().FORMAT + 1
+    backup = crafted(appliance, [("db/tomorrow.dump", 10)], manifest={"format": fmt})
+    r = tool(env, "check", backup, "--identity", appliance["key"])
+    assert r.returncode == 1 and "backup.version_too_new" in r.stdout, r.stdout
+    backup = crafted(appliance, [("db/tomorrow.dump", 10)])  # today's format with a part it doesn't have: damaged
+    r = tool(env, "check", backup, "--identity", appliance["key"])
+    assert r.returncode == 1 and "backup.damaged" in r.stdout, r.stdout
 
 
 @needs
@@ -782,7 +800,9 @@ def test_the_administrators_key_test_opens_the_newest_backup_and_deletes_the_key
     assert passed["at"] and passed["created"]
     r, out = test_with(other.read_text())
     assert out["last_ok"] == passed  # and keeps it through the next wrong file
-    assert tool(env, "key-test").returncode == 1 and json.loads(result.read_text())["failure"]["code"] == "backup.settings_invalid"  # no key given
+    r, out = test_with("this is a note, not a key\n")  # a file that isn't a key at all: said so (#164)
+    assert r.returncode == 1 and out["failure"]["code"] == "backup.not_a_key" and out["last_ok"] == passed  # a wrong file too
+    assert tool(env, "key-test").returncode == 1 and json.loads(result.read_text())["failure"]["code"] == "request.invalid"  # no key given (#164)
 
 
 @needs
@@ -953,6 +973,21 @@ def test_a_share_is_tested_by_signing_in_and_writing(admin, tmp_path, monkeypatc
     monkeypatch.setattr(b, "TEST_MOUNT", tmp_path / "mnt")
     monkeypatch.setattr(b, "CREDENTIALS", tmp_path)  # /run is root's: the test runs as anyone (VM check, finding 7)
     assert request(b, tmp_path, smb)["failure"]["code"] == "backup.share_login_refused"
+    # and at the nightly backup, with the saved password: the same code, not "can't be reached" (#164)
+    monkeypatch.setattr(b, "MOUNT", tmp_path / "nightly")
+    monkeypatch.setattr(b, "SHARE_SECRET", tmp_path / "no-secret")
+    with pytest.raises(b.Failed) as e:
+        with b.Target({"target": "share", "protocol": "smb", "address": "//nas.office.lan/backups", "user": "backup"}):
+            pass
+    assert e.value.code == "backup.share_login_refused"
+    def unreachable(step, cmd, **k):
+        raise b.Failed(step, "mount failed: mount error(112): Host is down")
+    monkeypatch.setattr(b, "run", unreachable)
+    with pytest.raises(b.Failed) as e:
+        with b.Target({"target": "share", "protocol": "smb", "address": "//nas.office.lan/backups", "user": "backup"}):
+            pass
+    assert e.value.code == "backup.target_unreachable"
+    monkeypatch.setattr(b, "run", refused)
 
     # signed in, and may not write: that is the share's permissions, not the user name or the password (#162)
     def read_only(step, cmd, **k):
@@ -1004,6 +1039,17 @@ def test_a_time_zone_this_appliance_doesnt_know_keeps_its_own(tmp_path, monkeypa
     with pytest.raises(b.Failed, match="time zone"):
         b.checked_manifest({"format": b.FORMAT, "databases": dict(b.DATABASES), "files": [], "appliance": "a",
                             "created": "2026-10-30T00:00:00Z", "time_zone": "../x"})
+
+
+def test_a_backup_in_a_newer_format_says_so_and_another_format_is_damaged():
+    """A backup made by a newer sūveryn is not damaged: this appliance is too old for it (#164)."""
+    b = load()
+    for fmt, code in ((b.FORMAT + 1, "backup.version_too_new"), (b.FORMAT - 1, "backup.damaged"), ("2", "backup.damaged"),
+                      (None, "backup.damaged")):
+        with pytest.raises(b.Failed) as e:
+            b.checked_manifest({"format": fmt, "databases": dict(b.DATABASES), "files": [], "appliance": "a",
+                                "created": "2026-10-30T00:00:00Z"})
+        assert e.value.code == code, fmt
 
 
 @needs

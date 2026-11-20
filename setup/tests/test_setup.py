@@ -230,9 +230,8 @@ def test_a_manifest_is_taken_only_when_signed_for_this_appliance(s, tmp_path):
         with pytest.raises(s.Refused) as e:
             s.check_manifest(raw, facts)
         assert said(e) == {"_": code}, raw[:60]
-    with pytest.raises(s.Refused) as e:
+    with pytest.raises(RuntimeError):  # an appliance without an id of its own: nobody planned for it, so a reference (#164)
         s.check_manifest(signed, {"appliance": None})
-    assert said(e) == {"_": "setup.manifest_other_appliance"}
 
 
 def test_a_manifest_is_valid_yaml(s):
@@ -534,6 +533,17 @@ def test_answers_tampered_with_in_the_services_folder_stop_provisioning(s, api, 
         "id": "database", "state": "failed", "message": {"kind": "refused", "code": "request.invalid", "params": {}}}
 
 
+def test_a_failure_nobody_planned_for_in_the_answers_stops_provisioning_with_a_reference(s, api, fake_tools, monkeypatch):
+    """Never a screen that spins: an appliance without an id of its own (#164) fails the first step with a reference."""
+    fake_tools()
+    answer_everything(api)
+    api("POST", "provision", {})
+    monkeypatch.setattr(s, "read_answers", lambda: (_ for _ in ()).throw(RuntimeError("this appliance has no id of its own")))
+    assert s.provision() == 1
+    step = json.loads((s.STATE / "progress.json").read_text())["steps"][0]
+    assert step["state"] == "failed" and step["message"]["code"] == "system.internal" and step["message"]["params"]["ref"]
+
+
 def test_the_outgoing_result_follows_the_mode(s, api, fake_tools, monkeypatch):
     fake_tools()
     for network, passed, outgoing in ((("air-gapped", "approved"), True, "blocked"), (("connected", "all"), True, "not_checked"),
@@ -775,7 +785,8 @@ def test_a_check_that_fails_for_another_reason_doesnt_try_older_backups(s, api, 
 
 def test_a_restore_check_that_fails_says_why_and_the_restore_cant_start(s, api, tmp_path):
     # the backup tool says why as a code of the registry, and the setup passes it on as it is (suveryn-tracker#154)
-    for code in ("backup.not_a_key", "backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.damaged", "backup.version_too_new"):
+    for code in ("backup.not_a_key", "backup.key_mismatch", "backup.not_found", "backup.target_unreachable", "backup.share_login_refused",
+                 "backup.damaged", "backup.version_too_new"):
         said = {"code": code, "params": {}}
         s.BACKUP_TOOL = stand_in(tmp_path / f"tool-{code}", f"import json; print(json.dumps({{'usable': False, 'failure': {said!r}}})); raise SystemExit(1)\n")
         assert api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY})[0] == 202
