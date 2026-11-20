@@ -359,8 +359,13 @@ class Target:
                         SHARE_SECRET.read_text().strip() if SHARE_SECRET.exists() else ""
                     f.write(f"username={s.get('user') or 'guest'}\npassword={password}\n")
                 # vers=3: the highest SMB 3 dialect both sides speak (a NAS may allow 3.1.1 only)
-                run("backup.target_unreachable", ["mount", "-t", "cifs", address, MOUNT,
-                               "-o", f"{opts},credentials={creds},vers=3,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
+                try:
+                    run("backup.target_unreachable", ["mount", "-t", "cifs", address, MOUNT,
+                                   "-o", f"{opts},credentials={creds},vers=3,uid=0,gid=0,file_mode=0600,dir_mode=0700"])
+                except Failed as e:
+                    if login_refused(str(e)):  # the share answered and refused the user or password (#164)
+                        raise Failed("backup.share_login_refused", str(e)) from None
+                    raise
             else:
                 run("backup.target_unreachable", ["mount", "-t", "nfs", s["address"], MOUNT, "-o", f"{opts},soft,timeo=150"])
             self.mounted = True
@@ -817,6 +822,8 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
                 if total > budget:
                     raise Failed("backup.damaged", "the backup unpacks to more than this appliance has room for")
                 tar.extract(member, dest, filter="data")
+                if member.name == "manifest.json":  # written first: a newer backup is said so before its new parts are met
+                    too_new(dest / "manifest.json")
     except (tarfile.TarError, OSError) as e:
         problem = str(e)
     finally:
@@ -852,6 +859,21 @@ def unpack(file: Path, identity: Path, dest: Path) -> dict:
     return manifest
 
 
+def too_new(manifest: Path) -> None:
+    """``backup.version_too_new`` when the manifest says a newer backup format than this appliance reads: made
+    by a newer sūveryn, so not damaged (#164). Anything else is left to ``checked_manifest``."""
+    try:
+        fmt = json.loads(manifest.read_text()).get("format")
+    except (OSError, ValueError, AttributeError):
+        return
+    newer_format(fmt)
+
+
+def newer_format(fmt) -> None:
+    if type(fmt) is int and fmt > FORMAT:
+        raise Failed("backup.version_too_new", f"backup format {fmt} is newer than this appliance's ({FORMAT})")
+
+
 def expected_entry(member: tarfile.TarInfo) -> bool:
     """Whether a tar entry is one a backup of this appliance holds: the manifest, one of its own database
     dumps (a file), or something inside one of the four folders. ``tar.extract``'s "data" filter refuses
@@ -874,6 +896,7 @@ def checked_manifest(m) -> dict:
     its date a UTC time. A backup's own words are never a path, an owner or a name in SQL."""
     if not isinstance(m, dict):
         raise Failed("backup.damaged", "the backup's manifest isn't readable")
+    newer_format(m.get("format"))
     if m.get("format") != FORMAT:
         raise Failed("backup.damaged", f"backup format {str(m.get('format'))[:20]} isn't one this appliance reads")
     dbs, files = m.get("databases"), m.get("files")
@@ -1036,7 +1059,8 @@ def cmd_key_test(_a) -> int:
     Restores nothing. The key is deleted at the end whatever happened; the result goes to key-test.json
     (no secrets), which the gateway shows.
 
-    A wrong file (``backup.key_mismatch``: another appliance's key, an old one) says nothing about the office's key:
+    A wrong file (``backup.key_mismatch``: another appliance's key, an old one; ``backup.not_a_key``: no key in it)
+    says nothing about the office's key:
     the last test that passed is kept in ``last_ok``, so one wrong file doesn't mark the key as failing on
     Status (VM regression 03c8f74, finding 4)."""
     key, result = KEY_TEST / "key", {"at": now()}
@@ -1048,11 +1072,14 @@ def cmd_key_test(_a) -> int:
     try:
         (KEY_TEST / "request").unlink(missing_ok=True)
         if not key.is_file() or key.is_symlink():
-            raise Failed("backup.settings_invalid", "no recovery key was given")
+            raise Failed("request.invalid", "no recovery key was given")
         s = settings()
         if s is None:
             raise Failed("backup.settings_invalid", "backups aren't set up")
-        if recipient_of(key) != s["recipient"]:
+        recipient = recipient_of(key)
+        if not recipient:
+            raise Failed("backup.not_a_key", "the file holds no recovery key")
+        if recipient != s["recipient"]:
             raise Failed("backup.key_mismatch", "this isn't this appliance's recovery key: it opens none of its backups")
         with Target(s) as folder:
             found = backups_in(folder)
@@ -1120,6 +1147,11 @@ def reachable(protocol: str, host: str) -> str | None:
     return "backup.share_unreachable"
 
 
+def login_refused(text: str) -> bool:
+    """Whether mount.cifs said the share refused the user or the password."""
+    return any(w in text.lower() for w in ("permission denied", "error(13)", "access denied", "error(1)"))
+
+
 def test_share(r: dict) -> str | None:
     """None when the appliance signs in to the share and may write there, as the backup will; else why not:
     a code of the registry: ``backup.share_address_invalid``, ``backup.share_not_local``, ``backup.share_unreachable``,
@@ -1143,7 +1175,7 @@ def test_share(r: dict) -> str | None:
         text = str(e).lower()
         # signed in and not allowed to write says "permission denied" too: look for the write first (#162)
         return "backup.share_not_writable" if "can't write" in text else \
-            "backup.share_login_refused" if any(w in text for w in ("permission denied", "error(13)", "access denied", "error(1)")) else \
+            "backup.share_login_refused" if login_refused(text) else \
             "backup.share_unreachable"
     except OSError:
         return "backup.share_not_writable"
