@@ -28,6 +28,9 @@ EnvironmentFile=-/etc/suveryn/network-mode.env
 # 29 October, round 3, finding 1). Emptied at each start; Keycloak makes the copies again on first request.
 ExecStartPre=/usr/bin/rm -rf /opt/keycloak/data/tmp/kc-gzip-cache
 ExecStart=/opt/keycloak/bin/kc.sh start --optimized
+# Java ends with 143 (128 + SIGTERM) when systemd stops it: a clean stop, not a failure. Without this a stop for an
+# update or a restore left the unit failed (regression round of 25 November, suveryn-tracker#264).
+SuccessExitStatus=143
 Restart=always
 RestartSec=5
 NoNewPrivileges=yes
