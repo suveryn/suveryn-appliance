@@ -676,6 +676,8 @@ def test_prepare_writes_the_facts_and_the_setup_site(tmp_path, monkeypatch):
     (mod.VAR / "identity" / "identity.json").write_text(json.dumps({"uuid": APPLIANCE, "fingerprint": "cd" * 32}))
     (mod.VAR / "installed.json").write_text(json.dumps({"language": "fr", "models": [{"name": "qwen3-30b-a3b"}]}))
     monkeypatch.setattr(mod, "network", lambda: {"address": "10.0.0.7/24", "dhcp": False, "gateway": "", "dns": ""})
+    if os.geteuid() != 0:  # on an installed appliance the user exists, and only root may give it the folder (#265)
+        monkeypatch.setattr(mod, "USER", "suveryn-setup-not-on-this-machine")
     calls = []
     real = mod.provision_module()  # its nginx helpers, with the TLS step standing in
 

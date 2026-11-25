@@ -157,10 +157,10 @@ self-signed one is the one provisioning keeps, and the office's own goes in only
 ## Testing
 
 ```bash
-python3 -m pytest setup/tests                       # any machine with openssl and a suveryn-core checkout beside this one (or SUVERYN_CORE=<suveryn-core>): the service says core's messages
-sudo python3 setup/tests/browser_check.py           # a disposable machine only: see its header
-sudo image/mkosi/test/run-vm-tests                   # step 4b: the web setup on the installed test system (#37 part 6a)
-sudo python3 setup/tests/browser_check.py --real    # a FRESH test GPU machine: the real provisioning (#37 part 6b)
+python3 -m pytest setup/tests                                   # any machine with openssl and a suveryn-core checkout beside this one (or SUVERYN_CORE=<suveryn-core>): the service says core's messages
+sudo /opt/check/bin/python setup/tests/browser_check.py         # a disposable machine only: see its header
+sudo image/mkosi/test/run-vm-tests                              # step 4b: the web setup on the installed test system (#37 part 6a)
+sudo /opt/check/bin/python setup/tests/browser_check.py --real  # a FRESH test GPU machine: the real provisioning (#37 part 6b)
 ```
 
 **The browser check** serves suveryn-core's production setup page with nginx and the appliance's real

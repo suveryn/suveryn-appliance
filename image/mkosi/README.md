@@ -73,7 +73,7 @@ and the boot file, kernel and initrd beside it. Packages come from Ubuntu's arch
 | `target/appliance/`, `target/test/` | The whole disk for systemd-repart, shipped as `/usr/lib/suveryn/repart.d` |
 | `make-stick` | Makes an installer stick: the disk image and a bundles partition with signed bundles |
 | `mkosi.profiles/test/` | The test system: a small kernel, small partitions and the self-test |
-| `test/` | `test_mkosi_config.py`, `test_install.py`, `test_install_log.py`, `test_installer_ui.py` (any machine; the console installer in a pseudo-terminal), `test_make_stick.py` and `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
+| `test/` | `test_mkosi_config.py`, `test_install.py`, `test_install_log.py`, `test_installer_ui.py` (any machine; the console installer in a pseudo-terminal), `test_run_vm_tests.py` (run-vm-tests' own helpers), `test_make_stick.py` and `test_identity.py` (root) and `run-vm-tests` (a virtual machine with a TPM) |
 
 ## How the pieces fit
 

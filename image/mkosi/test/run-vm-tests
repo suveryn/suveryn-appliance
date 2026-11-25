@@ -35,6 +35,7 @@ machine. Without KVM each boot takes two to five minutes.
     sudo image/mkosi/test/run-vm-tests [path/to/suveryn-test_<version>.raw]
 """
 
+import errno
 import json
 import os
 import re
@@ -436,6 +437,18 @@ def web_setup_test(work: Path, identity: str):
 WEB = "127.0.0.2"  # where the host reaches the appliance's port 443 in step 4
 
 
+def port_free(address: str, port: int) -> bool:
+    """Whether step 4b can listen on address:port (QEMU's forward, the stand-in share); a server listening on every
+    address takes it too. SO_REUSEADDR as they bind, so a connection still closing doesn't count as taken."""
+    with socket.socket() as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((address, port))
+        except OSError as e:
+            return e.errno != errno.EADDRINUSE  # only "in use" says so; anything else is QEMU's to report
+    return True
+
+
 def main() -> int:
     image = Path(sys.argv[1]) if len(sys.argv) > 1 else max(MKOSI.glob("mkosi.output/suveryn-test_*.raw"),
                                                             key=os.path.getmtime, default=None)
@@ -524,6 +537,10 @@ def main() -> int:
     if not (HERE / "ui" / "setup.html").exists() or not all((HERE / "core-messages" / f).exists() for f in ("messages.json", "setup-limits.json")) \
             or not (HERE / "keys" / "test-portal.key").exists():
         bad("no chat UI, messages, field lengths or portal key in the test image: test/make-test-ui and test/make-test-keys, then build again")
+    elif taken := [f"{port} on {address} ({what})" for address, port, what in
+                   ((WEB, 443, "a web server?"), ("127.0.0.1", 445, "a Samba server?")) if not port_free(address, port)]:
+        bad(f"port {' and '.join(taken)} {'are' if len(taken) > 1 else 'is'} taken on this host: step 4b forwards the appliance's port 443 and stands in "
+            "for a share on 445; stop what listens there and run again")
     else:
         out, prompts = boot(work, "web-setup", [target], tpm, work / "vars.fd", credential="suveryn.test=web-setup",
                             forward=WEB, beside=lambda: web_setup_test(work, identities[0] or ""))
