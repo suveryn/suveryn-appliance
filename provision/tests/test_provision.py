@@ -328,6 +328,14 @@ def test_keycloak_outlives_a_stopped_database():
     assert lines.index("StartLimitIntervalSec=0") < lines.index("[Service]")  # a [Unit] setting
 
 
+def test_keycloak_stopped_by_systemd_is_not_failed():
+    """Regression round of 25 November (suveryn-tracker#264): Java exits with 143 on SIGTERM, and a stop left the
+    unit failed. 143 counts as success; Restart=always still doesn't restart a unit systemd stopped."""
+    unit = (HERE / "systemd" / "keycloak.service").read_text()
+    lines = [line.strip() for line in unit.splitlines() if line.strip() and not line.startswith("#")]
+    assert "SuccessExitStatus=143" in lines and lines.index("SuccessExitStatus=143") > lines.index("[Service]")
+
+
 def test_keycloak_never_serves_an_old_themes_gzip_copy():
     """VM check of 29 October, round 3, finding 1: Keycloak's gzip copies of the theme's files sit under a path
     that doesn't change with the theme, so browsers got the previous stylesheet after an install. The unit
