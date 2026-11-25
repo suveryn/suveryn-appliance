@@ -30,6 +30,6 @@ Related: [suveryn-docs](https://github.com/suveryn/suveryn-docs) (installation a
 A regression round tests the appliance against the suveryn-core commit it pins (`provision/versions.json`).
 
 - **Last round:** core's last `regression-<commit>-fixes` PR is for aebf5bc, merged 5 November 2026 (here, PR #128). No round has run against a pin since.
-- **Owed:** on core f0c4254, the pin since 20 November 2026; it covers the pins it replaced (suveryn-tracker#188).
+- **Owed:** on core 5743915, the pin since 25 November 2026; it covers the pins it replaced (suveryn-tracker#188).
 
 The PR that moves the pin updates this record, and so does a round when it passes.
