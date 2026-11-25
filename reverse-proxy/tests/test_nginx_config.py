@@ -55,7 +55,7 @@ def test_the_csp_verify_expects_is_the_one_nginx_sends():
 def test_api_docs_are_never_routed():
     assert re.search(r"location ~ \^/\(docs\|redoc\|openapi\\\.json\)\$ \{\s*return 404;", SITE)
     gateway_routes = [p for p, b in locations().items() if "127.0.0.1:8000" in b]
-    assert sorted(gateway_routes) == sorted(["~ ^/(v1|auth)/", "= /health", "= /v1/chat", "= /v1/documents"])
+    assert sorted(gateway_routes) == sorted(["~ ^/(v1|auth)/", "= /health", "= /v1/documents"])
 
 
 def test_no_document_or_sign_in_code_is_written_to_disk():
