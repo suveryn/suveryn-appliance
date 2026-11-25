@@ -147,7 +147,7 @@ the restart; without this an installation left nothing behind but the last line 
   |---|---|
   | `summary.json` | The result, the steps and when each began, the choices made, the image's version |
   | `install.log` | Every line the installer and its tools said, with times; every command they ran, with its arguments, exit code, duration and standard error; what was chosen and refused at each screen |
-  | `system.log` | The kernel's and systemd's messages from this start, copied while the installer runs (8 MiB at most) |
+  | `system.log` | The kernel's and systemd's messages since the machine started, copied while the installer runs (8 MiB at most) |
   | `hardware.txt` | The machine: maker and model, firmware, processor and memory, TPM, graphics card, disks, PCI devices, network ports |
 
 - **What never goes in.** The recovery key and the disk's temporary key; what is typed at the

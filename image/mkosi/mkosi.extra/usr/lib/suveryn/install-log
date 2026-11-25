@@ -10,7 +10,7 @@ power cut while logging can never damage the models. Each run gets one folder::
     0007_20261113-1432_7F3K-92QD/      counter _ the machine's clock (UTC) _ the run's reference
         summary.json     what happened: the result, the steps and how long each took, the choices made
         install.log      everything the installer and its tools said, line by line, with times
-        system.log       the kernel's and the system's own messages while the installer ran
+        system.log       the kernel's and the system's own messages since the machine started
         hardware.txt     the machine: disks, graphics card, TPM, firmware, memory, network ports
 
 The counter orders the runs (a new machine's clock can be wrong, and there is no network time); the
@@ -239,11 +239,14 @@ class Log:
 
     # ------------------------------------------------------------------ the system's own messages
     def follow_system(self) -> None:
-        """system.log: the kernel's and systemd's messages since this start, and on while the installer runs."""
+        """system.log: the kernel's and systemd's messages since the machine started, and on while the installer runs."""
         if not self.folder or self._follower or not shutil.which("journalctl"):
             return
         try:
-            self._follower = subprocess.Popen(["journalctl", "--boot", "--follow", "--no-pager", "--output=short-monotonic"],
+            # --lines=all: with --follow alone, journalctl starts at the last 10 entries, and the boot before the
+            # installer started (the kernel's first lines among them) never reached the log (suveryn-tracker#263)
+            self._follower = subprocess.Popen(["journalctl", "--boot", "--follow", "--lines=all", "--no-pager",
+                                               "--output=short-monotonic"],
                                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, errors="replace")
         except OSError:
             return

@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,40 @@ def test_serial_numbers_are_not_kept(tool, tmp_path):
     text = (log.folder / "hardware.txt").read_text()
     assert "4C530001230512345678" not in text and "S6Z2NJ0W123456" not in text and "Samsung 990 PRO" in text
     assert tool.SERIAL.sub(r"\1(not kept)", "[    2.1] usb 2-1: SerialNumber: AA00123") == "[    2.1] usb 2-1: SerialNumber: (not kept)"
+
+
+def test_system_log_has_the_whole_boot_not_only_its_last_lines(tool, tmp_path, monkeypatch):
+    """journalctl --follow alone starts at the last 10 entries; the run's system.log starts at the boot's first
+    line (run-vm-tests step 2b found the kernel's "Linux version" missing, suveryn-tracker#263)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "journalctl"
+    fake.write_text("#!/usr/bin/env python3\n"  # as journalctl does: --follow shows the last 10, --lines=N the last N, all the whole boot
+                    "import sys\n"
+                    "lines = [f'[ {i}.0] host kernel: line {i}' for i in range(40)]\n"
+                    "lines[0] = '[ 0.0] host kernel: Linux version 6.18'\n"
+                    "args = sys.argv[1:]\n"
+                    "count = '10' if '--follow' in args else 'all'\n"
+                    "for i, a in enumerate(args):\n"
+                    "    if a.startswith('--lines='):\n"
+                    "        count = a.split('=', 1)[1]\n"
+                    "    elif a in ('-n', '--lines') and i + 1 < len(args):\n"
+                    "        count = args[i + 1]\n"
+                    "if count != 'all':\n"
+                    "    lines = lines[-int(count):]\n"
+                    "print('\\n'.join(lines))\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    log = tool.Log.open(tmp_path / "stick")
+    log.follow_system()
+    log._follower.wait(timeout=10)
+    text = ""
+    for _ in range(100):  # the copying thread writes as lines come
+        text = (log.folder / "system.log").read_text() if (log.folder / "system.log").exists() else ""
+        if "line 39" in text:
+            break
+        time.sleep(0.05)
+    assert "Linux version" in text and "line 39" in text
 
 
 def test_when_the_logs_partition_cant_be_used_the_log_is_kept_in_memory_and_says_so(tool, tmp_path):
