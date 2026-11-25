@@ -424,7 +424,6 @@ def text_of(x) -> str:
 
 
 class Field:
-    focusable = True
     label = ""
 
     def key(self, k) -> str | None:

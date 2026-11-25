@@ -1079,11 +1079,6 @@
     "nl": "Netwerkinstellingen wijzigen",
     "fr": "Modifier les réglages réseau"
   },
-  "c8_applied": {
-    "en": "The new network settings are applied.",
-    "nl": "De nieuwe netwerkinstellingen zijn toegepast.",
-    "fr": "Les nouveaux réglages réseau sont appliqués."
-  },
   "c8_apply_failed": {
     "en": "The network settings couldn't be applied. Try again; if it happens again, give your partner this reference: {ref}.",
     "nl": "De netwerkinstellingen konden niet worden toegepast. Probeer het opnieuw; gebeurt het weer, geef dan deze referentie aan uw partner: {ref}.",
