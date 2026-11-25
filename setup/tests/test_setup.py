@@ -592,6 +592,17 @@ def test_a_failure_nobody_planned_for_in_a_restore_ends_it_with_a_reference(s, a
     assert not (s.ANSWERS / "restore-start").exists()  # never started again by its path unit
 
 
+def test_a_restore_that_fails_before_it_starts_isnt_started_again(s, api, monkeypatch):
+    """A failure before the check has taken its trigger file: the trigger goes too, so the path unit doesn't start
+    the check again and the screen doesn't stay on "checking"."""
+    api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE})
+    assert (s.ANSWERS / "restore-check").exists()
+    monkeypatch.setattr(s, "restore_check", lambda: (_ for _ in ()).throw(OSError("nothing done yet")))
+    assert s.provision() == 1
+    assert not (s.ANSWERS / "restore-check").exists()
+    assert json.loads(s.RESTORE.read_text())["message"]["code"] == "system.internal"
+
+
 def test_a_failed_restore_forgets_the_shares_password_in_the_work_folder_too(s, api, monkeypatch):
     """The share's password and the settings copied for the backup tool go too, as when a restore fails as planned."""
     api("PUT", "answers/restore", {"target": "share", "protocol": "smb", "address": "\\\\nas.office.lan\\backups",
