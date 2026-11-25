@@ -588,7 +588,39 @@ def test_a_failure_nobody_planned_for_in_a_restore_ends_it_with_a_reference(s, a
     assert job != "restore_run" or [st["state"] for st in r["steps"]][0] == "failed"
     journal = capfd.readouterr().err
     assert f"internal {r['message']['params']['ref']}: " in journal and "ValueError" in journal and KEY not in journal
-    assert not (s.ANSWERS / "recovery-key").exists()
+    assert not (s.ANSWERS / "recovery-key").exists() and not (s.ANSWERS / "restore-check").exists()
+    assert not (s.ANSWERS / "restore-start").exists()  # never started again by its path unit
+
+
+def test_a_failed_restore_forgets_the_shares_password_in_the_work_folder_too(s, api, monkeypatch):
+    """The share's password and the settings copied for the backup tool go too, as when a restore fails as planned."""
+    api("PUT", "answers/restore", {"target": "share", "protocol": "smb", "address": "\\\\nas.office.lan\\backups",
+                                   "user": "backup", "password": "not-a-real-password", "key": KEY_FILE})
+    copy_secrets = s.restore_inputs
+
+    def then_broken(work):
+        copy_secrets(work)
+        raise OSError("after the secrets were copied")
+    monkeypatch.setattr(s, "restore_inputs", then_broken)
+    assert s.provision() == 1
+    work = Path(os.environ["SUVERYN_SETUP_WORK"])
+    assert not (work / "restore-share-password").exists() and not (work / "restore-settings.json").exists()
+    assert not (s.ANSWERS / "restore-share-password").exists()
+
+
+def test_a_failure_nobody_planned_for_while_closing_setup_fails_the_last_step(s, api, fake_tools, monkeypatch):
+    """Provisioning was done: closing setup (the office's certificate, nginx) failing is said on the last step, never
+    on the database, which worked."""
+    fake_tools()
+    answer_everything(api)
+    (s.ANSWERS / "seen-done").touch()
+    api("POST", "provision", {})
+    monkeypatch.setattr(s, "finish", lambda answers, files: (_ for _ in ()).throw(OSError("nginx")))
+    assert s.provision() == 1
+    progress = json.loads((s.STATE / "progress.json").read_text())
+    assert progress["state"] == "failed"
+    assert [st["state"] for st in progress["steps"]] == ["done", "done", "done", "done", "failed"]
+    assert progress["steps"][-1]["message"]["code"] == "system.internal"
 
 
 def test_the_outgoing_result_follows_the_mode(s, api, fake_tools, monkeypatch):

@@ -104,7 +104,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import traceback
 from pathlib import Path, PurePosixPath
 
 ENV = os.environ.get
@@ -184,8 +183,10 @@ def failed(e: Exception) -> Failed:
     exception's type and where it was raised for the journal. Never its message, which could name a path."""
     if isinstance(e, Failed):
         return e
-    where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
-    return Failed("system.internal", f"unexpected {type(e).__name__} at {where}")
+    ref, where = messages.unplanned(e)
+    failure = Failed("system.internal", f"unexpected {type(e).__name__} at {where}")
+    failure.ref = ref
+    return failure
 
 
 def now() -> str:

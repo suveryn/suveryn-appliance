@@ -950,7 +950,8 @@ def unplanned_said(failure: dict, journal: str) -> str:
     assert failure["code"] == "system.internal"
     ref = failure["params"]["ref"]
     line = next(ln for ln in journal.splitlines() if ref in ln)
-    assert "unexpected OSError at " in line and "broken" in line and "notary-ghent" not in journal
+    assert "unexpected OSError at " in line and "notary-ghent" not in journal
+    assert "broken" in line or line.endswith(" at ?")  # where, as core places it; "?" where core can't be read
     return ref
 
 

@@ -47,7 +47,6 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -780,8 +779,7 @@ class Handler(BaseHTTPRequestHandler):
             # Nobody planned for it: the screen gets a reference, the log the same reference with the
             # request, the exception's type and where it was raised. Never the exception's message,
             # which may quote what the office entered (a password, a key).
-            ref = reference()
-            where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
+            ref, where = messages.unplanned(e)
             sys.stderr.write(f"suveryn-setup: internal {ref}: {method} {path}: {type(e).__name__} at {where}\n")
             status, payload = problem(message("system.internal", ref=ref))
         self.send(status, payload)
@@ -893,7 +891,9 @@ class Progress:
     def fail(self, msg: dict | None = None, detail: str = "") -> None:
         """The step that was running failed: a message for the screen (by default, that provisioning
         stopped at this step) and, for whoever reads progress.json, provisioning's own last line."""
-        at = self.current()
+        running = next((s["id"] for s in self.p["steps"] if s["state"] == "running"), None)
+        # none running: before the first step, or after the last, when closing setup failed
+        at = running or (STEPS[-1] if self.p.get("state") == "done" else STEPS[0])
         self.step(at, "failed", {"message": msg or message("setup.provisioning_failed", step=at), **({"detail": detail} if detail else {})})
         self.p["state"] = "failed"
         self.write()
@@ -954,8 +954,7 @@ def unplanned(what: str, e: BaseException, log=None) -> str:
     """A failure nobody planned for in a root job (provisioning, a restore's check or run): a reference for the
     screen, and the same reference in the journal and the job's log with the exception's type and where it was
     raised. Never the exception's message, which may quote what the office entered."""
-    ref = reference()
-    where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
+    ref, where = messages.unplanned(e)
     line = f"internal {ref}: {what}: {type(e).__name__} at {where}\n"
     sys.stderr.write(f"suveryn-setup: {line}")
     if log is not None and not log.closed:
@@ -1102,7 +1101,9 @@ def restoring(job, what: str) -> int:
             if st.get("state") == "running":
                 st["state"] = "failed"
         write_file(RESTORE, json.dumps(r, indent=1), 0o644)
-        forget_restore_secrets()
+        for f in ("restore-check", "restore-start"):  # never started again by its path unit
+            remove(ANSWERS / f)
+        forget_restore_secrets(Path(ENV("SUVERYN_SETUP_WORK", "/run/suveryn/setup")))
         return 1
 
 

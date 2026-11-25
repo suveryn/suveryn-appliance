@@ -57,6 +57,18 @@ def test_without_core_a_helper_still_says_its_code(tmp_path):
 
 
 @needs_core
+def test_a_failure_nobody_planned_for_is_placed_as_core_places_it(tmp_path):
+    """One place works out where a failure was raised: core's ``unplanned``, so the appliance's journal lines read as
+    the gateway's; without core, a reference and "?"."""
+    snippet = ("def broken():\n    raise OSError('x')\n"
+               "try:\n    broken()\nexcept OSError as e:\n    print(json.dumps(m.unplanned(e)))\n")
+    ref, where = json.loads(said_by(CORE_MESSAGES, snippet))
+    assert re.fullmatch(r"[0-9A-Z]{4}-[0-9A-Z]{4}", ref) and where == "<string>:6 broken < <string>:8 <module>"  # the snippet follows four lines of loading
+    ref, where = json.loads(said_by(tmp_path / "no-core" / "messages.py", snippet))
+    assert ref and where == "?"
+
+
+@needs_core
 def test_every_code_a_service_names_is_one_the_registry_lists():
     registry = json.loads(CORE_MESSAGES.with_suffix(".json").read_text(encoding="utf-8"))
     areas = "|".join(map(re.escape, registry["areas"]))
