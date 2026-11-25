@@ -104,6 +104,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import traceback
 from pathlib import Path, PurePosixPath
 
 ENV = os.environ.get
@@ -176,6 +177,15 @@ class Failed(Exception):
     def where(self) -> str:
         """The code, and the reference when there is one: for the journal's line."""
         return f"{self.code} {self.ref}" if self.ref else self.code
+
+
+def failed(e: Exception) -> Failed:
+    """Any failure as a ``Failed``: one nobody planned for becomes ``system.internal``, with a reference, the
+    exception's type and where it was raised for the journal. Never its message, which could name a path."""
+    if isinstance(e, Failed):
+        return e
+    where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
+    return Failed("system.internal", f"unexpected {type(e).__name__} at {where}")
 
 
 def now() -> str:
@@ -735,7 +745,8 @@ def make_and_record() -> int:
     status = read_status()
     try:
         s = settings()
-    except Failed as e:
+    except Exception as e:  # noqa: BLE001 - every failure is recorded: Administration and Status show it
+        e = failed(e)
         s, status["configured"] = None, True
         status.update(last_attempt=now(), last_error={"at": now(), "failure": e.failure()})
         write_status(status)
@@ -750,7 +761,8 @@ def make_and_record() -> int:
                   last_attempt=now())
     try:
         done = make(s)
-    except Failed as e:
+    except Exception as e:  # noqa: BLE001 - every failure is recorded: Administration and Status show it
+        e = failed(e)
         status["last_error"] = {"at": now(), "failure": e.failure()}
         write_status(status)
         say(f"backup failed ({e.where()}): {e}")
@@ -1099,7 +1111,8 @@ def cmd_key_test(_a) -> int:
                 manifest = unpack(folder / found[0]["file"], key, Path(d))
                 check_dumps(Path(d), manifest)
         result.update(ok=True, file=found[0]["file"], created=manifest["created"])
-    except Failed as e:
+    except Exception as e:  # noqa: BLE001 - every result is written: the page waits for it
+        e = failed(e)
         result.update(ok=False, failure=e.failure())
         say(f"key test failed ({e.where()}): {e}")
         if isinstance(last_ok, dict) and isinstance(last_ok.get("at"), str):
@@ -1309,7 +1322,8 @@ def cmd_request(_a) -> int:
             result.update(apply_settings(r))
         else:
             result.update(ok=False, failure=messages.said("request.invalid"))
-    except Failed as e:
+    except Exception as e:  # noqa: BLE001 - every request is answered: the page waits for it
+        e = failed(e)
         result.update(ok=False, failure=e.failure())
         say(f"request {result['kind']} failed ({e.where()}): {e}")
     STATE.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -1464,8 +1478,7 @@ def restore_file(a, file: Path) -> int:
         except Exception as e:  # noqa: BLE001 - whatever failed, the services run again and the reason is said
             if systemd:  # the office's services run again on what is there
                 subprocess.run(["systemctl", "restart", *existing(["suveryn-llm", *reversed(SERVICES), "nginx"])], check=False)
-            if not isinstance(e, Failed):  # its message could name a path; the type says enough
-                e = Failed("system.internal", f"unexpected {type(e).__name__}")
+            e = failed(e)
             say(f"restore failed ({e.where()}): {e}")
             return 1
     say(f"restored the backup made {manifest['created']} on {manifest['appliance']}: "
@@ -1621,7 +1634,8 @@ def main() -> int:
     try:
         return {"run": cmd_run, "status": cmd_status, "list": cmd_list, "check": cmd_check, "restore": cmd_restore,
                 "find": cmd_find, "key-test": cmd_key_test, "request": cmd_request}[a.command](a)
-    except Failed as e:
+    except Exception as e:  # noqa: BLE001 - the journal has the reference
+        e = failed(e)
         say(f"{a.command} failed ({e.where()}): {e}")
         return 1
 

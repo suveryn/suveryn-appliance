@@ -544,6 +544,53 @@ def test_a_failure_nobody_planned_for_in_the_answers_stops_provisioning_with_a_r
     assert step["state"] == "failed" and step["message"]["code"] == "system.internal" and step["message"]["params"]["ref"]
 
 
+def test_a_failure_nobody_planned_for_while_provisioning_fails_its_step_with_a_reference(s, api, fake_tools, monkeypatch, capfd):
+    """Never a screen that spins: an error past the answers (a models disk that can't be read) fails the step that
+    was running, with a reference the journal and the provisioning log have, and never the error's message."""
+    fake_tools()
+    answer_everything(api)
+    api("POST", "provision", {})
+
+    def unreadable(work):
+        raise OSError("the disk said something about notary-ghent's files")
+    monkeypatch.setattr(s, "models_media", unreadable)
+    assert s.provision() == 1
+    progress = json.loads((s.STATE / "progress.json").read_text())
+    failed = next(st for st in progress["steps"] if st["state"] == "failed")
+    assert progress["state"] == "failed" and failed["message"]["code"] == "system.internal"
+    ref = failed["message"]["params"]["ref"]
+    journal = capfd.readouterr().err
+    assert f"internal {ref}: provisioning: OSError at " in journal and "unreadable" in journal
+    log = (s.LOGS / "setup-provision.log").read_text()
+    assert f"internal {ref}" in log and "notary-ghent" not in journal + log
+    assert not (s.ANSWERS / "start").exists() and not s.SETUP_COMPLETE.exists()
+
+
+@pytest.mark.parametrize("job", ["restore_check", "restore_run"])
+def test_a_failure_nobody_planned_for_in_a_restore_ends_it_with_a_reference(s, api, monkeypatch, capfd, job):
+    """A restore's check or run that breaks in a way nobody planned for says so with a reference, and forgets the
+    recovery key, rather than spinning on "checking" or "restoring"."""
+    api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE})
+    if job == "restore_run":
+        s.RESTORE.write_text(json.dumps({"state": "checked", "backup": {
+            "file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age", "created": "2026-10-23T02:39:00Z",
+            "appliance": "notary-ghent"}, "choices": []}))
+        (s.ANSWERS / "restore-check").unlink(missing_ok=True)
+        (s.ANSWERS / "restore-start").touch()
+
+    def broken(work):
+        raise ValueError(f"something about {KEY}")
+    monkeypatch.setattr(s, "restore_inputs", broken)
+    assert s.provision() == 1
+    r = json.loads(s.RESTORE.read_text())
+    assert r["state"] == "failed" and r["message"]["code"] == "system.internal"
+    assert all(st["state"] != "running" for st in r.get("steps", []))
+    assert job != "restore_run" or [st["state"] for st in r["steps"]][0] == "failed"
+    journal = capfd.readouterr().err
+    assert f"internal {r['message']['params']['ref']}: " in journal and "ValueError" in journal and KEY not in journal
+    assert not (s.ANSWERS / "recovery-key").exists()
+
+
 def test_the_outgoing_result_follows_the_mode(s, api, fake_tools, monkeypatch):
     fake_tools()
     for network, passed, outgoing in ((("air-gapped", "approved"), True, "blocked"), (("connected", "all"), True, "not_checked"),

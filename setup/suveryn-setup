@@ -931,9 +931,9 @@ def read_answers() -> tuple[dict, dict]:
 
 def provision() -> int:
     if (ANSWERS / "restore-check").exists():
-        return restore_check()
+        return restoring(restore_check, "the restore's check")
     if (ANSWERS / "restore-start").exists():
-        return restore_run()
+        return restoring(restore_run, "restoring")
     if SETUP_COMPLETE.exists():
         remove(ANSWERS / "start")
         return 0
@@ -944,15 +944,32 @@ def provision() -> int:
     log = open(LOGS / "setup-provision.log", "a")
     log.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} provisioning from the web setup\n")
     try:
+        return provisioning(prog, log)
+    except Exception as e:  # noqa: BLE001: never a screen that spins; nobody planned for it, so a reference
+        prog.fail(message("system.internal", ref=unplanned("provisioning", e, log)))
+        return 1
+
+
+def unplanned(what: str, e: BaseException, log=None) -> str:
+    """A failure nobody planned for in a root job (provisioning, a restore's check or run): a reference for the
+    screen, and the same reference in the journal and the job's log with the exception's type and where it was
+    raised. Never the exception's message, which may quote what the office entered."""
+    ref = reference()
+    where = " < ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in reversed(traceback.extract_tb(e.__traceback__)[-3:]))
+    line = f"internal {ref}: {what}: {type(e).__name__} at {where}\n"
+    sys.stderr.write(f"suveryn-setup: {line}")
+    if log is not None and not log.closed:
+        log.write(line)
+        log.flush()
+    return ref
+
+
+def provisioning(prog: Progress, log) -> int:
+    try:
         answers, files = read_answers()
     except (Refused, KeyError, TypeError, ValueError, AttributeError) as e:
         log.write(f"the saved answers are incomplete or not valid: {e}\n")
         prog.fail(message("request.invalid"))
-        return 1
-    except RuntimeError as e:  # nobody planned for it (an appliance without an id, #164): a reference the log has
-        ref = reference()
-        log.write(f"internal {ref}: {e}\n")
-        prog.fail(message("system.internal", ref=ref))
         return 1
     facts = read_json(STATE / "facts.json", {}) or {}
     host = f"{facts['name']}.local"
@@ -1071,6 +1088,22 @@ def forget_restore_secrets(work: Path | None = None) -> None:
 
 MAX_CHOICES = 400  # a year of nightly backups, and some
 OLDER_CHECKED = 3  # when the newest backup is damaged, how many older ones are tried (suveryn-tracker#166)
+
+
+def restoring(job, what: str) -> int:
+    """A restore's check or run, which never leaves the screen spinning: a failure nobody planned for ends it as
+    ``system.internal`` with a reference, the step that was running failed, and the secrets forgotten."""
+    try:
+        return job()
+    except Exception as e:  # noqa: BLE001: nobody planned for it, so a reference
+        r = read_json(RESTORE, {}) or {}
+        r["state"], r["message"] = "failed", message("system.internal", ref=unplanned(what, e))
+        for st in r.get("steps") or []:
+            if st.get("state") == "running":
+                st["state"] = "failed"
+        write_file(RESTORE, json.dumps(r, indent=1), 0o644)
+        forget_restore_secrets()
+        return 1
 
 
 def restore_check() -> int:
