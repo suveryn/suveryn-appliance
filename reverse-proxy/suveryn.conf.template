@@ -90,7 +90,8 @@ server {
         add_header Retry-After "20" always;
     }
 
-    # The gateway.
+    # The gateway. An answer streams as Server-Sent Events through this rule: the gateway tells nginx not to hold
+    # it back (X-Accel-Buffering: no).
     location ~ ^/(v1|auth)/ {
         include /etc/nginx/snippets/suveryn-headers.conf;
         include /etc/nginx/snippets/suveryn-csp.conf;
@@ -101,13 +102,6 @@ server {
         include /etc/nginx/snippets/suveryn-headers.conf;
         include /etc/nginx/snippets/suveryn-csp.conf;
         proxy_pass http://127.0.0.1:8000;
-    }
-    location = /v1/chat {                 # answers stream as Server-Sent Events: pass each event on at once
-        include /etc/nginx/snippets/suveryn-headers.conf;
-        include /etc/nginx/snippets/suveryn-csp.conf;
-        proxy_pass http://127.0.0.1:8000;
-        proxy_buffering off;
-        proxy_read_timeout 600s;
     }
     location = /v1/documents {            # uploads stream to the gateway: no copy in nginx's temporary files
         include /etc/nginx/snippets/suveryn-headers.conf;
