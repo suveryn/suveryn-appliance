@@ -940,6 +940,51 @@ def test_a_share_keeps_its_password_apart_and_never_in_the_result(admin, tmp_pat
     assert request(b, tmp_path, {**share, "address": "nas"})["fields"]["address"]["code"] == "backup.share_address_invalid"
 
 
+def broken(*_a, **_k):
+    raise OSError("/srv/notary-ghent/deed.pdf: an error nobody planned for")
+
+
+def unplanned_said(failure: dict, journal: str) -> str:
+    """A failure nobody planned for: ``system.internal`` with a reference the journal's line has, with where it
+    was raised, and never the exception's message."""
+    assert failure["code"] == "system.internal"
+    ref = failure["params"]["ref"]
+    line = next(ln for ln in journal.splitlines() if ref in ln)
+    assert "unexpected OSError at " in line and "notary-ghent" not in journal
+    assert "broken" in line or line.endswith(" at ?")  # where, as core places it; "?" where core can't be read
+    return ref
+
+
+def test_a_backup_that_fails_in_a_way_nobody_planned_for_is_recorded_with_a_reference(admin, tmp_path, monkeypatch, capsys):
+    """Administration and Status show the failure the night it happens, not two days later as a stale backup."""
+    b, _ = admin
+    monkeypatch.setattr(b, "make", broken)
+    assert b.make_and_record() == 1
+    status = json.loads((tmp_path / "state" / "status.json").read_text())
+    unplanned_said(status["last_error"]["failure"], capsys.readouterr().out)
+    monkeypatch.setattr(b, "settings", broken)  # before a backup is even tried
+    assert b.make_and_record() == 1
+    status = json.loads((tmp_path / "state" / "status.json").read_text())
+    unplanned_said(status["last_error"]["failure"], capsys.readouterr().out)
+
+
+def test_a_request_or_key_test_that_fails_in_a_way_nobody_planned_for_is_still_answered(admin, tmp_path, monkeypatch, capsys):
+    """The page waits for an answer: it gets one with a reference, never a wait that ends in 'unavailable'."""
+    b, _ = admin
+    monkeypatch.setattr(b, "usb_disks", broken)
+    out = request(b, tmp_path, {"kind": "disks"})
+    assert out["ok"] is False
+    unplanned_said(out["failure"], capsys.readouterr().out)
+    monkeypatch.setattr(b, "KEY_TEST", tmp_path / "key-test")
+    (tmp_path / "key-test").mkdir()
+    (tmp_path / "key-test" / "key").write_text("AGE-SECRET-KEY-1NOTAREALKEY\n")
+    monkeypatch.setattr(b, "settings", broken)
+    assert b.cmd_key_test(None) == 1
+    result = json.loads((tmp_path / "state" / "key-test.json").read_text())
+    assert result["ok"] is False and not (tmp_path / "key-test" / "key").exists()
+    unplanned_said(result["failure"], capsys.readouterr().out)
+
+
 def test_a_new_recovery_key_is_said_and_a_bad_request_is_ignored(admin, tmp_path):
     b, recipient = admin
     (tmp_path / "x").mkdir()

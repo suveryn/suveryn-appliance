@@ -64,3 +64,13 @@ def reference() -> str:
         return core.reference()
     import secrets
     return secrets.token_hex(4).upper()
+
+
+def unplanned(exc: BaseException) -> tuple[str, str]:
+    """For a failure nobody planned for: a reference, and where it was raised, for the log line that carries it:
+    core's ``unplanned``, the one place this is worked out, so the appliance's lines read as the gateway's. Where
+    core can't be read, a reference and "?": the type the caller adds still says what failed."""
+    core = load()
+    if core is not None and hasattr(core, "unplanned"):
+        return core.unplanned(exc)
+    return reference(), "?"

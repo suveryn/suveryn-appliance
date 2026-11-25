@@ -16,7 +16,7 @@ The appliance's services say those codes and keep no list of their own (suveryn-
 
 | File | What |
 |---|---|
-| [`suveryn-messages`](suveryn-messages) | Loads core's module from the core on this appliance, the pinned one at `/opt/suveryn/core` (`SUVERYN_CORE_MESSAGES` for tests). `said(code, …)` gives `{kind, code, params}` as the registry has it; `reference()` a short id for a failure nobody planned for |
+| [`suveryn-messages`](suveryn-messages) | Loads core's module from the core on this appliance, the pinned one at `/opt/suveryn/core` (`SUVERYN_CORE_MESSAGES` for tests). `said(code, …)` gives `{kind, code, params}` as the registry has it; `reference()` a short id for a failure nobody planned for; `unplanned(exc)` that id and where it was raised, as core's `unplanned` gives them, for the log line |
 
 ## What a service does
 

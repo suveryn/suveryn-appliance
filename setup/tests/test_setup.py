@@ -544,6 +544,96 @@ def test_a_failure_nobody_planned_for_in_the_answers_stops_provisioning_with_a_r
     assert step["state"] == "failed" and step["message"]["code"] == "system.internal" and step["message"]["params"]["ref"]
 
 
+def test_a_failure_nobody_planned_for_while_provisioning_fails_its_step_with_a_reference(s, api, fake_tools, monkeypatch, capfd):
+    """Never a screen that spins: an error past the answers (a models disk that can't be read) fails the step that
+    was running, with a reference the journal and the provisioning log have, and never the error's message."""
+    fake_tools()
+    answer_everything(api)
+    api("POST", "provision", {})
+
+    def unreadable(work):
+        raise OSError("the disk said something about notary-ghent's files")
+    monkeypatch.setattr(s, "models_media", unreadable)
+    assert s.provision() == 1
+    progress = json.loads((s.STATE / "progress.json").read_text())
+    failed = next(st for st in progress["steps"] if st["state"] == "failed")
+    assert progress["state"] == "failed" and failed["message"]["code"] == "system.internal"
+    ref = failed["message"]["params"]["ref"]
+    journal = capfd.readouterr().err
+    assert f"internal {ref}: provisioning: OSError at " in journal and "unreadable" in journal
+    log = (s.LOGS / "setup-provision.log").read_text()
+    assert f"internal {ref}" in log and "notary-ghent" not in journal + log
+    assert not (s.ANSWERS / "start").exists() and not s.SETUP_COMPLETE.exists()
+
+
+@pytest.mark.parametrize("job", ["restore_check", "restore_run"])
+def test_a_failure_nobody_planned_for_in_a_restore_ends_it_with_a_reference(s, api, monkeypatch, capfd, job):
+    """A restore's check or run that breaks in a way nobody planned for says so with a reference, and forgets the
+    recovery key, rather than spinning on "checking" or "restoring"."""
+    api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE})
+    if job == "restore_run":
+        s.RESTORE.write_text(json.dumps({"state": "checked", "backup": {
+            "file": "suveryn-backup_notary-ghent_20261023T023900Z.tar.zst.age", "created": "2026-10-23T02:39:00Z",
+            "appliance": "notary-ghent"}, "choices": []}))
+        (s.ANSWERS / "restore-check").unlink(missing_ok=True)
+        (s.ANSWERS / "restore-start").touch()
+
+    def broken(work):
+        raise ValueError(f"something about {KEY}")
+    monkeypatch.setattr(s, "restore_inputs", broken)
+    assert s.provision() == 1
+    r = json.loads(s.RESTORE.read_text())
+    assert r["state"] == "failed" and r["message"]["code"] == "system.internal"
+    assert all(st["state"] != "running" for st in r.get("steps", []))
+    assert job != "restore_run" or [st["state"] for st in r["steps"]][0] == "failed"
+    journal = capfd.readouterr().err
+    assert f"internal {r['message']['params']['ref']}: " in journal and "ValueError" in journal and KEY not in journal
+    assert not (s.ANSWERS / "recovery-key").exists() and not (s.ANSWERS / "restore-check").exists()
+    assert not (s.ANSWERS / "restore-start").exists()  # never started again by its path unit
+
+
+def test_a_restore_that_fails_before_it_starts_isnt_started_again(s, api, monkeypatch):
+    """A failure before the check has taken its trigger file: the trigger goes too, so the path unit doesn't start
+    the check again and the screen doesn't stay on "checking"."""
+    api("PUT", "answers/restore", {"target": "usb", "disk": "usb-SanDisk_Extreme_4C53", "key": KEY_FILE})
+    assert (s.ANSWERS / "restore-check").exists()
+    monkeypatch.setattr(s, "restore_check", lambda: (_ for _ in ()).throw(OSError("nothing done yet")))
+    assert s.provision() == 1
+    assert not (s.ANSWERS / "restore-check").exists()
+    assert json.loads(s.RESTORE.read_text())["message"]["code"] == "system.internal"
+
+
+def test_a_failed_restore_forgets_the_shares_password_in_the_work_folder_too(s, api, monkeypatch):
+    """The share's password and the settings copied for the backup tool go too, as when a restore fails as planned."""
+    api("PUT", "answers/restore", {"target": "share", "protocol": "smb", "address": "\\\\nas.office.lan\\backups",
+                                   "user": "backup", "password": "not-a-real-password", "key": KEY_FILE})
+    copy_secrets = s.restore_inputs
+
+    def then_broken(work):
+        copy_secrets(work)
+        raise OSError("after the secrets were copied")
+    monkeypatch.setattr(s, "restore_inputs", then_broken)
+    assert s.provision() == 1
+    work = Path(os.environ["SUVERYN_SETUP_WORK"])
+    assert not (work / "restore-share-password").exists() and not (work / "restore-settings.json").exists()
+    assert not (s.ANSWERS / "restore-share-password").exists()
+
+
+def test_a_failure_nobody_planned_for_while_closing_setup_fails_the_last_step(s, api, fake_tools, monkeypatch):
+    """Provisioning was done: closing setup (the office's certificate, nginx) failing is said on the last step, never
+    on the database, which worked."""
+    fake_tools()
+    answer_everything(api)
+    (s.ANSWERS / "seen-done").touch()
+    api("POST", "provision", {})
+    monkeypatch.setattr(s, "finish", lambda answers, files: (_ for _ in ()).throw(OSError("nginx")))
+    assert s.provision() == 1
+    progress = json.loads((s.STATE / "progress.json").read_text())
+    assert progress["state"] == "failed"
+    assert [st["state"] for st in progress["steps"]] == ["done", "done", "done", "done", "failed"]
+    assert progress["steps"][-1]["message"]["code"] == "system.internal"
+
+
 def test_the_outgoing_result_follows_the_mode(s, api, fake_tools, monkeypatch):
     fake_tools()
     for network, passed, outgoing in ((("air-gapped", "approved"), True, "blocked"), (("connected", "all"), True, "not_checked"),
