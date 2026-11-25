@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """The web setup end to end in a real browser: suveryn-core's production setup page, served by nginx
 with the appliance's real headers, against this repository's setup service, from Welcome to Complete
-and the switch to the real site. On a DISPOSABLE Ubuntu 24.04 machine or container only, as root: it
+and the switch to the real site. On a DISPOSABLE Ubuntu 26.04 or 24.04 machine or container only, as root: it
 writes /etc/suveryn, /etc/nginx, /var/lib/suveryn and /opt/suveryn/ui.
 
-    apt-get install nginx; pip install playwright; (chromium for Playwright)
+    apt-get install nginx
+    python3 -m venv /opt/check && /opt/check/bin/pip install playwright && /opt/check/bin/playwright install chromium
     cd suveryn-core/packages/chat-ui && npm ci && npm run build && cp -r dist /opt/suveryn/ui
     export SUVERYN_CORE=<that suveryn-core>   (the setup says core's messages; not needed where core is at /opt/suveryn/core)
-    python3 setup/tests/browser_check.py [OUT_DIR]
+    /opt/check/bin/python setup/tests/browser_check.py [OUT_DIR]
+
+The setup service runs as suveryn-setup with this script's own Python (sys.executable), so the virtual environment
+is one that user can read, outside /root. On 26.04, Playwright 1.64 or later.
 
 What stands in for the appliance: suveryn-provision (stand_in_provision.py: same steps, the real TLS and
 nginx site), the outgoing-traffic check, the identity (a fixed UUID), the portal's key (a test key made
 here), and a share's server (a listener on port 445 at this machine's own address).
 
-    python3 setup/tests/browser_check.py --real [OUT_DIR]
+    /opt/check/bin/python setup/tests/browser_check.py --real [OUT_DIR]
 
 The same with the REAL provisioning (#37 part 6b): on a FRESH test GPU machine (the Pod) after
 `suveryn-provision image`, never one with real documents or an earlier installation (it refuses
@@ -326,7 +330,7 @@ def signed_in(browser, m):
         pg.locator("#username").fill("lotte@firm.example")
         pg.locator("#password").fill(PASSWORD)
         pg.locator("#kc-login").click()
-        pg.get_by_role("button", name="Sign out").wait_for(timeout=60000)  # the chat's sidebar, signed in
+        pg.get_by_role("button", name="Account: Lotte Verbeke").wait_for(timeout=60000)  # her account in the chat's column, signed in
         check("the administrator from the screens signs in to the chat through Keycloak", True)
     except Exception as e:  # noqa: BLE001
         pg.screenshot(path=m["out"] / "9-sign-in.png", full_page=True)
