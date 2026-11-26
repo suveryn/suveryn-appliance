@@ -29,7 +29,7 @@ Related: [suveryn-docs](https://github.com/suveryn/suveryn-docs) (installation a
 
 A regression round tests the appliance against the suveryn-core commit it pins (`provision/versions.json`).
 
-- **Last round:** core's last `regression-<commit>-fixes` PR is for aebf5bc, merged 5 November 2026 (here, PR #128). No round has run against a pin since.
-- **Owed:** on core 5743915, the pin since 25 November 2026; it covers the pins it replaced (suveryn-tracker#188).
+- **Last round:** on core 5743915 (this repository at 07b3df6), 25 November 2026, on a fresh Verda GPU VM with Ubuntu 26.04: the installer and the test image in a VM (`run-vm-tests`), the setup in a browser, sign-in with two steps, documents (fictional and real), chat, cases, playbooks, Administration, backups to a share with the key test, core's end-to-end tests and the GPU round (suveryn-tracker#188). Its findings are fixed: suveryn-tracker#263, #264 and #265 (here, PRs #163 to #165; `run-vm-tests` passed again on 07b3df6 with #263 and #265 applied, and Keycloak's clean stop was checked on the VM) and #266 (core PR #319, the GPU round's script, on core's main: a round on this pin takes the script from there).
+- **Owed:** on core 5743915, a restore onto a replacement machine: backups were made and their key tested, but none was restored.
 
 The PR that moves the pin updates this record, and so does a round when it passes.
